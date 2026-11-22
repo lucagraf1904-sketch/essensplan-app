@@ -65,7 +65,7 @@ async function renderPantry() {
 
   const sh = getSettings();
   const metaFor = i => [
-    sh.showQty && `${esc(i.qty)} ${esc(i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`,
+    sh.showQty && `${esc(i.qty)} ${esc(i.unit === 'Portion' && i.qty != 1 ? 'Portionen' : i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`,
     sh.showCategory && esc(i.category), sh.showLocation && esc(i.location),
     sh.showPack && drinksOn() && i.pack && PACKS[i.pack] && esc(PACKS[i.pack].label),
     sh.showPrice && i.price != null && eur(i.price),
@@ -85,10 +85,12 @@ async function renderPantry() {
   $('#pantry-empty').classList.toggle('hidden', items.length > 0);
 
   const soon = items.filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; });
-  $('#warn-box').innerHTML = soon.length && sh.showWarnBox
-    ? `<div class="warn">⚠️ ${soon.length} Artikel ${soon.length === 1 ? 'läuft' : 'laufen'} bald ab: ${soon.slice(0, 5).map(i => esc(i.name)).join(', ')}${soon.length > 5 ? ' …' : ''}</div>`
+  const soonW = soon.filter(i => !leftovers([i]).length);
+  $('#warn-box').innerHTML = soonW.length && sh.showWarnBox
+    ? `<div class="warn">⚠️ ${soonW.length} Artikel ${soonW.length === 1 ? 'läuft' : 'laufen'} bald ab: ${soonW.slice(0, 5).map(i => esc(i.name)).join(', ')}${soonW.length > 5 ? ' …' : ''}</div>`
     : '';
   checkMinStock(items);
+  renderLeftovers(items);
   renderDrinkCounter();
   return soon;
 }
@@ -541,10 +543,81 @@ async function checkReminders(force = false) {
     localStorage.setItem('lastDinnerNotify', today);
     const m = dr.meal;
     if (m?.title && m.totalMinutes) await showNote(`Jetzt anfangen: ${m.title}`, `Dauert ${fmtDur(m.totalMinutes)}, dann ist es um ${s.dinnerAt} Uhr fertig.`, 'abendessen');
+    else if (leftovers(await store.listItems()).length) await showNote('Zeit fürs Abendessen', `Reste im Kühlschrank: ${leftovers(await store.listItems()).map(i => i.name.replace(/^Rest: /, '')).join(', ')}. Gut durcherhitzen.`, 'abendessen');
     else await showNote('Zeit fürs Abendessen', soon.length ? `Zuerst verbrauchen: ${soonText(soon.slice(0, 3))}` : 'Schau in den Vorrat, was heute weg muss.', 'abendessen');
   }
 }
 setInterval(checkReminders, 60000);
+
+// ---------- Reste vom Abendessen ----------
+// Nach dem Kochen (Plan: „Gekocht“) bzw. abends ab Essenszeit + 90 min einmal am Tag fragen.
+// Kühlschrank: höchstens 2 Tage (Verbraucherzentrale, „Speisereste“, Stand 02.12.2025), schnell abgedeckt kühlen, gut durcherhitzen.
+async function askLeftover(title = 'Abendessen', date = isoLocal(), fromPlan = false) {
+  localStorage.setItem('leftoverAsked', date);
+  const first = await ask('Alles aufgegessen?', `🍽️ ${esc(title)}`, [
+    { value: 'all', label: '✅ Ja, alles aufgegessen', cls: 'primary' },
+    { value: 'rest', label: '🍲 Nein, es ist etwas übrig' },
+    ...(fromPlan ? [] : [{ value: 'none', label: 'Heute nicht gekocht' }]),
+  ]);
+  if (first !== 'rest') return;
+  const n = await ask('Wie viel ist übrig?', esc(title), [
+    { value: '1', label: '1 Portion' }, { value: '2', label: '2 Portionen' }, { value: '3', label: '3 oder mehr' }]);
+  if (!n) return;
+  const what = await ask('Was passiert mit dem Rest?', `${esc(title)} · ${n === '3' ? '3+' : n} ${n === '1' ? 'Portion' : 'Portionen'}`, [
+    { value: 'tomorrow', label: '🥡 Morgen essen (Kühlschrank)', cls: 'primary' },
+    { value: 'freeze', label: '❄️ Einfrieren' },
+    { value: 'waste', label: '🗑️ Wegwerfen', cls: 'danger' }]);
+  // Ohne Essensplan ist das Gericht unbekannt: Datum als Name (antippen im Vorrat zum Umbenennen)
+  const name = title === 'Abendessen' ? `Rest vom ${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][new Date(date + 'T12:00').getDay()]}. ${fmtDate(date)}` : `Rest: ${title}`, qty = +n;
+  if (what === 'tomorrow' || what === 'freeze') {
+    const item = { name, category: 'Reste', location: 'Kühlschrank', qty, unit: 'Portion', size: '', price: null,
+      expiry: defaultExpiry('Reste', new Date(date + 'T12:00')), cookedAt: date, noLog: true };
+    const saved = await store.upsertItem(item);
+    if (what === 'freeze') await freezeItem(saved, qty);
+    await renderPantry(); document.dispatchEvent(new Event('pantry:changed'));
+    await ask(what === 'freeze' ? 'Rest eingefroren' : 'Rest steht morgen bereit',
+      what === 'freeze' ? `${esc(name)} liegt im Gefrierschrank, empfohlen bis ${fmtDate(freezeExpiry({ name, category: 'Reste' }).date)} (Annahme ohne Quelle).`
+        : `${esc(name)} liegt im Kühlschrank. Innerhalb von 2 Tagen essen, vorher gut durcherhitzen. Schnell und abgedeckt in den Kühlschrank stellen.<br><small class="muted">Quelle: Verbraucherzentrale (Speisereste, Stand 02.12.2025)</small>`,
+      [{ value: 'ok', label: 'OK', cls: 'primary' }]);
+  } else if (what === 'waste') {
+    await store.addLog({ type: 'wasted', itemName: name, category: 'Reste', qty, unit: 'Portion', value: null });
+  }
+}
+// Reste im Kühlschrank: oben im Vorrat als Vorschlag fürs nächste Abendessen
+const leftovers = items => items.filter(i => i.category === 'Reste' && !i.frozenAt && i.qty > 0);
+function renderLeftovers(items) {
+  const rs = leftovers(items); if (!rs.length) return;
+  $('#warn-box').insertAdjacentHTML('afterbegin', rs.map(i => {
+    const d = daysLeft(i.expiry), when = d == null ? '' : d < 0 ? 'abgelaufen' : d === 0 ? 'heute essen' : d === 1 ? 'bis morgen' : `noch ${d} Tage`;
+    return `<div class="warn info leftover" data-left="${i.id}">🍲 <b>${esc(i.name)}</b> · ${esc(i.qty)} ${i.qty === 1 ? 'Portion' : 'Portionen'}${when ? ' · ' + when : ''}
+      <div class="tip-alts"><button class="chip" data-left-act="eat">🍽️ Gegessen</button><button class="chip" data-left-act="freeze">❄️ Einfrieren</button><button class="chip" data-left-act="waste">🗑️ Weggeworfen</button></div></div>`;
+  }).join(''));
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-left-act]'); if (!b) return;
+  const id = b.closest('[data-left]').dataset.left;
+  const it = (await store.listItems()).find(x => x.id === id); if (!it) return;
+  if (b.dataset.leftAct === 'freeze') await freezeItem(it, it.qty);
+  else await store.consume(id, it.qty, b.dataset.leftAct === 'eat' ? 'eaten' : 'wasted');
+  await renderPantry(); document.dispatchEvent(new Event('pantry:changed'));
+});
+// Aus dem (Demo-)Essensplan: „Gekocht“ getippt
+document.addEventListener('plan:cooked', e => { if (getSettings().askLeftovers) askLeftover(e.detail.title, e.detail.date, true); });
+document.addEventListener('plan:leftoverEaten', async e => {
+  const it = (await store.listItems()).find(x => x.id === e.detail.id);
+  if (it) { await store.consume(it.id, it.qty, 'eaten'); await renderPantry(); document.dispatchEvent(new Event('pantry:changed')); }
+});
+// Abends einmal fragen, falls nicht schon über den Plan geschehen
+async function checkLeftoverPrompt() {
+  const s = getSettings(), today = isoLocal();
+  if (!s.askLeftovers || localStorage.getItem('leftoverAsked') === today || $('dialog[open]')) return;
+  if (nowHM() < minToHM(hmToMin(s.dinnerAt) + 90)) return;
+  let meal = null;
+  try { const m = await import('./plan.js'); meal = await m.getPlannedMeal?.(today, 'dinner'); } catch {}
+  if (meal?.status === 'uebersprungen' || meal?.status === 'gekocht') return;
+  askLeftover(meal?.title ?? 'Abendessen', today);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkLeftoverPrompt(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkReminders(); });
 
 async function enableNotifications() {
@@ -623,6 +696,7 @@ async function start() {
   checkReminders();
   pushStatus();
   monthStartHint();
+  setTimeout(checkLeftoverPrompt, 1500);
 }
 
 // In den ersten 3 Tagen eines Monats auf die Bilanz des Vormonats hinweisen
@@ -909,6 +983,7 @@ const SWITCHES = {
   ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
+    ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
   ],
 };
 // Gesundheit & Vorlieben (nur auf diesem Gerät). Erkrankungen über ein Suchfeld mit Vorschlägen,

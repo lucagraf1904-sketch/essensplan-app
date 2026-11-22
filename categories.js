@@ -17,6 +17,8 @@ export const CATEGORIES = {
   // Pfand wird nicht über Wörter erkannt, sondern direkt im Bon-Parser gesetzt (receipt.js)
   'Pfand':           { days: null, location: 'Vorratsschrank', words: [] },
   'Haushalt':        { days: null, location: 'Vorratsschrank', words: ['spül','toilettenpapier','küchenrolle','waschmittel','müllbeutel','schwamm','seife','shampoo','zahnpasta','tücher'] },
+  // Reste gekochter Gerichte: höchstens 2 Tage im Kühlschrank (Verbraucherzentrale, Speisereste, Stand 02.12.2025)
+  'Reste':           { days: 2,   location: 'Kühlschrank',    words: [] },
   'Sonstiges':       { days: 30,  location: 'Vorratsschrank', words: [] },
 };
 

@@ -101,6 +101,7 @@ const thawFor = r => { const it = r.need.map(([w]) => has(loadDb().items, w)).fi
 export async function getPlannedMeal(date, meal = 'dinner') {
   if (meal !== 'dinner') return null;
   const d = getPlan().days.find(x => x.date === date); if (!d) return null;
+  if (d.leftover) return { date, meal, title: d.leftover.name, totalMinutes: 10, method: 'Aufwärmen', thawFrom: null, status: d.status };
   const r = recipe(d.dinner);
   return { date, meal, title: r.title, totalMinutes: r.min, method: r.method, thawFrom: thawFor(r) ? addDays(date, -1) : null, status: d.status };
 }
@@ -118,6 +119,8 @@ function render() {
   const listed = new Set(loadShop().filter(x => !x.done).map(x => x.name.toLowerCase()));
   const rs = p.days.filter(d => d.status !== 'uebersprungen').map(d => recipe(d.dinner));
   const fish = rs.filter(r => r.type === 'fisch').length, meat = rs.filter(r => r.type === 'rind').length;
+  const rests = items.filter(i => i.category === 'Reste' && !i.frozenAt && i.qty > 0 && !p.days.some(d => d.leftover?.id === i.id));
+  const restDay = p.days.findIndex(d => d.status === 'geplant' && !d.leftover && daysTo(d.date) >= 0);
   const veg = Math.round(rs.reduce((a, r) => a + r.veg, 0) / Math.max(1, rs.length));
   el.innerHTML = `<h2>Essensplan</h2>
     <div class="tip hint"><b>🧪 Vorschau</b><p>Beispiel-Essensplan für die Demo. Der echte Planer mit euren Lieblingsgerichten, Nährwerten und Lernfunktion kommt später.</p></div>
@@ -127,7 +130,17 @@ function render() {
       const missing = r.need.filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
       const today = daysTo(d.date) === 0;
-      return `<li class="plan-day ${d.status}" data-i="${i}">
+      const restBox = i === restDay && rests.length ? `<div class="plan-rest">🍲 Im Kühlschrank: ${rests.map(x => `<b>${esc(x.name)}</b> (${esc(x.qty)} ${x.qty === 1 ? 'Portion' : 'Portionen'})`).join(', ')}
+          <div class="tip-alts">${rests.map(x => `<button class="chip" data-act="useleft" data-rest="${x.id}">🍽️ ${today ? 'Heute' : 'Dann'} Rest essen${rests.length > 1 ? ': ' + esc(x.name.replace(/^Rest: /, '')) : ''}</button>`).join('')}</div>
+          <div class="tiny muted">Das geplante Gericht rückt dann einen Tag nach hinten. Reste höchstens 2 Tage im Kühlschrank (Verbraucherzentrale).</div></div>` : '';
+      if (d.leftover) return `<li class="plan-day ${d.status}" data-i="${i}">
+        <div class="plan-date">${today ? 'Heute' : DAYS[wd.getDay()]}, ${wd.getDate()}.${wd.getMonth() + 1}.</div>
+        <div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>
+        <div class="plan-dinner"><b>🍲 ${esc(d.leftover.name)}</b><div class="tiny">Reste · Aufwärmen, gut durcherhitzen · ca. 10 min</div>
+          <div class="tiny muted">${esc(r.title)} ist auf den nächsten Tag verschoben.</div></div>
+        ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gegessen</div>' : `<div class="tip-alts"><button class="chip" data-act="done">✓ Gegessen</button><button class="chip" data-act="unleft">Doch frisch kochen</button></div>`}
+      </li>`;
+      return `<li class="plan-day ${d.status}" data-i="${i}">${restBox}
         <div class="plan-date">${today ? 'Heute' : DAYS[wd.getDay()]}, ${wd.getDate()}.${wd.getMonth() + 1}.</div>
         <div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>
         <div class="plan-dinner"><b>🍽️ ${esc(r.title)}</b>
@@ -163,7 +176,28 @@ function onClick(e) {
     const seen = d.swapped ?? []; seen.push(d.dinner);
     const next = ranked.find(c => !seen.includes(c.x.id)) ?? ranked[0];
     d.dinner = next.x.id; d.why = next.why.slice(0, 3); d.swapped = seen.length >= DINNERS.length - 1 ? [] : seen;
-  } else if (act === 'done') d.status = 'gekocht';
+  } else if (act === 'useleft') {
+    const it = loadDb().items.find(x => x.id === b.dataset.rest); if (!it) return;
+    const i = +li.dataset.i, last = p.days[p.days.length - 1];
+    const dropped = { dinner: last.dinner, why: last.why };
+    for (let j = p.days.length - 1; j > i; j--) { p.days[j].dinner = p.days[j - 1].dinner; p.days[j].why = p.days[j - 1].why; }
+    d.leftover = { id: it.id, name: it.name, dropped };
+    savePlan(p); render(); toast(`🍲 ${it.name} eingeplant`); return;
+  } else if (act === 'unleft') {
+    const i = +li.dataset.i, dropped = d.leftover.dropped; delete d.leftover;
+    for (let j = i; j < p.days.length - 1; j++) { p.days[j].dinner = p.days[j + 1].dinner; p.days[j].why = p.days[j + 1].why; }
+    Object.assign(p.days[p.days.length - 1], dropped);
+  } else if (act === 'done' && d.leftover) {
+    d.status = 'gekocht';
+    savePlan(p); render();
+    document.dispatchEvent(new CustomEvent('plan:leftoverEaten', { detail: { id: d.leftover.id } }));
+    return;
+  } else if (act === 'done') {
+    d.status = 'gekocht';
+    savePlan(p); render();
+    document.dispatchEvent(new CustomEvent('plan:cooked', { detail: { title: r.title, date: d.date } }));
+    return;
+  }
   else if (act === 'skip') d.status = 'uebersprungen';
   else if (act === 'undo') d.status = 'geplant';
   else if (act === 'shop') {
@@ -181,6 +215,7 @@ function onClick(e) {
 const tab = $('#tab-plan');
 if (tab) {
   tab.addEventListener('click', onClick);
+  document.addEventListener('pantry:changed', render);
   document.querySelector('nav button[data-tab=plan]')?.addEventListener('click', render);
   render();
 }

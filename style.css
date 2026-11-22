@@ -185,3 +185,4 @@ dialog h2:focus { outline: none; }
 .cond-sugg button { width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); padding: 12px; background: var(--card); }
 .set-sub { font-size: .8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 12px 2px 2px; border: none !important; background: none !important; }
 #show-preset { margin: 8px 0; }
+#warn-box .leftover .tip-alts { margin-top: 6px; }

@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = {
   showExpiryBadge: true, showExpiryDate: false, showPrice: false, showWarnBox: true,
   showGoodNote: true, showOfferTags: true, showDeals: true, showCheck: true,
   showBalHints: true, showBalCompare: true, showUnitPrice: true, showWaste: true,
+  askLeftovers: true,     // Nach dem Abendessen fragen: alles aufgegessen? Was passiert mit dem Rest?
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 
