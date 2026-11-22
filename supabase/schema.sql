@@ -1,5 +1,5 @@
 -- Speisekammer: Datenbankschema für Supabase.
--- Im Supabase-Dashboard unter SQL Editor einfügen und einmal ausführen.
+-- Im Supabase-Dashboard unter SQL Editor einfügen und ausführen. Mehrfach ausführbar (idempotent).
 -- Prinzip: Jeder Nutzer gehört zu genau einem Haushalt. Alle Daten hängen am Haushalt,
 -- Row Level Security sorgt dafür, dass man nur die Daten des eigenen Haushalts sieht.
 
@@ -131,8 +131,13 @@ begin
 end $$;
 
 -- Live-Abgleich zwischen beiden Handys
-alter publication supabase_realtime add table items;
-alter publication supabase_realtime add table log;
+-- Echtzeit für items und log (mehrfach ausführbar)
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'items') then
+    alter publication supabase_realtime add table items; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'log') then
+    alter publication supabase_realtime add table log; end if;
+end $$;
 
 -- ---------- Push-Erinnerungen (Ablauf + Abendessen) ----------
 -- Eine Zeile pro Gerät. Die Edge Function „reminders“ läuft alle 15 Minuten (pg_cron) und schickt fällige Nachrichten.

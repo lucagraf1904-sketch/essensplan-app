@@ -19,7 +19,7 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 
 ## Gemeinsame Daten mit Supabase einrichten
 1. Projekt auf supabase.com anlegen (Region Frankfurt).
-2. SQL Editor → Inhalt von `supabase/schema.sql` einfügen → Run (nur einmal ausführen; die letzten zwei Zeilen schlagen bei einer Wiederholung fehl, das ist harmlos).
+2. SQL Editor → Inhalt von `supabase/schema.sql` einfügen → Run (mehrfach ausführbar).
 3. Authentication → Sign In / Providers → Email: „Confirm email“ ausschalten. Die App meldet mit E-Mail + Passwort an (ohne Mail).
    Optional (Code per Mail): in den Vorlagen „Magic Link“ und „Confirm signup“ `{{ .Token }}` einfügen; am iPhone ließ sich die Vorlage nicht bearbeiten (22.11.).
 4. Project URL und anon key in `config.js` eintragen. Den service_role key nie in die App.
