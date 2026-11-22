@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Speisekammer">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+  <title>Speisekammer</title>
+</head>
+<body>
+  <header>
+    <h1>Speisekammer</h1>
+    <button id="btn-notify" class="ghost" title="Ablaufwarnungen aktivieren">🔔</button>
+  </header>
+
+  <main>
+    <!-- Tab: Vorrat -->
+    <section id="tab-pantry" class="tab active">
+      <div id="warn-box"></div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Suchen …">
+        <select id="filter-loc">
+          <option value="">Alle Orte</option>
+          <option>Kühlschrank</option>
+          <option>Gefrierschrank</option>
+          <option>Vorratsschrank</option>
+        </select>
+      </div>
+      <ul id="pantry-list" class="list"></ul>
+      <p id="pantry-empty" class="muted hidden">Noch nichts da. Lege Artikel an oder scanne einen Bon.</p>
+    </section>
+
+    <!-- Tab: Bon-Scan -->
+    <section id="tab-scan" class="tab">
+      <h2>Kassenbon scannen</h2>
+      <p class="muted">Foto vom Papierbon oder Screenshot des digitalen Bons aus Lidl Plus. Die Texterkennung läuft auf dem Handy, nichts wird hochgeladen.</p>
+      <label class="btn">📷 Foto wählen<input id="scan-file" type="file" accept="image/*" hidden></label>
+      <p id="scan-status" class="muted"></p>
+      <ul id="scan-result" class="list"></ul>
+      <div id="scan-actions" class="hidden">
+        <button id="scan-import" class="primary">Ausgewählte übernehmen</button>
+      </div>
+      <details>
+        <summary>Text stattdessen einfügen</summary>
+        <textarea id="scan-text" rows="8" placeholder="Bon-Text hier einfügen …"></textarea>
+        <button id="scan-parse">Auswerten</button>
+      </details>
+    </section>
+
+    <!-- Tab: Einkauf -->
+    <section id="tab-shop" class="tab">
+      <h2>Einkaufsliste</h2>
+      <div class="toolbar">
+        <input id="shop-new" placeholder="Was brauchen wir?" enterkeyhint="done">
+        <button id="shop-add" class="primary">＋</button>
+      </div>
+      <div id="shop-suggest"></div>
+      <div id="shop-deals"></div>
+      <div id="shop-hints"></div>
+      <ul id="shop-list" class="list"></ul>
+      <p id="shop-empty" class="muted">Die Liste ist leer.</p>
+      <button id="shop-clear" class="hidden">Erledigte entfernen</button>
+      <div id="shop-check"></div>
+      <h2>🏷️ Angebote</h2>
+      <div id="offer-auto"></div>
+      <p class="muted tiny">Eigene Angebote: Prospekt öffnen, Angebot antippen und eintragen. Passende Angebote erscheinen bei den Artikeln oben.</p>
+      <div id="offer-chains" class="tip-alts"></div>
+      <button id="offer-new" class="primary">＋ Angebot eintragen</button>
+      <ul id="offer-list" class="list small"></ul>
+      <p id="shop-source" class="muted tiny"></p>
+    </section>
+
+    <!-- Tab: Einstellungen -->
+    <section id="tab-kitchen" class="tab">
+      <h2>Erinnerungen</h2>
+      <p id="push-status" class="muted tiny"></p>
+      <button id="btn-push" class="primary hidden">🔔 Benachrichtigungen erlauben</button>
+      <ul id="settings-remind" class="list settings"></ul>
+      <div id="health-settings" class="hidden"></div>
+      <h2>Tipps &amp; Hinweise</h2>
+      <ul id="settings-tips" class="list settings"></ul>
+      <h2>Angebote &amp; Preisvergleich</h2>
+      <ul id="settings-offers" class="list settings"></ul>
+      <h2>Vorrat</h2>
+      <ul id="settings-pantry" class="list settings"></ul>
+      <h2>Küchenutensilien</h2>
+      <p class="muted">Grundlage für den späteren Essensplan: Es werden nur Zubereitungen vorgeschlagen, die mit diesen Geräten gehen.</p>
+      <ul id="utensil-list" class="list"></ul>
+      <div class="toolbar">
+        <input id="utensil-new" placeholder="Weiteres Gerät, z. B. Mixer">
+        <button id="utensil-add">Hinzufügen</button>
+      </div>
+      <h2>Ablaufwarnung</h2>
+      <label class="muted warn-days-row">Warnen ab
+        <select id="warn-days" style="width:auto">
+          <option value="1">1 Tag</option><option value="2">2 Tage</option><option value="3">3 Tage</option>
+          <option value="5">5 Tage</option><option value="7">7 Tage</option>
+        </select> vor Ablauf
+      </label>
+    </section>
+
+    <!-- Tab: Verlauf -->
+    <section id="tab-log" class="tab">
+      <div id="health-box" class="hidden"></div>
+      <div class="toolbar"><h2 style="flex:1">Monatsbilanz</h2><input id="month-pick" type="month" style="width:auto"></div>
+      <div id="month-stats"></div>
+      <h2>Verlauf im Monat</h2>
+      <ul id="log-list" class="list small"></ul>
+      <details>
+        <summary>Daten sichern</summary>
+        <button id="btn-export">Export (JSON)</button>
+        <label class="btn">Import<input id="import-file" type="file" accept="application/json" hidden></label>
+      </details>
+      <details id="account" class="hidden">
+        <summary>Haushalt &amp; Konto</summary>
+        <p id="hh-info" class="muted"></p>
+        <p class="muted">Gib den Einladungscode an die zweite Person weiter. Sie meldet sich an und wählt „Beitreten“.</p>
+        <button id="btn-logout">Abmelden</button>
+      </details>
+    </section>
+  </main>
+
+  <button id="fab" class="fab" aria-label="Artikel hinzufügen">＋</button>
+
+  <nav>
+    <button data-tab="pantry" class="active">🥫<span>Vorrat</span></button>
+    <button data-tab="scan">🧾<span>Bon</span></button>
+    <button data-tab="shop">🛒<span>Einkauf</span></button>
+    <button data-tab="log">📊<span>Verlauf</span></button>
+    <button data-tab="kitchen">⚙️<span>Einstellungen</span></button>
+  </nav>
+
+  <!-- Anmeldung / Haushalt -->
+  <div id="gate" class="gate hidden">
+    <div class="gate-card">
+      <h2>Speisekammer</h2>
+      <div class="step" data-step="email">
+        <label>E-Mail<input id="gate-email" type="email" autocomplete="email"></label>
+        <button id="gate-send" class="primary">Code schicken</button>
+      </div>
+      <div class="step hidden" data-step="code">
+        <label>6-stelliger Code aus der E-Mail<input id="gate-code" inputmode="numeric" autocomplete="one-time-code"></label>
+        <button id="gate-verify" class="primary">Anmelden</button>
+      </div>
+      <div class="step hidden" data-step="household">
+        <p class="muted">Neuen Haushalt anlegen oder mit dem Code der anderen Person beitreten.</p>
+        <label>Name<input id="gate-hh-name" placeholder="Unser Haushalt"></label>
+        <button id="gate-create" class="primary">Haushalt anlegen</button>
+        <hr>
+        <label>Einladungscode<input id="gate-join-code" autocapitalize="characters"></label>
+        <button id="gate-join">Beitreten</button>
+      </div>
+      <p id="gate-msg" class="muted"></p>
+    </div>
+  </div>
+
+  <!-- Artikel-Dialog -->
+  <dialog id="item-dialog">
+    <form method="dialog" id="item-form">
+      <h2 id="item-title">Artikel</h2>
+      <button type="button" id="btn-barcode" class="barcode-btn">📷 Barcode scannen</button>
+      <p id="item-nutrition" class="muted tiny"></p>
+      <label>Name<input name="name" required></label>
+      <label>Packungsgröße<input name="size" placeholder="z. B. 500 g, 1 l, 10 Stk"></label>
+      <div class="row">
+        <label>Menge<input name="qty" type="number" step="any" min="0" value="1"></label>
+        <label>Einheit
+          <select name="unit"><option>Stk</option><option>g</option><option>kg</option><option>ml</option><option>l</option><option>Pck</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Kategorie<select name="category"></select></label>
+        <label>Ort
+          <select name="location"><option>Kühlschrank</option><option>Gefrierschrank</option><option>Vorratsschrank</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label><span id="expiry-label">Haltbar bis</span><input name="expiry" type="date"></label>
+        <label>Preis €<input name="price" type="number" step="0.01" min="0"></label>
+      </div>
+      <p id="freeze-note" class="freeze-note hidden"></p>
+      <menu>
+        <button value="cancel" formnovalidate>Abbrechen</button>
+        <button id="item-delete" value="delete" class="danger hidden" formnovalidate>Löschen</button>
+        <button value="save" class="primary">Speichern</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- Verbrauch-Dialog -->
+  <dialog id="use-dialog">
+    <form method="dialog">
+      <h2 id="use-title"></h2>
+      <div class="row">
+        <label>Menge<input id="use-qty" type="number" step="any" min="0"></label>
+      </div>
+      <p id="use-freeze-info" class="muted small-note"></p>
+      <menu class="stack">
+        <button value="eaten" class="primary">✅ Verbraucht</button>
+        <button value="freeze" id="use-freeze">❄️ Einfrieren</button>
+        <button value="thaw" id="use-thaw" class="hidden">💧 Auftauen (in den Kühlschrank)</button>
+        <button value="wasted" class="danger">🗑️ Weggeworfen</button>
+        <button value="edit">✏️ Bearbeiten</button>
+        <button value="cancel">Abbrechen</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- Angebot eintragen -->
+  <dialog id="offer-dialog">
+    <form method="dialog" id="offer-form">
+      <h2>Angebot eintragen</h2>
+      <p class="muted tiny">Markt</p>
+      <div id="offer-chain-pick" class="seg wrap"></div>
+      <label>Artikel<input name="name" required></label>
+      <div id="offer-name-sugg" class="tip-alts"></div>
+      <div class="row">
+        <label>Angebotspreis €<input name="price" type="number" step="0.01" min="0" inputmode="decimal" required></label>
+        <label>statt €<input name="regular" type="number" step="0.01" min="0" inputmode="decimal"></label>
+      </div>
+      <label>Gültig bis<input name="until" type="date"></label>
+      <menu>
+        <button value="cancel" formnovalidate>Abbrechen</button>
+        <button value="save" class="primary">Speichern</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- Barcode-Scanner -->
+  <dialog id="barcode-box" class="barcode-box">
+    <h2>Barcode scannen</h2>
+    <div id="barcode-view"></div>
+    <p id="barcode-msg" class="muted"></p>
+    <label class="btn">🖼️ Foto vom Barcode wählen<input id="barcode-file" type="file" accept="image/*" hidden></label>
+    <div class="toolbar">
+      <input id="barcode-input" inputmode="numeric" placeholder="oder Nummer eintippen">
+      <button id="barcode-manual" type="button">OK</button>
+    </div>
+    <button id="barcode-cancel" type="button">Abbrechen</button>
+  </dialog>
+
+  <!-- Frage mit Antwort-Knöpfen -->
+  <dialog id="ask-dialog">
+    <form method="dialog">
+      <h2 id="ask-title"></h2>
+      <p id="ask-text" class="muted"></p>
+      <menu id="ask-options" class="stack"></menu>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

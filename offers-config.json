@@ -1,0 +1,51 @@
+{
+  "_hinweis": "Konfiguration für den wöchentlichen Angebotsabgleich (läuft später als Supabase Edge Function). PLZ außer 19249 aus Wissen, nicht verifiziert.",
+  "home_zip": "19249",
+  "towns": [
+    {
+      "name": "Lübtheen",
+      "zip": "19249",
+      "priority": 1
+    },
+    {
+      "name": "Hagenow",
+      "zip": "19230",
+      "priority": 2
+    },
+    {
+      "name": "Wittenburg",
+      "zip": "19243",
+      "priority": 2
+    },
+    {
+      "name": "Ludwigslust",
+      "zip": "19288",
+      "priority": 2
+    },
+    {
+      "name": "Dannenberg",
+      "zip": "29451",
+      "priority": 2
+    }
+  ],
+  "chains": [
+    "aldi-nord",
+    "rewe",
+    "netto-marken-discount",
+    "lidl",
+    "edeka",
+    "kaufland"
+  ],
+  "notify": {
+    "weekday": "sunday",
+    "time": "18:00",
+    "timezone": "Europe/Berlin"
+  },
+  "match": {
+    "min_purchases_last_90_days": 2,
+    "min_saving_percent": 10
+  },
+  "always_search": [
+    "Dinkel Vollkorn Toast"
+  ]
+}
