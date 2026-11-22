@@ -2,7 +2,7 @@ import { localStore } from './store.js';
 import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
 import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
-import { getSettings, setSetting, tipsOn } from './settings.js';
+import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset } from './settings.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
@@ -63,21 +63,29 @@ async function renderPantry() {
     .filter(i => (!q || i.name.toLowerCase().includes(q)) && (!loc || i.location === loc))
     .sort((a, b) => (daysLeft(a.expiry) ?? 1e9) - (daysLeft(b.expiry) ?? 1e9));
 
+  const sh = getSettings();
+  const metaFor = i => [
+    sh.showQty && `${esc(i.qty)} ${esc(i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`,
+    sh.showCategory && esc(i.category), sh.showLocation && esc(i.location),
+    sh.showPack && drinksOn() && i.pack && PACKS[i.pack] && esc(PACKS[i.pack].label),
+    sh.showPrice && i.price != null && eur(i.price),
+    sh.showExpiryDate && i.expiry && !i.frozenAt && `bis ${fmtDate(i.expiry)}`,
+  ].filter(Boolean).join(' · ');
   $('#pantry-list').innerHTML = shown.map(i => `
     <li data-id="${i.id}">
       <div class="main">
-        <div class="name">${esc(i.name)}</div>
-        <div class="meta">${esc(i.qty)} ${esc(i.unit)}${i.size ? ' à ' + esc(i.size) : ''} · ${esc(i.category)} · ${esc(i.location)}${drinksOn() && i.pack && PACKS[i.pack] ? ' · ' + esc(PACKS[i.pack].label) : ''}</div>
-        ${drinksOn() && i.openedAt ? `<div class="meta">🥤 Geöffnet am ${fmtDate(i.openedAt)} · gekühlt ca. ${OPENED_DAYS} Tage (Richtwert)</div>` : ''}
-        ${i.frozenAt ? `<div class="meta">MHD (Kühlschrank): ${i.origExpiry ? fmtDate(i.origExpiry) : 'unbekannt'}</div>
+        <div class="name">${esc(i.name)}${i.frozenAt && !sh.showFrozenDetail ? ' ❄️' : ''}</div>
+        ${metaFor(i) ? `<div class="meta">${metaFor(i)}</div>` : ''}
+        ${sh.showOpened && drinksOn() && i.openedAt ? `<div class="meta">🥤 Geöffnet am ${fmtDate(i.openedAt)} · gekühlt ca. ${OPENED_DAYS} Tage (Richtwert)</div>` : ''}
+        ${i.frozenAt && sh.showFrozenDetail ? `<div class="meta">MHD (Kühlschrank): ${i.origExpiry ? fmtDate(i.origExpiry) : 'unbekannt'}</div>
         <div class="meta frozen-meta"><b>❄️ Tiefkühl bis ${fmtDate(i.expiry)}</b> · eingefroren ${fmtDate(i.frozenAt)}</div>` : ''}
       </div>
-      ${expiryBadge(daysLeft(i.expiry), !!i.frozenAt)}
+      ${sh.showExpiryBadge ? expiryBadge(daysLeft(i.expiry), !!i.frozenAt) : ''}
     </li>`).join('');
   $('#pantry-empty').classList.toggle('hidden', items.length > 0);
 
   const soon = items.filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; });
-  $('#warn-box').innerHTML = soon.length
+  $('#warn-box').innerHTML = soon.length && sh.showWarnBox
     ? `<div class="warn">⚠️ ${soon.length} Artikel ${soon.length === 1 ? 'läuft' : 'laufen'} bald ab: ${soon.slice(0, 5).map(i => esc(i.name)).join(', ')}${soon.length > 5 ? ' …' : ''}</div>`
     : '';
   checkMinStock(items);
@@ -419,7 +427,8 @@ async function renderLog() {
   const ym = monthInput.value || ymOf(new Date());
   const bal = lastBalance = monthReport(log, ym, aliases);
   const pct = q => Math.round(q * 100) + ' %';
-  const arrow = d => !bal.hasPrev ? '' : Math.abs(d) < 0.01 ? '<span class="diff">±0</span>'
+  const sh = getSettings();
+  const arrow = d => !bal.hasPrev || !sh.showBalCompare ? '' : Math.abs(d) < 0.01 ? '<span class="diff">±0</span>'
     : `<span class="diff ${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲ +' : '▼ '}${eur(d)}</span>`;
   const hintText = h => h.kind === 'waste'
     ? `🗑️ <b>${esc(pretty(h.key))} ${esc(h.label)}</b>: ${pct(h.quota)} weggeworfen (${eur(h.wasted)}). Kleinere Packung oder seltener kaufen.`
@@ -431,15 +440,15 @@ async function renderLog() {
     </div>
     ${drinksOn() ? (d => d ? `<p class="muted">🥤 Getränke: <b>${eur(d.total)}</b> (ohne Pfand)${drinkLevel() >= 2 && drinkKcal(rawLog, ym) ? ` · ca. ${drinkKcal(rawLog, ym)} kcal aus abgehakten Getränken` : ''}</p>` : '')(bal.byCategory.find(c => c.category === 'Getränke')) : ''}
     ${bal.deposit.paid || bal.deposit.back ? `<p class="muted">♻️ Pfand: ${eur(bal.deposit.paid)} bezahlt, ${eur(bal.deposit.back)} zurück (netto ${eur(bal.deposit.net)}). Ist in „Ausgegeben“ enthalten, nicht bei den Lebensmitteln.</p>` : ''}
-    ${bal.hasPrev ? '' : '<p class="muted">Vergleich mit dem Vormonat erscheint, sobald es Daten aus dem Vormonat gibt.</p>'}
-    ${bal.hints.length ? `<h2>Spartipps</h2><ul class="list small hints">${bal.hints.slice(0, 6).map(h => `<li><div class="main">${hintText(h)}</div></li>`).join('')}</ul>` : ''}
+    ${bal.hasPrev || !sh.showBalCompare ? '' : '<p class="muted">Vergleich mit dem Vormonat erscheint, sobald es Daten aus dem Vormonat gibt.</p>'}
+    ${bal.hints.length && sh.showBalHints ? `<h2>Spartipps</h2><ul class="list small hints">${bal.hints.slice(0, 6).map(h => `<li><div class="main">${hintText(h)}</div></li>`).join('')}</ul>` : ''}
     <div class="seg"><button data-view="product" class="active">Je Lebensmittel</button><button data-view="cat">Je Kategorie</button></div>
     <ul id="bal-product" class="list small">${bal.byProduct.map(p => `
       <li data-key="${esc(p.key)}"><div class="main">${esc(pretty(p.key))}
         <div class="meta">${p.count}× gekauft ${arrow(p.diff)}</div>
         <table class="sizes">${p.sizes.map(v => `<tr><td>${esc(v.label)}</td><td>${v.count}×</td><td>${eur(v.total)}</td>
-          <td class="muted">${v.unitPrice ? eur(v.unitPrice.value) + '/' + v.unitPrice.per : ''}</td>
-          <td>${v.waste?.wasted ? `<span class="waste ${v.waste.quota >= 0.25 ? 'bad' : ''}">🗑️ ${pct(v.waste.quota)}</span>` : ''}</td></tr>`).join('')}</table>
+          <td class="muted">${v.unitPrice && sh.showUnitPrice ? eur(v.unitPrice.value) + '/' + v.unitPrice.per : ''}</td>
+          <td>${v.waste?.wasted && sh.showWaste ? `<span class="waste ${v.waste.quota >= 0.25 ? 'bad' : ''}">🗑️ ${pct(v.waste.quota)}</span>` : ''}</td></tr>`).join('')}</table>
         </div><b>${eur(p.total)}</b></li>`).join('')
       || '<li class="muted">Keine Einkäufe in diesem Monat.</li>'}</ul>
     <ul id="bal-cat" class="list small hidden">${bal.byCategory.map(c =>
@@ -758,9 +767,9 @@ async function renderShop() {
     return `<li data-id="${i.id}" class="shop-item ${i.done ? 'done' : ''}">
       <div class="shop-row">
         <button class="shop-check" aria-label="Abhaken">${i.done ? '☑️' : '⬜'}</button>
-        <div class="main"><div class="name">${esc(i.name)}${t?.good ? ' <span class="good-tag">✓ gute Wahl</span>' : ''}</div>
-          ${t?.good && t.text ? `<div class="good-note">${esc(t.text)}</div>` : ''}
-          ${!i.done ? offersFor(i.name, offers).slice(0, 3).map(o => offerTag(o, acc)).join('') : ''}</div>
+        <div class="main"><div class="name">${esc(i.name)}${t?.good && st.showGoodNote ? ' <span class="good-tag">✓ gute Wahl</span>' : ''}</div>
+          ${t?.good && t.text && st.showGoodNote ? `<div class="good-note">${esc(t.text)}</div>` : ''}
+          ${!i.done && st.showOfferTags ? offersFor(i.name, offers).slice(0, 3).map(o => offerTag(o, acc)).join('') : ''}</div>
         ${!i.done ? '<button class="ghost shop-offer" aria-label="Angebot eintragen" title="Angebot eintragen">🏷️</button>' : ''}
         <button class="ghost shop-del" aria-label="Entfernen">✕</button>
       </div>
@@ -804,11 +813,12 @@ async function renderShop() {
     if (o && !deals.some(d => d.o.id === o.id)) deals.push({ n, o });
     if (deals.length >= 4) break;
   }
+  if (!st.showDeals) deals.length = 0;
   $('#shop-deals').innerHTML = deals.map(({ n, o }) => `<div class="tip hint deal"><b>🏷️ ${esc(n)} bei ${esc(chainName(o.chain))} im Angebot</b>
     <p>${esc(o.name)}: <b>${eur(o.price)}</b>${o.regular ? ` statt ${eur(o.regular)}` : ''}${o.until ? ` · bis ${fmtDate(o.until)}` : ''}</p>
     <div class="tip-alts"><button class="chip" data-add="${esc(n)}" data-accept-add="${o.id}">＋ Liste und annehmen</button></div></div>`).join('');
 
-  renderCheck(open, offers, log, st, acc);
+  if (st.showCheck) renderCheck(open, offers, log, st, acc); else $('#shop-check').innerHTML = '';
 }
 $('#shop-add').addEventListener('click', () => { addShop($('#shop-new').value); $('#shop-new').value = ''; });
 $('#shop-new').addEventListener('keydown', e => { if (e.key === 'Enter') $('#shop-add').click(); });
@@ -885,9 +895,20 @@ const SWITCHES = {
     ['autoOffers', 'Angebote automatisch suchen', 'Über Marktguru (inoffiziell), braucht Supabase'],
     ['ownBrandOk', 'Eigenmarke zählt als gleich', 'Bei gleicher Menge, z. B. Rewe-Hack statt Lidl-Hack'],
   ],
+  '#settings-show': [
+    ['_h', 'Vorrat'],
+    ['showQty', 'Menge und Packungsgröße'], ['showCategory', 'Kategorie'], ['showLocation', 'Lagerort'],
+    ['showExpiryBadge', 'Restlaufzeit („noch 3 T“)'], ['showExpiryDate', 'Ablaufdatum als Datum'], ['showPrice', 'Preis'],
+    ['showFrozenDetail', 'Einfrier-Details (altes MHD, Datum)'], ['showPack', 'Verpackung bei Getränken'], ['showOpened', '„Geöffnet am …“ bei Getränken'],
+    ['showWarnBox', 'Hinweis oben: läuft bald ab'],
+    ['_h', 'Einkaufsliste'],
+    ['tips', 'Tipps zu Lebensmitteln'], ['showGoodNote', '„Gute Wahl“-Bestätigung'], ['shopSuggestions', '„Wieder kaufen?“-Vorschläge'],
+    ['showOfferTags', 'Angebote am Artikel'], ['showDeals', 'Angebots-Hinweise für oft Gekauftes'], ['showCheck', 'Einkaufs-Check (lohnt ein zweiter Laden?)'],
+    ['_h', 'Verlauf & Bilanz'],
+    ['showBalCompare', 'Vergleich mit dem Vormonat'], ['showBalHints', 'Spartipps'], ['showUnitPrice', 'Grundpreis (€/kg, €/l)'], ['showWaste', 'Wegwerf-Quote'],
+  ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
-    ['shopSuggestions', '„Wieder kaufen?“-Vorschläge auf der Einkaufsliste'],
   ],
 };
 // Gesundheit & Vorlieben (nur auf diesem Gerät). Erkrankungen über ein Suchfeld mit Vorschlägen,
@@ -922,6 +943,7 @@ function renderSummaries(s) {
     remind: join([on(s.remindExpiry, `Ablauf ${s.expiryTime}`), on(s.remindDinner, s.dinnerAuto ? `Abendessen automatisch (Essen ${s.dinnerAt})` : `Abendessen ${s.dinnerTime}`)]) || 'Aus',
     pantry: join([`Warnung ${WARN_DAYS} ${WARN_DAYS === 1 ? 'Tag' : 'Tage'} vorher`, on(s.askFreeze, 'Einfrier-Frage'), on(s.shopSuggestions, 'Wieder kaufen')]),
     tips: s.tips ? 'An' : 'Aus',
+    show: { minimal: 'Minimal: nur das Nötigste', normal: 'Normal', alles: 'Alles anzeigen', eigene: 'Eigene Auswahl' }[showPreset(s)],
     drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
     offers: join([`Stammladen ${chainName(s.homeStore)}`, s.maxStores >= 2 ? `2. Laden ab ${eur(s.minSaving)}` : 'nur ein Laden', on(s.autoOffers, 'automatisch')]),
     kitchen: (() => { const u = loadUt().filter(x => x.has); return `${u.length} Geräte`; })(),
@@ -959,6 +981,7 @@ function renderSettings() {
   const s = getSettings();
   for (const [sel, rows] of Object.entries(SWITCHES)) {
     $(sel).innerHTML = rows.map(([k, label, sub, parent, timeKey]) => {
+      if (k === '_h') return `<li class="set-sub">${esc(label)}</li>`;
       const off = parent && !s[parent];
       if (timeKey === 'dinner') return `<li class="switch-row">
         <label class="main"><span>${esc(label)}</span>
@@ -981,9 +1004,14 @@ function renderSettings() {
   }
   renderChoices(s);
   renderProfile(s);
+  const pre = showPreset(s);
+  $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
+    `<button type="button" data-preset="${v}" class="${pre === v ? 'active' : ''}">${t}</button>`).join('') + (pre === 'eigene' ? '<button type="button" class="active" disabled>Eigene</button>' : '');
   renderSummaries(s);
 }
 $('#tab-kitchen').addEventListener('click', e => {
+  const pr = e.target.closest('[data-preset]');
+  if (pr) { applyShowPreset(pr.dataset.preset); renderSettings(); renderPantry(); return; }
   const ha = e.target.closest('[data-health-add]');
   if (ha) return setHealth(h => [...new Set([...h, ha.dataset.healthAdd])]);
   const hd = e.target.closest('[data-health-del]');
@@ -1007,6 +1035,7 @@ $('#tab-kitchen').addEventListener('change', e => {
     localStorage.removeItem(e.target.dataset.k === 'expiryTime' ? 'lastNotify' : 'lastDinnerNotify');
   } else return;
   renderSettings();
+  renderPantry();
   syncPush();
 });
 renderSettings();

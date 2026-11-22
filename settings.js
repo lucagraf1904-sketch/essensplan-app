@@ -25,6 +25,11 @@ export const DEFAULT_SETTINGS = {
   drinks: 'a',           // Getränke-Umfang (Luca 22.11.): off | a Vorrat+Bilanz | b +kcal | c +Trinkzähler
   glassMl: 250,          // Trinkzähler: Glasgröße
   drinkGoalMl: 1500,     // Trinkzähler: Tagesziel (DGE-Richtwert 1,5 l laut Verbraucherzentrale)
+  // Anzeige (Luca 22.11.): jede Zusatzinfo einzeln schaltbar, dazu Stufen Minimal/Normal/Alles
+  showQty: true, showCategory: true, showLocation: true, showPack: true, showOpened: true, showFrozenDetail: true,
+  showExpiryBadge: true, showExpiryDate: false, showPrice: false, showWarnBox: true,
+  showGoodNote: true, showOfferTags: true, showDeals: true, showCheck: true,
+  showBalHints: true, showBalCompare: true, showUnitPrice: true, showWaste: true,
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 
@@ -41,4 +46,21 @@ export function setSetting(k, v) {
 export function tipsOn(topic) {
   const s = getSettings();
   return s.tips && s[topic] !== false;
+}
+
+// Anzeige-Stufen: setzen alle Anzeige-Schalter (plus Tipps und „Wieder kaufen?“) auf einmal
+export const SHOW_KEYS = ['showQty','showCategory','showLocation','showPack','showOpened','showFrozenDetail','showExpiryBadge','showExpiryDate','showPrice','showWarnBox',
+  'showGoodNote','showOfferTags','showDeals','showCheck','showBalHints','showBalCompare','showUnitPrice','showWaste','tips','shopSuggestions'];
+const MINIMAL_ON = ['showQty', 'showExpiryBadge', 'showWarnBox'];
+export const SHOW_PRESETS = {
+  minimal: Object.fromEntries(SHOW_KEYS.map(k => [k, MINIMAL_ON.includes(k)])),
+  normal: Object.fromEntries(SHOW_KEYS.map(k => [k, DEFAULT_SETTINGS[k]])),
+  alles: Object.fromEntries(SHOW_KEYS.map(k => [k, true])),
+};
+export function showPreset(s = getSettings()) {
+  return Object.entries(SHOW_PRESETS).find(([, p]) => SHOW_KEYS.every(k => !!s[k] === p[k]))?.[0] ?? 'eigene';
+}
+export function applyShowPreset(name) {
+  const p = SHOW_PRESETS[name]; if (!p) return;
+  const s = { ...getSettings(), ...p }; localStorage.setItem(KEY, JSON.stringify(s)); return s;
 }

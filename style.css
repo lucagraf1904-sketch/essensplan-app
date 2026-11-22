@@ -183,3 +183,5 @@ dialog h2:focus { outline: none; }
 .cond-sugg { list-style: none; padding: 0; margin: 4px 0 0; border-radius: 10px; overflow: hidden; }
 .cond-sugg:not(:empty) { border: 1px solid var(--line); }
 .cond-sugg button { width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); padding: 12px; background: var(--card); }
+.set-sub { font-size: .8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 12px 2px 2px; border: none !important; background: none !important; }
+#show-preset { margin: 8px 0; }
