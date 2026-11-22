@@ -141,7 +141,11 @@
       <h2>Speisekammer</h2>
       <div class="step" data-step="email">
         <label>E-Mail<input id="gate-email" type="email" autocomplete="email"></label>
-        <button id="gate-send" class="primary">Code schicken</button>
+        <label>Passwort<input id="gate-pass" type="password" autocomplete="current-password" minlength="6"></label>
+        <button id="gate-login" class="primary">Anmelden</button>
+        <button id="gate-signup">Neu registrieren</button>
+        <p class="tiny muted">Beim ersten Mal „Neu registrieren“ (Passwort mind. 6 Zeichen), danach „Anmelden“.</p>
+        <button id="gate-send" class="ghost tiny">Stattdessen Code per E-Mail</button>
       </div>
       <div class="step hidden" data-step="code">
         <label>6-stelliger Code aus der E-Mail<input id="gate-code" inputmode="numeric" autocomplete="one-time-code"></label>

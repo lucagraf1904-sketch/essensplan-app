@@ -1,5 +1,5 @@
 // Offline-Cache für die App-Dateien (Network-first, damit Updates sofort ankommen).
-const CACHE = 'speisekammer-v18';
+const CACHE = 'speisekammer-v19';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'categories.js', 'receipt.js', 'balance.js', 'config.js', 'store-supabase.js', 'barcode.js', 'offers.js', 'settings.js', 'tips.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));

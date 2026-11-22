@@ -20,8 +20,8 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 ## Gemeinsame Daten mit Supabase einrichten
 1. Projekt auf supabase.com anlegen (Region Frankfurt).
 2. SQL Editor → Inhalt von `supabase/schema.sql` einfügen → Run (nur einmal ausführen; die letzten zwei Zeilen schlagen bei einer Wiederholung fehl, das ist harmlos).
-3. Authentication → Email Templates → „Magic Link“: im Text `{{ .Token }}` einfügen, damit die Mail einen 6-stelligen Code enthält.
-   Grund: Ein Link würde auf dem iPhone in Safari statt in der installierten App öffnen.
+3. Authentication → Sign In / Providers → Email: „Confirm email“ ausschalten. Die App meldet mit E-Mail + Passwort an (ohne Mail).
+   Optional (Code per Mail): in den Vorlagen „Magic Link“ und „Confirm signup“ `{{ .Token }}` einfügen; am iPhone ließ sich die Vorlage nicht bearbeiten (22.11.).
 4. Project URL und anon key in `config.js` eintragen. Den service_role key nie in die App.
 5. Person 1 meldet sich an und legt den Haushalt an. Den Einladungscode (Verlauf → Haushalt & Konto) an Person 2 geben, die „Beitreten“ wählt.
 

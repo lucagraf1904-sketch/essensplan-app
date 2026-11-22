@@ -34,6 +34,12 @@ export const supabaseStore = {
   // wo ein Magic Link in Safari statt in der App landen würde).
   async sendCode(email) { must(await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })); },
   async verifyCode(email, token) { must(await sb.auth.verifyOtp({ email, token, type: 'email' })); },
+  // Login mit E-Mail + Passwort (ohne Mail; in Supabase „Confirm email“ ausschalten)
+  async signIn(email, password) { must(await sb.auth.signInWithPassword({ email, password })); },
+  async signUp(email, password) {
+    const data = must(await sb.auth.signUp({ email, password }));
+    if (!data.session) throw new Error('Konto angelegt, aber Supabase verlangt eine Bestätigungs-Mail. In Supabase unter Authentication → Sign In / Providers → Email „Confirm email“ ausschalten, dann „Anmelden“.');
+  },
   async signOut() { await sb.auth.signOut(); },
 
   async createHousehold(name) { household = must(await sb.rpc('create_household', { p_name: name || 'Unser Haushalt' })); },

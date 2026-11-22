@@ -466,6 +466,12 @@ function showGate(step) {
 }
 const gateMsg = t => $('#gate-msg').textContent = t;
 async function guard(fn) { try { gateMsg(''); await fn(); } catch (e) { gateMsg(e.message); } }
+const gateCreds = () => [$('#gate-email').value.trim(), $('#gate-pass').value];
+$('#gate-login').addEventListener('click', () => guard(async () => { await store.signIn(...gateCreds()); await start(); }));
+$('#gate-signup').addEventListener('click', () => guard(async () => {
+  const [e, p] = gateCreds(); if (p.length < 6) throw new Error('Passwort bitte mit mindestens 6 Zeichen.');
+  await store.signUp(e, p); await start();
+}));
 $('#gate-send').addEventListener('click', () => guard(async () => {
   await store.sendCode($('#gate-email').value.trim()); showGate('code'); gateMsg('Code wurde per E-Mail geschickt.');
 }));
