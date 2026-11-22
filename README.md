@@ -4,7 +4,7 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 
 ## Funktionen
 - Vorrat mit Menge, Kategorie, Lagerort, Haltbarkeit und Preis
-- Tab „Einkauf“: Einkaufsliste zum Abhaken, „Wieder kaufen?“-Vorschläge (mind. 2× in 90 Tagen gekauft), Tipps mit Alternativen zum Antippen (tips.js; Quelle: recherche/reports/Mehlarten und Morbus Crohn Vorbeugung.md). Pro Gerät gespeichert.
+- Tab „Einkauf“: Einkaufsliste zum Abhaken, „Wieder kaufen?“-Vorschläge (mind. 2× in 90 Tagen gekauft), Tipps mit Alternativen zum Antippen (tips.js; Quelle: recherche/reports/Mehlarten und Morbus Crohn Vorbeugung.md). Mit Supabase für den Haushalt geteilt.
 - Tab „Einstellungen“: Schalter für Tipps (Haupt- und Themenschalter), Einfrier-Frage, Vorschläge (settings.js), dazu Utensilien und Warn-Vorlauf.
 - (alt) Tab „Küche“: Liste der Küchenutensilien (vorhanden ja/nein, eigene ergänzen). Wird pro Gerät gespeichert, noch nicht über Supabase geteilt.
 - Sortierung nach Ablaufdatum, Warnleiste ab 3 Tagen (im Tab „Küche“ einstellbar: 1–7 Tage), Benachrichtigung beim Öffnen (nach Freigabe über 🔔)
