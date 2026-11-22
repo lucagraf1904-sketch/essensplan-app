@@ -32,6 +32,15 @@ export const DEFAULT_SETTINGS = {
   showExpiryBadge: true, showExpiryDate: false, showPrice: false, showWarnBox: true,
   showGoodNote: true, showOfferTags: true, showDeals: true, showCheck: true,
   showBalHints: true, showBalCompare: true, showUnitPrice: true, showWaste: true,
+  shopSort: 'aisle',     // Einkaufsliste: 'aisle' = nach Ladenweg, 'added' = wie eingetragen
+  shopLayoutStore: '',   // Ladenweg für welchen Laden ('' = Stammladen)
+  myName: '',            // Name dieser Person (für Dienstplan)
+  weightOn: false,       // Gewichtstracker (Luca 22.11.: Schalter, standardmäßig aus)
+  shiftsOn: false,       // Dienstplan für diese Person
+  workNoFridge: false,   // Kein Kühlschrank am Arbeitsplatz
+  workNoMicrowave: false,// Keine Mikrowelle am Arbeitsplatz
+  budget: 0,             // Monatsbudget in € (0 = aus), Haushalt
+  budgetWarnPct: 80,     // Warnung ab diesem Anteil
   askLeftovers: true,     // Nach dem Abendessen fragen: alles aufgegessen? Was passiert mit dem Rest?
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };

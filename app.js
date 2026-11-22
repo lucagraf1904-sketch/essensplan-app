@@ -4,6 +4,7 @@ import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS
 import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
 import { initShared } from './shared.js';
+import { renderWeight, setWeight, weekStart } from './weight.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
@@ -60,9 +61,17 @@ async function renderPantry() {
   const items = await store.listItems();
   const q = $('#search').value.toLowerCase();
   const loc = $('#filter-loc').value;
+  // Gefrierschrank-Inventar: älteste Einfrierung zuerst, mit Datum und Dauer
+  const fz = loc === 'Gefrierschrank', frozeOn = i => i.frozenAt || (i.location === 'Gefrierschrank' ? (i.addedAt ?? '').slice(0, 10) : null);
   const shown = items
     .filter(i => (!q || i.name.toLowerCase().includes(q)) && (!loc || i.location === loc))
-    .sort((a, b) => (daysLeft(a.expiry) ?? 1e9) - (daysLeft(b.expiry) ?? 1e9));
+    .sort(fz ? (a, b) => (frozeOn(a) || '9').localeCompare(frozeOn(b) || '9')
+             : (a, b) => (daysLeft(a.expiry) ?? 1e9) - (daysLeft(b.expiry) ?? 1e9));
+  const inFreezer = items.filter(i => i.location === 'Gefrierschrank');
+  const weeksAgo = d => { const w = Math.floor((Date.now() - new Date(d + 'T12:00')) / 6048e5); return w < 1 ? 'diese Woche' : w === 1 ? 'vor 1 Woche' : w < 9 ? `vor ${w} Wochen` : `vor ${Math.round(w / 4.3)} Monaten`; };
+  $('#freezer-head').innerHTML = fz
+    ? `<div class="freezer-sum">❄️ <b>${inFreezer.length} ${inFreezer.length === 1 ? 'Artikel' : 'Artikel'}</b> im Gefrierschrank${inFreezer.length ? ` · älteste zuerst` : ''}</div>`
+    : inFreezer.length ? `<button class="chip" id="freezer-open">❄️ Gefrierschrank (${inFreezer.length})</button>` : '';
 
   const sh = getSettings();
   const metaFor = i => [
@@ -78,7 +87,8 @@ async function renderPantry() {
         <div class="name">${esc(i.name)}${i.frozenAt && !sh.showFrozenDetail ? ' ❄️' : ''}</div>
         ${metaFor(i) ? `<div class="meta">${metaFor(i)}</div>` : ''}
         ${sh.showOpened && drinksOn() && i.openedAt ? `<div class="meta">🥤 Geöffnet am ${fmtDate(i.openedAt)} · gekühlt ca. ${OPENED_DAYS} Tage (Richtwert)</div>` : ''}
-        ${i.frozenAt && sh.showFrozenDetail ? `<div class="meta">MHD (Kühlschrank): ${i.origExpiry ? fmtDate(i.origExpiry) : 'unbekannt'}</div>
+        ${fz && frozeOn(i) ? `<div class="meta frozen-meta">❄️ eingefroren ${fmtDate(frozeOn(i))} (${weeksAgo(frozeOn(i))})${i.expiry ? ` · bis ${fmtDate(i.expiry)}` : ''}</div>` : ''}
+        ${!fz && i.frozenAt && sh.showFrozenDetail ? `<div class="meta">MHD (Kühlschrank): ${i.origExpiry ? fmtDate(i.origExpiry) : 'unbekannt'}</div>
         <div class="meta frozen-meta"><b>❄️ Tiefkühl bis ${fmtDate(i.expiry)}</b> · eingefroren ${fmtDate(i.frozenAt)}</div>` : ''}
       </div>
       ${sh.showExpiryBadge ? expiryBadge(daysLeft(i.expiry), !!i.frozenAt) : ''}
@@ -92,10 +102,12 @@ async function renderPantry() {
     : '';
   checkMinStock(items);
   renderLeftovers(items);
+  budgetWarn();
   renderDrinkCounter();
   return soon;
 }
 $('#search').addEventListener('input', renderPantry);
+document.addEventListener('click', e => { if (e.target.id === 'freezer-open') { $('#filter-loc').value = 'Gefrierschrank'; renderPantry(); } });
 $('#filter-loc').addEventListener('change', renderPantry);
 
 // Tippen auf Artikel → Verbrauch abhaken
@@ -159,6 +171,14 @@ function ask(title, text, options) {
     d.showModal();
   });
 }
+
+// Eingabe im Frage-Dialog (Tastatur erst beim Antippen des Feldes)
+async function askInput(title, label, value = '', type = 'text', extra = '') {
+  const v = await ask(title, `${extra}<label class="ask-field">${esc(label)}<input id="ask-input" type="${type === 'number' ? 'text' : type}" ${type === 'number' ? 'inputmode="decimal"' : ''} value="${esc(value)}"></label>`,
+    [{ value: 'ok', label: 'Übernehmen', cls: 'primary' }, { value: '', label: 'Abbrechen' }]);
+  return v === 'ok' ? $('#ask-input').value.trim() : null;
+}
+const askNumber = async (title, label, value) => { const v = await askInput(title, label, value, 'number'); const n = parseFloat(String(v ?? '').replace(',', '.')); return n > 0 ? n : null; };
 
 // Bei Fleisch und Fisch fragen, ob eingefroren wird
 const askFreezeCats = ['Fleisch & Fisch'];
@@ -424,6 +444,33 @@ monthInput.addEventListener('change', renderLog);
 let lastBalance = null;
 
 const drinkKcal = (log, ym) => log.filter(l => l.type === 'drink' && ymOf(l.at) === ym).reduce((s, l) => s + (l.kcal || 0), 0);
+// Budget (Haushalt): Balken in der Bilanz, Warnung im Vorrat
+function budgetState(spent, ym = ymOf(new Date())) {
+  const s = getSettings(); if (!(s.budget > 0)) return null;
+  const now = new Date(), cur = ym === ymOf(now);
+  const days = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate(), day = cur ? now.getDate() : days;
+  const pct = spent / s.budget, forecast = cur && day >= 5 ? spent / day * days : null;
+  return { budget: s.budget, spent, pct, rest: s.budget - spent, forecast, warn: pct * 100 >= s.budgetWarnPct, over: pct >= 1, cur };
+}
+function budgetBar(spent, ym) {
+  const b = budgetState(spent, ym); if (!b) return '';
+  return `<div class="budget ${b.over ? 'over' : b.warn ? 'warn' : ''}">
+    <div class="budget-top"><span>💶 Budget</span><b>${eur(b.spent)} von ${eur(b.budget)}</b></div>
+    <div class="budget-bar"><i style="width:${Math.min(100, Math.round(b.pct * 100))}%"></i></div>
+    <div class="tiny">${b.over ? `⚠️ Budget um ${eur(-b.rest)} überschritten.` : `Noch ${eur(b.rest)} frei (${Math.round(b.pct * 100)} % verbraucht).`}
+      ${b.forecast ? ` Bei diesem Tempo ca. ${eur(Math.round(b.forecast))} bis Monatsende${b.forecast > b.budget && !b.over ? ', also drüber' : ''}.` : ''}</div>
+  </div>`;
+}
+async function budgetWarn() {
+  const s = getSettings(); if (!(s.budget > 0)) return;
+  const ym = ymOf(new Date()), bal = monthReport(await store.listLog(), ym, await store.getAliases());
+  const b = budgetState(bal.spent - (bal.deposit?.net ?? 0), ym); if (!b?.warn) return;
+  const tag = `${ym}:${b.over ? 'over' : 'warn'}`;
+  if (localStorage.getItem('budgetHidden') === tag) return;
+  $('#warn-box').insertAdjacentHTML('beforeend', `<div class="warn ${b.over ? '' : 'info'}" id="budget-warn" data-tag="${tag}">💶 ${b.over ? `Monatsbudget überschritten: ${eur(b.spent)} von ${eur(b.budget)}.` : `${Math.round(b.pct * 100)} % vom Monatsbudget verbraucht, noch ${eur(b.rest)} frei.`} <small>(antippen zum Ausblenden)</small></div>`);
+}
+document.addEventListener('click', e => { const w = e.target.closest('#budget-warn'); if (w) { localStorage.setItem('budgetHidden', w.dataset.tag); w.remove(); } });
+
 async function renderLog() {
   const [rawLog, aliases] = await Promise.all([store.listLog(), store.getAliases()]);
   const log = rawLog.slice().sort((a, b) => b.at.localeCompare(a.at));
@@ -436,7 +483,7 @@ async function renderLog() {
   const hintText = h => h.kind === 'waste'
     ? `🗑️ <b>${esc(pretty(h.key))} ${esc(h.label)}</b>: ${pct(h.quota)} weggeworfen (${eur(h.wasted)}). Kleinere Packung oder seltener kaufen.`
     : `💡 <b>${esc(pretty(h.key))}</b>: Nur in ${esc(h.best)} gekauft (${eur(h.unitPrice.value)}/${h.unitPrice.per}) wären es ${eur(h.saving)} weniger gewesen.`;
-  $('#month-stats').innerHTML = `
+  $('#month-stats').innerHTML = `${budgetBar(bal.spent - (bal.deposit?.net ?? 0), ym)}
     <div class="stats">
       <div class="stat"><span class="muted">Ausgegeben</span><b>${eur(bal.spent)}</b>${arrow(bal.spentDiff)}</div>
       <div class="stat"><span class="muted">Weggeworfen</span><b>${eur(bal.wasted)}</b>${bal.hasPrev ? arrow(Math.round((bal.wasted - bal.prevWasted) * 100) / 100) : ''}</div>
@@ -463,6 +510,12 @@ async function renderLog() {
     <li><span>${label[l.type]}</span><div class="main">${esc(l.itemName)} <span class="meta">${esc(l.qty)} ${esc(l.unit)}${l.size ? ' à ' + esc(l.size) : ''}</span></div>
     <span class="meta">${l.kcal ? l.kcal + ' kcal · ' : ''}${l.price ? eur(l.price) + ' · ' : ''}${new Date(l.at).toLocaleDateString('de-DE')}</span></li>`).join('');
 }
+$('#weight-box').addEventListener('click', async e => {
+  if (e.target.id !== 'weight-add') return;
+  const cur = JSON.parse(localStorage.getItem('speisekammer.weight') ?? '{}')[weekStart()];
+  const n = await askNumber('Gewicht diese Woche', 'kg, z. B. 78,4', cur ?? ''); if (!n) return;
+  setWeight(n); renderWeight($('#weight-box'), true);
+});
 $('#month-stats').addEventListener('click', async e => {
   const seg = e.target.closest('.seg button');
   if (seg) {
@@ -836,6 +889,50 @@ function renderCheck(open, offers, log, st, acc) {
   </div>`;
 }
 
+// Ladenweg: Reihenfolge der Abteilungen je Laden (Haushalt, über shared.js). Standard = typischer Discounter-Weg (Annahme).
+const LAYOUT_KEY = 'speisekammer.layout';
+const AISLES = ['Obst', 'Gemüse', 'Brot & Backwaren', 'Milchprodukte', 'Eier', 'Fleisch & Fisch', 'Trockenware', 'Konserven',
+  'Gewürze & Öle', 'Süßes & Snacks', 'Getränke', 'Tiefkühl', 'Haushalt', 'Sonstiges'];
+const loadLayouts = () => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) ?? {}; } catch { return {}; } };
+const layoutStore = () => getSettings().shopLayoutStore || getSettings().homeStore;
+function layoutFor(storeId = layoutStore()) {
+  const own = loadLayouts()[storeId] ?? [];
+  return [...own.filter(a => AISLES.includes(a)), ...AISLES.filter(a => !own.includes(a))];
+}
+const aisleOf = i => i.aisle || (c => AISLES.includes(c) ? c : 'Sonstiges')(guessCategory(i.name));
+let layoutEdit = false;
+function renderShopSort(list) {
+  const st = getSettings(), order = layoutFor();
+  $('#shop-sort').innerHTML = !list.length ? '' : `<div class="seg wrap shop-sort-seg">
+      <button type="button" data-shopsort="aisle" class="${st.shopSort === 'aisle' ? 'active' : ''}">🧭 Nach Ladenweg</button>
+      <button type="button" data-shopsort="added" class="${st.shopSort !== 'aisle' ? 'active' : ''}">Wie eingetragen</button></div>
+    ${st.shopSort === 'aisle' ? `<div class="tiny muted shop-sort-store">Weg für <b>${esc(chainName(layoutStore()))}</b>
+      <button type="button" class="chip" data-layout-store>Laden wechseln</button>
+      <button type="button" class="chip" data-layout-edit>${layoutEdit ? 'Fertig' : 'Reihenfolge ändern'}</button></div>` : ''}
+    ${layoutEdit ? `<ol class="list small layout-edit">${order.map((a, i) => `<li><span class="main">${i + 1}. ${esc(a)}</span>
+      <button type="button" class="ghost" data-aisle-move="${i}" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="Nach oben">↑</button>
+      <button type="button" class="ghost" data-aisle-move="${i}" data-dir="1" ${i === order.length - 1 ? 'disabled' : ''} aria-label="Nach unten">↓</button></li>`).join('')}</ol>
+      <p class="tiny muted">So, wie ihr durch den Laden geht. Gilt für den ganzen Haushalt.</p>` : ''}`;
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-shopsort],[data-layout-edit],[data-layout-store],[data-aisle-move],[data-set-aisle]'); if (!b) return;
+  if (b.dataset.shopsort) { setSetting('shopSort', b.dataset.shopsort); layoutEdit = false; }
+  else if ('layoutEdit' in b.dataset) layoutEdit = !layoutEdit;
+  else if ('layoutStore' in b.dataset) {
+    const v = await ask('Ladenweg für welchen Laden?', 'Jeder Laden hat seine eigene Reihenfolge.', CHAINS.map(c => ({ value: c.id, label: c.name, cls: c.id === layoutStore() ? 'primary' : '' })));
+    if (v) setSetting('shopLayoutStore', v);
+  } else if (b.dataset.aisleMove) {
+    const order = layoutFor(), i = +b.dataset.aisleMove, j = i + +b.dataset.dir;
+    [order[i], order[j]] = [order[j], order[i]];
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...loadLayouts(), [layoutStore()]: order }));
+  } else if (b.dataset.setAisle) {
+    const l = loadShop(), it = l.find(x => x.id === b.dataset.setAisle); if (!it) return;
+    const v = await ask(`${it.name}: welche Abteilung?`, 'Die App merkt sich das für diesen Eintrag.', layoutFor().map(a => ({ value: a, label: a, cls: a === aisleOf(it) ? 'primary' : '' })));
+    if (!v) return; it.aisle = v; saveShop(l);
+  }
+  renderShop();
+});
+
 async function renderShop() {
   const list = loadShop();
   const offers = curOffers = await allOffers(store);
@@ -845,14 +942,22 @@ async function renderShop() {
   renderOffers(offers, list);
   renderOfferAuto();
   const st = getSettings();
-  $('#shop-list').innerHTML = list.map(i => {
+  renderShopSort(list);
+  // Nach Ladenweg: offene Einträge nach Abteilung, erledigte unten
+  const byAisle = st.shopSort === 'aisle';
+  const order = layoutFor(), rank = i => order.indexOf(aisleOf(i));
+  const sorted = byAisle ? [...list.filter(i => !i.done).sort((a, b) => rank(a) - rank(b)), ...list.filter(i => i.done)] : list;
+  let lastAisle = null;
+  $('#shop-list').innerHTML = sorted.map(i => {
+    const head = byAisle && !i.done && aisleOf(i) !== lastAisle ? `<li class="aisle-head">${esc(lastAisle = aisleOf(i))}</li>` : byAisle && i.done && lastAisle !== '✓' ? (lastAisle = '✓', '<li class="aisle-head">Erledigt</li>') : '';
     const t = !i.done && !i.tipDismissed ? tipFor(i.name, tipsOn) : null;
-    return `<li data-id="${i.id}" class="shop-item ${i.done ? 'done' : ''}">
+    return `${head}<li data-id="${i.id}" class="shop-item ${i.done ? 'done' : ''}">
       <div class="shop-row">
         <button class="shop-check" aria-label="Abhaken">${i.done ? '☑️' : '⬜'}</button>
         <div class="main"><div class="name">${esc(i.name)}${t?.good && st.showGoodNote ? ' <span class="good-tag">✓ gute Wahl</span>' : ''}</div>
           ${t?.good && t.text && st.showGoodNote ? `<div class="good-note">${esc(t.text)}</div>` : ''}
           ${!i.done && st.showOfferTags ? offersFor(i.name, offers).slice(0, 3).map(o => offerTag(o, acc)).join('') : ''}</div>
+        ${!i.done && byAisle ? `<button class="ghost" data-set-aisle="${i.id}" aria-label="Abteilung ändern" title="Abteilung ändern">🧭</button>` : ''}
         ${!i.done ? '<button class="ghost shop-offer" aria-label="Angebot eintragen" title="Angebot eintragen">🏷️</button>' : ''}
         <button class="ghost shop-del" aria-label="Entfernen">✕</button>
       </div>
@@ -990,6 +1095,12 @@ const SWITCHES = {
     ['_h', 'Verlauf & Bilanz'],
     ['showBalCompare', 'Vergleich mit dem Vormonat'], ['showBalHints', 'Spartipps'], ['showUnitPrice', 'Grundpreis (€/kg, €/l)'], ['showWaste', 'Wegwerf-Quote'],
   ],
+  '#settings-me': [
+    ['weightOn', 'Gewicht eintragen (einmal pro Woche)', 'Kurve unter „Verlauf“, ohne Bewertung. Nur für dich sichtbar.'],
+    ['shiftsOn', 'Dienstplan nutzen', 'Früh, Spät, Nacht, Frei: Essenszeiten und Erinnerungen passen sich an'],
+    ['workNoFridge', 'Kein Kühlschrank auf der Arbeit', 'Mitnehm-Essen, das ungekühlt hält', 'shiftsOn'],
+    ['workNoMicrowave', 'Keine Mikrowelle auf der Arbeit', 'Mitnehm-Essen, das kalt schmeckt', 'shiftsOn'],
+  ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
@@ -1029,6 +1140,8 @@ function renderSummaries(s) {
     tips: s.tips ? 'An' : 'Aus',
     show: { minimal: 'Minimal: nur das Nötigste', normal: 'Normal', alles: 'Alles anzeigen', eigene: 'Eigene Auswahl' }[showPreset(s)],
     drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
+    me: join([s.myName || null, on(s.weightOn, 'Gewicht'), on(s.shiftsOn, 'Dienstplan')]) || 'Nichts aktiv',
+    budget: s.budget > 0 ? `${eur(s.budget)} im Monat, Warnung ab ${s.budgetWarnPct} %` : 'Aus',
     offers: join([`Stammladen ${chainName(s.homeStore)}`, s.maxStores >= 2 ? `2. Laden ab ${eur(s.minSaving)}` : 'nur ein Laden', on(s.autoOffers, 'automatisch')]),
     kitchen: (() => { const u = loadUt().filter(x => x.has); return `${u.length} Geräte`; })(),
   };
@@ -1047,14 +1160,16 @@ const CHOICES = [
   ['homeStore', 'Stammladen', CHAINS.map(c => [c.id, c.name])],
   ['maxStores', 'Läden pro Einkauf', [[1, 'Nur einer'], [2, 'Höchstens zwei']]],
   ['minSaving', 'Zweiter Laden lohnt ab', [[1, '1 €'], [2, '2 €'], [3, '3 €'], [5, '5 €']]],
+  ['budget', 'Monatsbudget', [[0, 'Aus'], [200, '200 €'], [300, '300 €'], [400, '400 €'], [500, '500 €'], [600, '600 €'], [800, '800 €'], ['own', 'Eigener Betrag']], '#settings-budget'],
+  ['budgetWarnPct', 'Warnen ab', [[70, '70 %'], [80, '80 %'], [90, '90 %'], [100, 'erst bei 100 %']], '#settings-budget', s => s.budget > 0],
 ];
 function renderChoices(s) {
-  $('#settings-drinks').innerHTML = '';
+  $('#settings-drinks').innerHTML = ''; $('#settings-budget').innerHTML = '';
   for (const [k, label, opts, target = '#settings-offers', when] of CHOICES) {
     if (when && !when(s)) continue;
     $(target).insertAdjacentHTML('beforeend', `<li class="switch-row choice-row">
     <span>${esc(label)}</span>
-    <div class="seg wrap">${opts.map(([v, t]) => `<button type="button" data-choice="${k}" data-v="${v}" class="${String(s[k]) === String(v) ? 'active' : ''}">${esc(t)}</button>`).join('')}</div>
+    <div class="seg wrap">${opts.map(([v, t]) => `<button type="button" data-choice="${k}" data-v="${v}" class="${String(s[k]) === String(v) || (v === 'own' && !opts.some(o => String(o[0]) === String(s[k]))) ? 'active' : ''}">${esc(t)}${v === 'own' && !opts.some(o => String(o[0]) === String(s[k])) ? `: ${esc(s[k])} €` : ''}</button>`).join('')}</div>
   </li>`);
   }
   const info = { off: 'Getränke werden wie alles andere behandelt.', a: 'Haltbarkeit je Verpackung, Knopf „Geöffnet“, eigene Zeile in der Bilanz.',
@@ -1088,6 +1203,9 @@ function renderSettings() {
   }
   renderChoices(s);
   renderProfile(s);
+  $('#settings-me').insertAdjacentHTML('afterbegin', `<li class="switch-row"><span class="main">Dein Name<br><small class="muted">Für den Dienstplan, z. B. „Luca“</small></span>
+    <button type="button" class="chip" id="me-name">${s.myName ? esc(s.myName) + ' ✎' : 'Eintragen'}</button></li>`);
+  renderWeight($('#weight-box'), s.weightOn);
   const pre = showPreset(s);
   $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
     `<button type="button" data-preset="${v}" class="${pre === v ? 'active' : ''}">${t}</button>`).join('') + (pre === 'eigene' ? '<button type="button" class="active" disabled>Eigene</button>' : '');
@@ -1097,7 +1215,8 @@ function renderSettings() {
     : '<p class="muted">Du siehst den Haushalts-Standard. Änderst du etwas, gilt es nur für dich.</p>';
   renderSummaries(s);
 }
-$('#tab-kitchen').addEventListener('click', e => {
+$('#tab-kitchen').addEventListener('click', async e => {
+  if (e.target.closest('#me-name')) { const n = await askInput('Dein Name', 'Name', getSettings().myName); if (n != null) { setSetting('myName', n); renderSettings(); } return; }
   const sc = e.target.closest('[data-show-scope]');
   if (sc) { sc.dataset.showScope === 'hh' ? showToHousehold() : showReset(); renderSettings(); renderPantry(); return; }
   const pr = e.target.closest('[data-preset]');
@@ -1113,7 +1232,11 @@ $('#tab-kitchen').addEventListener('click', e => {
     setSetting(k, [...cur]); return renderSettings();
   }
   const b = e.target.closest('[data-choice]'); if (!b) return;
-  const v = b.dataset.v;
+  let v = b.dataset.v;
+  if (v === 'own') {
+    const n = await askNumber('Eigenes Monatsbudget', 'Betrag in Euro', getSettings().budget || ''); if (!n) return;
+    v = String(Math.round(n));
+  }
   setSetting(b.dataset.choice, /^\d+$/.test(v) ? +v : v);
   renderSettings(); renderPantry();
 });

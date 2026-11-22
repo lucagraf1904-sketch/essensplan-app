@@ -32,6 +32,7 @@
           <option>Vorratsschrank</option>
         </select>
       </div>
+      <div id="freezer-head"></div>
       <ul id="pantry-list" class="list"></ul>
       <p id="pantry-empty" class="muted hidden">Noch nichts da. Lege Artikel an oder scanne einen Bon.</p>
     </section>
@@ -63,6 +64,7 @@
       <div id="shop-suggest"></div>
       <div id="shop-deals"></div>
       <div id="shop-hints"></div>
+      <div id="shop-sort"></div>
       <ul id="shop-list" class="list"></ul>
       <p id="shop-empty" class="muted">Die Liste ist leer.</p>
       <button id="shop-clear" class="hidden">Erledigte entfernen</button>
@@ -86,6 +88,11 @@
         <div id="show-preset" class="seg wrap"></div>
         <div id="show-scope" class="tiny"></div>
         <ul id="settings-show" class="list settings"></ul>
+      </details>
+      <details class="set-group" data-group="me">
+        <summary><span class="set-ico">👤</span><span class="set-title">Persönlich<small id="sum-me"></small></span></summary>
+        <p class="muted tiny">Gilt nur für dich (dieses Handy bzw. dein Konto).</p>
+        <ul id="settings-me" class="list settings"></ul>
       </details>
       <details class="set-group" data-group="profile">
         <summary><span class="set-ico">🩺</span><span class="set-title">Gesundheit &amp; Vorlieben<small id="sum-profile"></small></span></summary>
@@ -120,6 +127,11 @@
         <summary><span class="set-ico">🏷️</span><span class="set-title">Angebote &amp; Preisvergleich<small id="sum-offers"></small></span></summary>
         <ul id="settings-offers" class="list settings"></ul>
       </details>
+      <details class="set-group" data-group="budget">
+        <summary><span class="set-ico">💶</span><span class="set-title">Budget<small id="sum-budget"></small></span></summary>
+        <p class="muted tiny">Monatsgrenze für Lebensmittel (alles vom Kassenbon, Pfand nicht mitgezählt). Gilt für den ganzen Haushalt.</p>
+        <ul id="settings-budget" class="list settings"></ul>
+      </details>
       <details class="set-group" data-group="kitchen">
         <summary><span class="set-ico">🍳</span><span class="set-title">Küchenutensilien<small id="sum-kitchen"></small></span></summary>
         <p class="muted tiny">Grundlage für den späteren Essensplan: Es werden nur Zubereitungen vorgeschlagen, die mit diesen Geräten gehen.</p>
@@ -133,6 +145,7 @@
 
     <!-- Tab: Verlauf -->
     <section id="tab-log" class="tab">
+      <div id="weight-box" class="hidden"></div>
       <div id="health-box" class="hidden"></div>
       <div class="toolbar"><h2 style="flex:1">Monatsbilanz</h2><input id="month-pick" type="month" style="width:auto"></div>
       <div id="month-stats"></div>
