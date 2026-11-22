@@ -1,6 +1,6 @@
 // Ladenangebote. Aktuell: Prospekt-Links + Angebote per Antippen eintragen (legal, zuverlässig).
 // Später kann eine automatische Quelle dieselbe Struktur füllen (Luca, 22.11.2026: erst mit offizieller Freigabe).
-// Gespeichert pro Gerät in localStorage (Supabase folgt).
+// Gespeichert in localStorage, mit Supabase für den Haushalt geteilt (shared.js).
 //
 // Prospekt-Seiten am 22.11.2026 geprüft. REWE ließ sich nicht automatisch prüfen (blockt Abrufe), URL-Muster aus der Suche.
 export const CHAINS = [

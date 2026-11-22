@@ -54,6 +54,19 @@ export const supabaseStore = {
       .subscribe();
   },
 
+  // Gemeinsame und persönliche Schlüssel-Werte (shared.js)
+  async listShared() { return must(await sb.from('household_data').select('key, value')); },
+  async setShared(key, value) { must(await sb.from('household_data').upsert({ household_id: household.id, key, value, updated_at: new Date().toISOString() })); },
+  async mergeList(key, items) { return must(await sb.rpc('merge_list', { p_key: key, p_items: items })); },
+  async listMine() { return must(await sb.from('member_data').select('key, value')); },
+  async setMine(key, value) { must(await sb.from('member_data').upsert({ key, value, updated_at: new Date().toISOString() })); },
+  onShared(cb) {
+    sb.channel('kv-' + household.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'household_data', filter: `household_id=eq.${household.id}` }, p => p.new?.key && cb('hh', p.new.key, p.new.value))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'member_data' }, p => p.new?.key && cb('me', p.new.key, p.new.value))
+      .subscribe();
+  },
+
   async listItems() { return must(await sb.from('items').select('*')).map(toItem); },
 
   async upsertItem(item) {

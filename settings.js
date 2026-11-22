@@ -1,5 +1,7 @@
-// Einstellungen zum Antippen. Gespeichert pro Gerät in localStorage (Supabase folgt).
-const KEY = 'speisekammer.settings';
+// Einstellungen zum Antippen.
+// Zwei Ebenen (Luca 22.11.2026): Haushalt (gilt für alle, mit Supabase geteilt) und persönlich (diese Person/dieses Handy).
+// Persönliche Werte überschreiben den Haushalts-Standard. Anzeige: eigene Auswahl möglich, sonst gilt der Haushalts-Standard.
+const KEY = 'speisekammer.settings', HH_KEY = 'speisekammer.hhSettings';
 
 export const DEFAULT_SETTINGS = {
   tips: true,            // Hauptschalter für alle Tipps und Hinweise
@@ -34,14 +36,15 @@ export const DEFAULT_SETTINGS = {
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 
-export function getSettings() {
-  try { return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(KEY)) ?? {}) }; }
-  catch { return { ...DEFAULT_SETTINGS }; }
-}
+const read = k => { try { return JSON.parse(localStorage.getItem(k)) ?? {}; } catch { return {}; } };
+const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+export function getSettings() { return { ...DEFAULT_SETTINGS, ...read(HH_KEY), ...read(KEY) }; }
+export const isPersonal = k => PERSONAL_KEYS.includes(k);
 export function setSetting(k, v) {
-  const s = getSettings(); s[k] = v;
-  localStorage.setItem(KEY, JSON.stringify(s));
-  return s;
+  if (isPersonal(k)) write(KEY, { ...read(KEY), [k]: v });
+  else { write(HH_KEY, { ...read(HH_KEY), [k]: v }); const me = read(KEY); if (k in me) { delete me[k]; write(KEY, me); } }
+  return getSettings();
 }
 // Ist ein Tipp-Thema aktiv? (Hauptschalter UND Themenschalter)
 export function tipsOn(topic) {
@@ -52,6 +55,10 @@ export function tipsOn(topic) {
 // Anzeige-Stufen: setzen alle Anzeige-Schalter (plus Tipps und „Wieder kaufen?“) auf einmal
 export const SHOW_KEYS = ['showQty','showCategory','showLocation','showPack','showOpened','showFrozenDetail','showExpiryBadge','showExpiryDate','showPrice','showWarnBox',
   'showGoodNote','showOfferTags','showDeals','showCheck','showBalHints','showBalCompare','showUnitPrice','showWaste','tips','shopSuggestions'];
+// Persönlich (pro Person): Anzeige, Tipps, Gesundheit, Erinnerungszeiten, Trinkzähler, Gewicht, Dienstplan-Rahmen
+export const PERSONAL_KEYS = [...SHOW_KEYS, 'tipsBread', 'tipsProduce', 'tipsProcessed', 'tipsMeat', 'health',
+  'remindExpiry', 'expiryTime', 'remindDinner', 'dinnerTime', 'dinnerAuto', 'glassMl', 'drinkGoalMl',
+  'weightOn', 'myName', 'shiftsOn', 'workNoFridge', 'workNoMicrowave'];
 const MINIMAL_ON = ['showQty', 'showExpiryBadge', 'showWarnBox'];
 export const SHOW_PRESETS = {
   minimal: Object.fromEntries(SHOW_KEYS.map(k => [k, MINIMAL_ON.includes(k)])),
@@ -63,5 +70,21 @@ export function showPreset(s = getSettings()) {
 }
 export function applyShowPreset(name) {
   const p = SHOW_PRESETS[name]; if (!p) return;
-  const s = { ...getSettings(), ...p }; localStorage.setItem(KEY, JSON.stringify(s)); return s;
+  write(KEY, { ...read(KEY), ...p }); return getSettings();
 }
+// Anzeige: hat diese Person eine eigene Auswahl? Als Standard für alle übernehmen / auf Standard zurücksetzen
+export const hasOwnShow = () => SHOW_KEYS.some(k => k in read(KEY));
+export function showToHousehold() {
+  const me = read(KEY), hh = read(HH_KEY), s = getSettings();
+  for (const k of SHOW_KEYS) { hh[k] = s[k]; delete me[k]; }
+  write(HH_KEY, hh); write(KEY, me);
+}
+export function showReset() { const me = read(KEY); for (const k of SHOW_KEYS) delete me[k]; write(KEY, me); }
+
+// Alte Geräte hatten alles persönlich gespeichert: Haushalts-Werte einmal umziehen
+(function migrate() {
+  const me = read(KEY), hh = read(HH_KEY), move = Object.keys(me).filter(k => !isPersonal(k));
+  if (!move.length) return;
+  for (const k of move) { if (!(k in hh)) hh[k] = me[k]; delete me[k]; }
+  write(HH_KEY, hh); write(KEY, me);
+})();

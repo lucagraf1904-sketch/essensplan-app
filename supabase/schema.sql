@@ -282,3 +282,61 @@ begin
     label = coalesce(nullif(trim(p_label), ''), health_tokens.label), created_at = now(), last_used_at = null;
   return tok;
 end $$;
+
+-- ---------- Gemeinsame Daten (Luca 22.11.: Mindestbestand, Anzeige-Standard, Einkaufsliste usw. für den ganzen Haushalt) ----------
+-- Ein JSON-Wert je Schlüssel und Haushalt. Die App hält eine Kopie im Handy (localStorage) und gleicht live ab.
+create table if not exists household_data (
+  household_id uuid not null references households(id) on delete cascade,
+  key text not null,
+  value jsonb not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid default auth.uid(),
+  primary key (household_id, key)
+);
+alter table household_data enable row level security;
+drop policy if exists hhdata_all on household_data;
+create policy hhdata_all on household_data for all using (household_id = my_household()) with check (household_id = my_household());
+
+-- Persönliche Daten (eigene Anzeige, Gewicht): nur die Person selbst sieht sie
+create table if not exists member_data (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  key text not null,
+  value jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, key)
+);
+alter table member_data enable row level security;
+drop policy if exists mdata_own on member_data;
+create policy mdata_own on member_data for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Listen (Einkaufsliste, Rezepte) eintragsweise zusammenführen, damit gleichzeitiges Abhaken auf zwei Handys nichts überschreibt.
+-- Jeder Eintrag hat id und t (Änderungszeit in ms); Löschen = Eintrag mit del=true. Neuerer Stand gewinnt, Reihenfolge bleibt.
+create or replace function merge_list(p_key text, p_items jsonb) returns jsonb
+language plpgsql security invoker set search_path = public as $$
+declare hh uuid := my_household(); cur jsonb; res jsonb;
+begin
+  if hh is null then raise exception 'Kein Haushalt'; end if;
+  insert into household_data(household_id, key, value) values (hh, p_key, '[]'::jsonb) on conflict do nothing;
+  select value into cur from household_data where household_id = hh and key = p_key for update;
+  if jsonb_typeof(cur) <> 'array' then cur := '[]'::jsonb; end if;
+  select coalesce(jsonb_agg(x order by o), '[]'::jsonb) into res from (
+    select (array_agg(e order by t desc, ord desc))[1] as x, min(ord) as o
+    from (
+      select e, ord, coalesce((e->>'t')::numeric, 0) as t from jsonb_array_elements(cur) with ordinality a(e, ord)
+      union all
+      select e, 1000000 + ord, coalesce((e->>'t')::numeric, 0) from jsonb_array_elements(p_items) with ordinality b(e, ord)
+    ) s
+    group by e->>'id'
+  ) z
+  -- gelöschte Einträge nach 30 Tagen endgültig entfernen
+  where not (coalesce((x->>'del')::boolean, false) and coalesce((x->>'t')::numeric, 0) < extract(epoch from now() - interval '30 days') * 1000);
+  update household_data set value = res, updated_at = now(), updated_by = auth.uid() where household_id = hh and key = p_key;
+  return res;
+end $$;
+
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'household_data') then
+    alter publication supabase_realtime add table household_data; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'member_data') then
+    alter publication supabase_realtime add table member_data; end if;
+end $$;

@@ -2,7 +2,8 @@ import { localStore } from './store.js';
 import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
 import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
-import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset } from './settings.js';
+import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
+import { initShared } from './shared.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
@@ -234,7 +235,7 @@ $('#pack-pick').addEventListener('click', e => {
 });
 form.category.addEventListener('change', renderPack);
 
-// Mindestbestand je Produkt (pro Gerät): { productKey: { min, name } }
+// Mindestbestand je Produkt (Haushalt, über shared.js): { productKey: { min, name } }
 const MIN_KEY = 'speisekammer.minStock', MIN_PENDING = 'speisekammer.minPending';
 const loadMin = () => { try { return JSON.parse(localStorage.getItem(MIN_KEY)) ?? {}; } catch { return {}; } };
 const minStockFor = name => loadMin()[productKey(name)] ?? null;
@@ -690,6 +691,14 @@ async function start() {
     $('#hh-info').innerHTML = `Haushalt <b>${esc(hh.name)}</b> · Einladungscode <b>${esc(hh.join_code)}</b>`;
     $('#account').classList.remove('hidden');
     store.onChange(() => { renderPantry(); if ($('#tab-log').classList.contains('active')) renderLog(); });
+    // Mindestbestand, Einstellungen, Einkaufsliste usw. für den ganzen Haushalt
+    await initShared(store, key => {
+      if (key === 'warnDays') { WARN_DAYS = +(localStorage.getItem('warnDays') ?? 3); $('#warn-days').value = String(WARN_DAYS); }
+      renderSettings(); renderPantry(); renderUtensils();
+      if ($('#tab-shop').classList.contains('active')) renderShop();
+      document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key } }));
+    }).catch(e => console.warn('Gemeinsame Daten', e));
+    WARN_DAYS = +(localStorage.getItem('warnDays') ?? 3); $('#warn-days').value = String(WARN_DAYS); renderSettings(); renderUtensils();
   }
   await renderPantry();
   initHealth(store, $);
@@ -715,7 +724,7 @@ function monthStartHint() {
 }
 
 // ---------- Küche: Utensilien & Einstellungen ----------
-// Annahme: Liste wird pro Gerät gespeichert (localStorage), nicht über Supabase geteilt.
+// Mit Supabase für den ganzen Haushalt geteilt (shared.js).
 const UT_KEY = 'speisekammer.utensils';
 const UT_DEFAULT = [
   { name: 'Pfannen', has: true },
@@ -755,7 +764,7 @@ $('#warn-days').addEventListener('change', e => { WARN_DAYS = +e.target.value; l
 renderUtensils();
 
 // ---------- Einkaufsliste ----------
-// Annahme: pro Gerät in localStorage, Supabase folgt.
+// Mit Supabase für den ganzen Haushalt geteilt und live abgeglichen (shared.js, eintragsweise zusammengeführt).
 const SHOP_KEY = 'speisekammer.shopping';
 const loadShop = () => { try { return JSON.parse(localStorage.getItem(SHOP_KEY)) ?? []; } catch { return []; } };
 const saveShop = l => localStorage.setItem(SHOP_KEY, JSON.stringify(l));
@@ -772,7 +781,7 @@ const hiddenHints = () => { try { const h = JSON.parse(localStorage.getItem('spe
 function hideHint(k) { localStorage.setItem('speisekammer.hintsHidden', JSON.stringify({ week: weekKey(), keys: [...hiddenHints(), k] })); }
 const altButtons = (alts, attr) => alts?.length ? `<div class="tip-alts">${alts.map(a => `<button class="chip" ${attr}="${esc(a)}">${esc(a)}</button>`).join('')}</div>` : '';
 
-// Angenommene Angebote (IDs), pro Gerät
+// Angenommene Angebote (IDs), für den Haushalt (shared.js)
 const ACC_KEY = 'speisekammer.acceptedOffers';
 const loadAccepted = () => { try { return new Set(JSON.parse(localStorage.getItem(ACC_KEY)) ?? []); } catch { return new Set(); } };
 const saveAccepted = set => localStorage.setItem(ACC_KEY, JSON.stringify([...set]));
@@ -986,7 +995,7 @@ const SWITCHES = {
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
   ],
 };
-// Gesundheit & Vorlieben (nur auf diesem Gerät). Erkrankungen über ein Suchfeld mit Vorschlägen,
+// Gesundheit (nur auf diesem Gerät) & Vorlieben (Haushalt). Erkrankungen über ein Suchfeld mit Vorschlägen,
 // Vorlieben als Knöpfe. Steuert Zusatzhinweise in den Tipps (tips.js extra) und später den Essensplan.
 const PREFS = [['wenigWeizen', 'Wenig Weizen'], ['keinSchwein', 'Kein Schweinefleisch'], ['wenigFleisch', 'Wenig Fleisch'], ['vegetarisch', 'Vegetarisch']];
 function renderProfile(s) {
@@ -997,7 +1006,7 @@ function renderProfile(s) {
     <ul id="cond-sugg" class="cond-sugg"></ul></div>
     <p class="tiny muted">Vorlieben (antippen, mehrere möglich)</p>
     <div class="tip-alts">${PREFS.map(([v, t]) => `<button type="button" class="chip ${prefs.includes(v) ? 'accepted' : ''}" data-profile="prefs" data-v="${v}">${prefs.includes(v) ? '✓ ' : ''}${esc(t)}</button>`).join('')}</div>
-    <p class="tiny muted">Freiwillig, alles kann leer bleiben. Wird nur auf diesem Gerät gespeichert. Ohne Angabe sind alle Tipps allgemein; mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>`;
+    <p class="tiny muted">Freiwillig, alles kann leer bleiben. Erkrankungen werden nur auf diesem Gerät gespeichert und nie hochgeladen; Vorlieben gelten für den ganzen Haushalt. Ohne Angabe sind alle Tipps allgemein; mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>`;
 }
 function renderCondSugg() {
   const q = $('#cond-q')?.value ?? '', health = getSettings().health ?? [];
@@ -1082,9 +1091,15 @@ function renderSettings() {
   const pre = showPreset(s);
   $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
     `<button type="button" data-preset="${v}" class="${pre === v ? 'active' : ''}">${t}</button>`).join('') + (pre === 'eigene' ? '<button type="button" class="active" disabled>Eigene</button>' : '');
+  $('#show-scope').innerHTML = hasOwnShow()
+    ? `<p class="muted">Das ist deine eigene Anzeige. Die anderen im Haushalt sehen den Haushalts-Standard.</p>
+       <div class="tip-alts"><button type="button" class="chip" data-show-scope="hh">Als Standard für alle übernehmen</button><button type="button" class="chip" data-show-scope="reset">Haushalts-Standard verwenden</button></div>`
+    : '<p class="muted">Du siehst den Haushalts-Standard. Änderst du etwas, gilt es nur für dich.</p>';
   renderSummaries(s);
 }
 $('#tab-kitchen').addEventListener('click', e => {
+  const sc = e.target.closest('[data-show-scope]');
+  if (sc) { sc.dataset.showScope === 'hh' ? showToHousehold() : showReset(); renderSettings(); renderPantry(); return; }
   const pr = e.target.closest('[data-preset]');
   if (pr) { applyShowPreset(pr.dataset.preset); renderSettings(); renderPantry(); return; }
   const ha = e.target.closest('[data-health-add]');
