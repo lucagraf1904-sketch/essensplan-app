@@ -16,6 +16,20 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 - Verlauf und Monatsbilanz (ausgegeben, weggeworfen, nach Kategorie)
 - Pfand und Leergut-Rückgabe vom Bon landen in der Kategorie „Pfand“: zählen zu „Ausgegeben“ (wie auf dem Bon), nicht zu den Lebensmitteln und nicht in den Vorrat. Die Bilanz zeigt bezahlt / zurück / netto. Das Leergut-Zeilenformat ist am echten Bon noch nicht geprüft.
 - Export/Import als JSON
+- Haushaltsweit (Luca 22.11.): Mindestbestand, Einkaufsliste, Utensilien, Angebote, Gerichte, Plan, Dienstplan und Haushalts-Einstellungen
+  werden mit Supabase geteilt (shared.js, Tabelle household_data; Listen eintragsweise über `merge_list`, damit gleichzeitiges Abhaken nichts überschreibt).
+  Persönlich (member_data, nur für die Person selbst): eigene Anzeige, Erinnerungszeiten, Gewicht. Erkrankungen bleiben nur auf dem Gerät.
+  Anzeige: Haushalts-Standard, jede Person kann für sich abweichen („Als Standard für alle übernehmen“ / „Haushalts-Standard verwenden“).
+- Gefrierschrank-Übersicht (Filter „Gefrierschrank“): älteste Einfrierung zuerst, mit Datum und Dauer.
+- Monatsbudget (Einstellungen → Budget): Balken in der Bilanz, Hochrechnung bis Monatsende, Warnung im Vorrat ab 70/80/90/100 %.
+- Einkaufsliste nach Ladenweg: Abteilungen in eigener Reihenfolge je Laden (🧭 pro Eintrag änderbar), Erledigtes unten.
+- Gewicht (Einstellungen → Persönlich, standardmäßig aus): ein Eintrag pro Woche, Kurve ohne Bewertung (weight.js).
+- Essensplan (plan.js, recipes.js): Wochenplan aus eigenen Gerichten (oder 14 Beispielgerichten), bald Ablaufendes, Vorrat,
+  Angebote, Lieblingsgerichte, lange nicht Gegessenes, 2× Fisch / max. 2× Rind, Reste. „Gekocht“ fragt, was verbraucht wurde.
+  Gerichte: eigene eintragen, Rezepttext einfügen, per Link (Edge Function `recipe-import`, liest schema.org-Rezeptdaten).
+- Dienstplan (shifts.js, Einstellungen → Persönlich): Früh/Spät/Nacht/Frei je Person; Nacht = leichte Gerichte, Vortag = Portion für die Dose,
+  Spätschicht = Erinnerung 11:30 statt Abendessen. Quellen: DGE (DGEwissen 3/2024), gesundheit.gv.at (Stand 10.11.2020), AOK (Stand 28.05.2024).
+  Schichtzeiten (6–14, 13:30–21:30, 21–6:30) und die Mittagszeit bei Spätschicht sind Annahmen.
 
 ## Gemeinsame Daten mit Supabase einrichten
 1. Projekt auf supabase.com anlegen (Region Frankfurt).
@@ -23,7 +37,8 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 3. Authentication → Sign In / Providers → Email: „Confirm email“ ausschalten. Die App meldet mit E-Mail + Passwort an (ohne Mail).
    Optional (Code per Mail): in den Vorlagen „Magic Link“ und „Confirm signup“ `{{ .Token }}` einfügen; am iPhone ließ sich die Vorlage nicht bearbeiten (22.11.).
 4. Project URL und anon key in `config.js` eintragen. Den service_role key nie in die App.
-5. Person 1 meldet sich an und legt den Haushalt an. Den Einladungscode (Verlauf → Haushalt & Konto) an Person 2 geben, die „Beitreten“ wählt.
+5. Edge Function für den Rezeptimport: `supabase functions deploy recipe-import` (prüft die Anmeldung).
+6. Person 1 meldet sich an und legt den Haushalt an. Den Einladungscode (Verlauf → Haushalt & Konto) an Person 2 geben, die „Beitreten“ wählt.
 
 Ohne Eintrag in `config.js` läuft die App rein lokal.
 
@@ -83,7 +98,7 @@ Einstellungen → Angebote & Preisvergleich: automatische Suche, Stammladen, Anz
 
 ## Demo (22.11.2026)
 `demo/demo.js` legt alle Daten unter dem Präfix `demo:` ab (echte Daten bleiben unberührt), füllt Beispieldaten
-(Vorrat, Liste, Angebote inkl. Kaufland, sieben Wochen Verlauf), zeigt einen Rundgang und „Zurücksetzen“ (zweimal tippen). `demo/plan.js` = Beispiel-Essensplan NUR für die Demo (Luca 22.11.: der echte Planer kommt später); liefert auch getPlannedMeal für die Erinnerung.
+(Vorrat, Liste, Angebote inkl. Kaufland, sieben Wochen Verlauf), zeigt einen Rundgang und „Zurücksetzen“ (zweimal tippen). Die Demo nutzt den echten Planer (plan.js) und übernimmt beim ersten Start die Beispielgerichte; dazu ein Beispiel-Dienstplan („Beispiel Pflege“).
 Bauen: `sh demo/build.sh /pfad/ausgabe` → dann veröffentlichen. Veröffentlicht als Artifact „Speisekammer (Demo)“.
 
 ## Bewegung aus Apple Health (vorbereitet, nicht live)
