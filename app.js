@@ -1,6 +1,6 @@
 import { localStore } from './store.js';
 import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
-import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal } from './categories.js';
+import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn } from './settings.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
@@ -30,6 +30,20 @@ function expiryBadge(d, frozen = false) {
   return `<span class="badge">noch ${d} T</span>`;
 }
 
+// ---------- Dialoge ohne Tastatur beim Öffnen ----------
+// showModal() fokussiert sonst das erste Eingabefeld, und das iPhone öffnet sofort die Tastatur.
+// Die Überschrift (bzw. der Dialog selbst) bekommt den Fokus; die Tastatur kommt erst beim Antippen eines Feldes.
+document.querySelectorAll('dialog').forEach(d => {
+  const h = d.querySelector('h2') ?? d;
+  if (!d.querySelector('[autofocus]')) { h.setAttribute('tabindex', '-1'); h.setAttribute('autofocus', ''); }
+});
+const _showModal = HTMLDialogElement.prototype.showModal;
+HTMLDialogElement.prototype.showModal = function () {
+  _showModal.call(this);
+  const a = document.activeElement;
+  if (a && this.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { a.blur(); (this.querySelector('h2') ?? this).focus?.({ preventScroll: true }); }
+};
+
 // ---------- Tabs ----------
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
@@ -52,7 +66,8 @@ async function renderPantry() {
     <li data-id="${i.id}">
       <div class="main">
         <div class="name">${esc(i.name)}</div>
-        <div class="meta">${esc(i.qty)} ${esc(i.unit)}${i.size ? ' à ' + esc(i.size) : ''} · ${esc(i.category)} · ${esc(i.location)}</div>
+        <div class="meta">${esc(i.qty)} ${esc(i.unit)}${i.size ? ' à ' + esc(i.size) : ''} · ${esc(i.category)} · ${esc(i.location)}${drinksOn() && i.pack && PACKS[i.pack] ? ' · ' + esc(PACKS[i.pack].label) : ''}</div>
+        ${drinksOn() && i.openedAt ? `<div class="meta">🥤 Geöffnet am ${fmtDate(i.openedAt)} · gekühlt ca. ${OPENED_DAYS} Tage (Richtwert)</div>` : ''}
         ${i.frozenAt ? `<div class="meta">MHD (Kühlschrank): ${i.origExpiry ? fmtDate(i.origExpiry) : 'unbekannt'}</div>
         <div class="meta frozen-meta"><b>❄️ Tiefkühl bis ${fmtDate(i.expiry)}</b> · eingefroren ${fmtDate(i.frozenAt)}</div>` : ''}
       </div>
@@ -64,6 +79,8 @@ async function renderPantry() {
   $('#warn-box').innerHTML = soon.length
     ? `<div class="warn">⚠️ ${soon.length} Artikel ${soon.length === 1 ? 'läuft' : 'laufen'} bald ab: ${soon.slice(0, 5).map(i => esc(i.name)).join(', ')}${soon.length > 5 ? ' …' : ''}</div>`
     : '';
+  checkMinStock(items);
+  renderDrinkCounter();
   return soon;
 }
 $('#search').addEventListener('input', renderPantry);
@@ -81,6 +98,7 @@ $('#pantry-list').addEventListener('click', async e => {
   const canFreeze = !frozen && current.location !== 'Gefrierschrank' && !(d != null && d < 0);
   $('#use-freeze').classList.toggle('hidden', !canFreeze);
   $('#use-thaw').classList.toggle('hidden', !frozen);
+  $('#use-opened').classList.toggle('hidden', !(drinksOn() && current.category === 'Getränke' && !current.openedAt && !frozen));
   $('#use-freeze-info').innerHTML = frozen
     ? `❄️ Eingefroren am ${fmtDate(current.frozenAt)}, empfohlen bis ${fmtDate(current.expiry)}.`
     : canFreeze
@@ -102,7 +120,14 @@ $('#use-dialog').addEventListener('close', async () => {
     // Annahme: Fleisch & Fisch 1 Tag, alles andere 2 Tage im Kühlschrank.
     await store.upsertItem({ ...current, location: 'Kühlschrank', frozenAt: null, origExpiry: null, expiry: thawExpiry(current) });
     renderPantry();
+  } else if (v === 'opened') {
+    // Geöffnet: in den Kühlschrank, Richtwert OPENED_DAYS Tage (VZ: „wenige Tage gekühlt“), nie später als das MHD
+    const t = new Date(); t.setDate(t.getDate() + OPENED_DAYS);
+    const exp = current.expiry && current.expiry < isoLocal(t) ? current.expiry : isoLocal(t);
+    await store.upsertItem({ ...current, location: 'Kühlschrank', openedAt: isoLocal(), expiry: exp });
+    renderPantry();
   } else if (v === 'edit') openItem(current);
+  if (v === 'eaten' && drinkLevel() >= 2) await logDrinkKcal(current, parseFloat($('#use-qty').value) || current.qty);
 });
 
 function thawExpiry(item) {
@@ -164,14 +189,99 @@ function openItem(item) {
   const v = item ?? { name: '', size: '', qty: 1, unit: 'Stk', category: 'Sonstiges', location: 'Vorratsschrank', expiry: '', price: '' };
   for (const k of ['name', 'size', 'qty', 'unit', 'category', 'location', 'expiry', 'price']) form[k].value = v[k] ?? '';
   formFreeze = { frozenAt: v.frozenAt ?? null, origExpiry: v.origExpiry ?? null };
-  formExtra = { barcode: v.barcode ?? null, nutrition: v.nutrition ?? null };
+  formExtra = { barcode: v.barcode ?? null, nutrition: v.nutrition ?? null, pack: v.pack ?? null, openedAt: v.openedAt ?? null };
+  form.minStock.value = v.name ? String(minStockFor(v.name)?.min ?? '') : '';
+  renderPack();
   $('#item-nutrition').textContent = nutritionLine(formExtra.nutrition);
   renderFreezeNote();
   $('#item-dialog').showModal();
 }
 
 // ---------- Barcode → Open Food Facts ----------
-let formExtra = { barcode: null, nutrition: null };
+let formExtra = { barcode: null, nutrition: null, pack: null, openedAt: null };
+
+// ---------- Getränke (Umfang per Einstellung: 0 aus, 1 A Vorrat+Bilanz, 2 B +kcal, 3 C +Trinkzähler) ----------
+const DRINK_LEVELS = { off: 0, a: 1, b: 2, c: 3 };
+const drinkLevel = () => DRINK_LEVELS[getSettings().drinks] ?? 1;
+const drinksOn = () => drinkLevel() >= 1;
+function renderPack() {
+  const show = drinksOn() && form.category.value === 'Getränke';
+  $('#pack-row').classList.toggle('hidden', !show);
+  if (!show) return;
+  // Knöpfe nur einmal bauen (sonst verschluckt ein Neuaufbau beim Verlassen des Namensfelds den Tipp)
+  if (!$('#pack-pick').children.length) $('#pack-pick').innerHTML = Object.entries(PACKS).map(([k, p]) => `<button type="button" data-pack="${k}">${esc(p.label)}</button>`).join('');
+  $('#pack-pick').querySelectorAll('[data-pack]').forEach(b => b.classList.toggle('active', b.dataset.pack === formExtra.pack));
+  const p = PACKS[formExtra.pack];
+  $('#pack-note').textContent = p ? `Ungeöffnet ${p.range} laut ${PACK_SOURCE}. Die App nimmt den unteren Wert. Das MHD auf der Packung geht vor.` : 'Antippen, dann wird die Haltbarkeit passend gesetzt.';
+}
+$('#pack-pick').addEventListener('click', e => {
+  const b = e.target.closest('[data-pack]'); if (!b) return;
+  formExtra.pack = b.dataset.pack;
+  form.expiry.value = packExpiry(formExtra.pack);
+  if (PACKS[formExtra.pack].location) form.location.value = PACKS[formExtra.pack].location;
+  renderPack(); renderFreezeNote();
+});
+form.category.addEventListener('change', renderPack);
+
+// Mindestbestand je Produkt (pro Gerät): { productKey: { min, name } }
+const MIN_KEY = 'speisekammer.minStock', MIN_PENDING = 'speisekammer.minPending';
+const loadMin = () => { try { return JSON.parse(localStorage.getItem(MIN_KEY)) ?? {}; } catch { return {}; } };
+const minStockFor = name => loadMin()[productKey(name)] ?? null;
+function setMinStock(name, min) {
+  const m = loadMin(), k = productKey(name); if (!k) return;
+  if (min) m[k] = { min, name: pretty(k) }; else delete m[k];
+  localStorage.setItem(MIN_KEY, JSON.stringify(m));
+}
+function checkMinStock(items) {
+  const m = loadMin(); if (!Object.keys(m).length && !minNotice.length) return;
+  let pending; try { pending = new Set(JSON.parse(localStorage.getItem(MIN_PENDING)) ?? []); } catch { pending = new Set(); }
+  const added = [];
+  for (const [k, { min, name }] of Object.entries(m)) {
+    const have = items.filter(i => { const ik = productKey(i.name); return ik === k || ik.includes(k) || k.includes(ik); })
+      .reduce((s, i) => s + (i.unit === 'Stk' || i.unit === 'Pck' ? (+i.qty || 0) : 1), 0);
+    if (have >= min) { pending.delete(k); continue; }
+    if (pending.has(k)) continue;
+    const list = loadShop();
+    if (!list.some(x => !x.done && productKey(x.name) === k)) { list.push({ id: shopId(), name, done: false, auto: 'min' }); saveShop(list); added.push(name); }
+    pending.add(k);
+  }
+  localStorage.setItem(MIN_PENDING, JSON.stringify([...pending]));
+  if (added.length) minNotice = [...new Set([...minNotice, ...added])];
+  if (minNotice.length) $('#warn-box').insertAdjacentHTML('beforeend', `<div class="warn info" id="min-notice">🛒 Mindestbestand unterschritten, auf die Einkaufsliste gesetzt: ${minNotice.map(esc).join(', ')} <small>(antippen zum Ausblenden)</small></div>`);
+}
+let minNotice = [];
+document.addEventListener('click', e => { if (e.target.closest('#min-notice')) { minNotice = []; e.target.closest('#min-notice').remove(); } });
+
+// Stufe B: kcal beim Abhaken eines Getränks (aus Open-Food-Facts-Nährwerten je 100 ml/g)
+async function logDrinkKcal(item, qty) {
+  if (item.category !== 'Getränke' || item.nutrition?.kcal == null) return;
+  const size = parseSize(item.size || item.name);
+  const ml = size ? (size.unit === 'ml' || size.unit === 'g' ? size.amount : null) : null;
+  if (!ml) return;
+  const units = item.unit === 'Stk' || item.unit === 'Pck' ? qty : 1;
+  const kcal = Math.round(item.nutrition.kcal * ml / 100 * units);
+  await store.addLog({ type: 'drink', itemName: item.name, category: 'Getränke', qty: units, unit: item.unit, value: null, kcal });
+}
+
+// Stufe C: Trinkzähler (pro Gerät = pro Person), Glasgröße und Tagesziel einstellbar
+const DRINK_KEY = 'speisekammer.drinkCount';
+const drinkToday = () => { try { const d = JSON.parse(localStorage.getItem(DRINK_KEY)) ?? {}; return d[isoLocal()] ?? 0; } catch { return 0; } };
+function addGlass(n) {
+  let d; try { d = JSON.parse(localStorage.getItem(DRINK_KEY)) ?? {}; } catch { d = {}; }
+  d[isoLocal()] = Math.max(0, (d[isoLocal()] ?? 0) + n);
+  for (const k of Object.keys(d)) if (k < isoLocal(new Date(Date.now() - 60 * 86400000))) delete d[k]; // 60 Tage behalten
+  localStorage.setItem(DRINK_KEY, JSON.stringify(d)); renderDrinkCounter();
+}
+async function renderDrinkCounter() {
+  const el = $('#drink-counter'); if (!el) return;
+  if (drinkLevel() < 3) { el.innerHTML = ''; return; }
+  const s = getSettings(), n = drinkToday(), ml = n * s.glassMl, goal = s.drinkGoalMl;
+  const pct = Math.min(100, Math.round(ml / goal * 100));
+  el.innerHTML = `<div class="drink-card"><div class="drink-top"><b>💧 Heute getrunken: ${(ml / 1000).toLocaleString('de-DE')} l</b><span class="muted tiny">Ziel ${(goal / 1000).toLocaleString('de-DE')} l</span></div>
+    <div class="drink-bar"><span style="width:${pct}%"></span></div>
+    <div class="tip-alts"><button class="chip" data-glass="1">＋1 Glas (${s.glassMl} ml)</button>${n ? '<button class="chip" data-glass="-1">−1</button>' : ''}</div></div>`;
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-glass]'); if (b) addGlass(+b.dataset.glass); });
 $('#btn-barcode').addEventListener('click', async () => {
   const code = await scanBarcode();
   if (!code) return;
@@ -224,6 +334,7 @@ form.name.addEventListener('change', () => {
   form.location.value = CATEGORIES[c].location;
   if (!form.expiry.value) form.expiry.value = defaultExpiry(c);
   if (!form.size.value) form.size.value = parseSize(form.name.value)?.label ?? '';
+  renderPack();
 });
 $('#fab').addEventListener('click', () => openItem(null));
 $('#item-dialog').addEventListener('close', async () => {
@@ -231,6 +342,8 @@ $('#item-dialog').addEventListener('close', async () => {
   if (v === 'delete' && editing) await store.deleteItem(editing.id);
   if (v === 'save') {
     const f = Object.fromEntries(new FormData(form));
+    const minStock = f.minStock ? +f.minStock : null; delete f.minStock;
+    setMinStock(f.name, minStock);
     const saved = await store.upsertItem({ ...(editing ?? {}), ...f, ...formFreeze, ...formExtra, qty: parseFloat(f.qty) || 0, price: f.price ? parseFloat(f.price) : null });
     if (!editing) { await renderPantry(); await askFreeze(saved); }
   }
@@ -298,6 +411,7 @@ monthInput.value = ymOf(new Date());
 monthInput.addEventListener('change', renderLog);
 let lastBalance = null;
 
+const drinkKcal = (log, ym) => log.filter(l => l.type === 'drink' && ymOf(l.at) === ym).reduce((s, l) => s + (l.kcal || 0), 0);
 async function renderLog() {
   const [rawLog, aliases] = await Promise.all([store.listLog(), store.getAliases()]);
   const log = rawLog.slice().sort((a, b) => b.at.localeCompare(a.at));
@@ -314,6 +428,7 @@ async function renderLog() {
       <div class="stat"><span class="muted">Ausgegeben</span><b>${eur(bal.spent)}</b>${arrow(bal.spentDiff)}</div>
       <div class="stat"><span class="muted">Weggeworfen</span><b>${eur(bal.wasted)}</b>${bal.hasPrev ? arrow(Math.round((bal.wasted - bal.prevWasted) * 100) / 100) : ''}</div>
     </div>
+    ${drinksOn() ? (d => d ? `<p class="muted">🥤 Getränke: <b>${eur(d.total)}</b> (ohne Pfand)${drinkLevel() >= 2 && drinkKcal(rawLog, ym) ? ` · ca. ${drinkKcal(rawLog, ym)} kcal aus abgehakten Getränken` : ''}</p>` : '')(bal.byCategory.find(c => c.category === 'Getränke')) : ''}
     ${bal.deposit.paid || bal.deposit.back ? `<p class="muted">♻️ Pfand: ${eur(bal.deposit.paid)} bezahlt, ${eur(bal.deposit.back)} zurück (netto ${eur(bal.deposit.net)}). Ist in „Ausgegeben“ enthalten, nicht bei den Lebensmitteln.</p>` : ''}
     ${bal.hasPrev ? '' : '<p class="muted">Vergleich mit dem Vormonat erscheint, sobald es Daten aus dem Vormonat gibt.</p>'}
     ${bal.hints.length ? `<h2>Spartipps</h2><ul class="list small hints">${bal.hints.slice(0, 6).map(h => `<li><div class="main">${hintText(h)}</div></li>`).join('')}</ul>` : ''}
@@ -330,10 +445,10 @@ async function renderLog() {
       `<li><div class="main">${esc(c.category)}</div><b>${eur(c.total)}</b></li>`).join('')}</ul>
     <p class="muted">Tippe auf ein Lebensmittel, um es mit einem anderen zusammenzufassen (z. B. „Rinderhackfleisch“ → „Rinderhack“).</p>
     <button id="btn-csv">Als Tabelle (CSV) exportieren</button>`;
-  const label = { bought: '🛒', eaten: '✅', wasted: '🗑️' };
-  $('#log-list').innerHTML = log.filter(l => ymOf(l.at) === ym).slice(0, 200).map(l => `
+  const label = { bought: '🛒', eaten: '✅', wasted: '🗑️', drink: '🥤' };
+  $('#log-list').innerHTML = log.filter(l => ymOf(l.at) === ym && (l.type !== 'drink' || drinkLevel() >= 2)).slice(0, 200).map(l => `
     <li><span>${label[l.type]}</span><div class="main">${esc(l.itemName)} <span class="meta">${esc(l.qty)} ${esc(l.unit)}${l.size ? ' à ' + esc(l.size) : ''}</span></div>
-    <span class="meta">${l.price ? eur(l.price) + ' · ' : ''}${new Date(l.at).toLocaleDateString('de-DE')}</span></li>`).join('');
+    <span class="meta">${l.kcal ? l.kcal + ' kcal · ' : ''}${l.price ? eur(l.price) + ' · ' : ''}${new Date(l.at).toLocaleDateString('de-DE')}</span></li>`).join('');
 }
 $('#month-stats').addEventListener('click', async e => {
   const seg = e.target.closest('.seg button');
@@ -788,15 +903,25 @@ function renderProfile(s) {
 
 // Auswahl-Zeilen (Knöpfe statt Tippen)
 const CHOICES = [
+  ['drinks', 'Umfang', [['off', 'Aus'], ['a', 'A: Vorrat + Bilanz'], ['b', 'B: + kcal'], ['c', 'C: + Trinkzähler']], '#settings-drinks'],
+  ['glassMl', 'Glasgröße', [[200, '200 ml'], [250, '250 ml'], [300, '300 ml'], [500, '0,5 l']], '#settings-drinks', s => s.drinks === 'c'],
+  ['drinkGoalMl', 'Tagesziel (DGE-Richtwert 1,5 l)', [[1500, '1,5 l'], [2000, '2 l'], [2500, '2,5 l']], '#settings-drinks', s => s.drinks === 'c'],
   ['homeStore', 'Stammladen', CHAINS.map(c => [c.id, c.name])],
   ['maxStores', 'Läden pro Einkauf', [[1, 'Nur einer'], [2, 'Höchstens zwei']]],
   ['minSaving', 'Zweiter Laden lohnt ab', [[1, '1 €'], [2, '2 €'], [3, '3 €'], [5, '5 €']]],
 ];
 function renderChoices(s) {
-  $('#settings-offers').insertAdjacentHTML('beforeend', CHOICES.map(([k, label, opts]) => `<li class="switch-row choice-row">
+  $('#settings-drinks').innerHTML = '';
+  for (const [k, label, opts, target = '#settings-offers', when] of CHOICES) {
+    if (when && !when(s)) continue;
+    $(target).insertAdjacentHTML('beforeend', `<li class="switch-row choice-row">
     <span>${esc(label)}</span>
     <div class="seg wrap">${opts.map(([v, t]) => `<button type="button" data-choice="${k}" data-v="${v}" class="${String(s[k]) === String(v) ? 'active' : ''}">${esc(t)}</button>`).join('')}</div>
-  </li>`).join(''));
+  </li>`);
+  }
+  const info = { off: 'Getränke werden wie alles andere behandelt.', a: 'Haltbarkeit je Verpackung, Knopf „Geöffnet“, eigene Zeile in der Bilanz.',
+    b: 'Wie A, dazu kcal beim Abhaken (nur mit Nährwerten aus dem Barcode-Scan).', c: 'Wie B, dazu ein Trinkzähler im Vorrat (pro Handy, also pro Person).' };
+  $('#settings-drinks').insertAdjacentHTML('beforeend', `<li class="tiny muted">${esc(info[s.drinks] ?? info.a)} Beim Zurückschalten geht nichts verloren, es wird nur ausgeblendet.</li>`);
 }
 function renderSettings() {
   const s = getSettings();
@@ -835,7 +960,7 @@ $('#tab-kitchen').addEventListener('click', e => {
   const b = e.target.closest('[data-choice]'); if (!b) return;
   const v = b.dataset.v;
   setSetting(b.dataset.choice, /^\d+$/.test(v) ? +v : v);
-  renderSettings();
+  renderSettings(); renderPantry();
 });
 $('#tab-kitchen').addEventListener('change', e => {
   if (e.target.classList.contains('switch')) setSetting(e.target.dataset.k, e.target.checked);

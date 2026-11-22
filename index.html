@@ -22,6 +22,7 @@
     <!-- Tab: Vorrat -->
     <section id="tab-pantry" class="tab active">
       <div id="warn-box"></div>
+      <div id="drink-counter"></div>
       <div class="toolbar">
         <input id="search" type="search" placeholder="Suchen …">
         <select id="filter-loc">
@@ -86,6 +87,8 @@
       <ul id="settings-tips" class="list settings"></ul>
       <h2>Gesundheit &amp; Vorlieben</h2>
       <div id="settings-profile"></div>
+      <h2>Getränke</h2>
+      <ul id="settings-drinks" class="list settings"></ul>
       <h2>Angebote &amp; Preisvergleich</h2>
       <ul id="settings-offers" class="list settings"></ul>
       <h2>Vorrat</h2>
@@ -189,6 +192,13 @@
         <label><span id="expiry-label">Haltbar bis</span><input name="expiry" type="date"></label>
         <label>Preis €<input name="price" type="number" step="0.01" min="0"></label>
       </div>
+      <div id="pack-row" class="hidden">
+        <p class="tiny muted">Verpackung (setzt die Haltbarkeit ungeöffnet)</p>
+        <div id="pack-pick" class="seg wrap"></div>
+        <p id="pack-note" class="tiny muted"></p>
+      </div>
+      <label>Mindestbestand<select name="minStock"><option value="">aus</option><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>12</option></select></label>
+      <p class="tiny muted">Fällt der Vorrat darunter, kommt der Artikel automatisch auf die Einkaufsliste.</p>
       <p id="freeze-note" class="freeze-note hidden"></p>
       <menu>
         <button value="cancel" formnovalidate>Abbrechen</button>
@@ -208,6 +218,7 @@
       <p id="use-freeze-info" class="muted small-note"></p>
       <menu class="stack">
         <button value="eaten" class="primary">✅ Verbraucht</button>
+        <button value="opened" id="use-opened" class="hidden">🥤 Geöffnet (in den Kühlschrank)</button>
         <button value="freeze" id="use-freeze">❄️ Einfrieren</button>
         <button value="thaw" id="use-thaw" class="hidden">💧 Auftauen (in den Kühlschrank)</button>
         <button value="wasted" class="danger">🗑️ Weggeworfen</button>

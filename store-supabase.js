@@ -10,11 +10,12 @@ let household = null;
 
 const toItem = r => ({ id: r.id, name: r.name, size: r.size ?? '', qty: +r.qty, unit: r.unit, category: r.category, location: r.location,
   expiry: r.expiry ?? '', price: r.price == null ? null : +r.price, addedAt: r.added_at,
-  frozenAt: r.frozen_at ?? null, origExpiry: r.orig_expiry ?? null, barcode: r.barcode ?? null, nutrition: r.nutrition ?? null });
+  frozenAt: r.frozen_at ?? null, origExpiry: r.orig_expiry ?? null, barcode: r.barcode ?? null, nutrition: r.nutrition ?? null,
+  pack: r.pack ?? null, openedAt: r.opened_at ?? null });
 const toLog = r => ({ id: r.id, type: r.type, itemName: r.item_name, category: r.category, qty: r.qty == null ? null : +r.qty,
-  unit: r.unit, size: r.size, price: r.price == null ? null : +r.price, value: r.value == null ? null : +r.value, at: r.at });
+  unit: r.unit, size: r.size, price: r.price == null ? null : +r.price, value: r.value == null ? null : +r.value, kcal: r.kcal ?? null, at: r.at });
 const fromLog = e => ({ household_id: household.id, type: e.type, item_name: e.itemName, category: e.category,
-  qty: e.qty, unit: e.unit, size: e.size || null, price: e.price ?? null, value: e.value ?? null, ...(e.at ? { at: e.at } : {}) });
+  qty: e.qty, unit: e.unit, size: e.size || null, price: e.price ?? null, value: e.value ?? null, kcal: e.kcal ?? null, ...(e.at ? { at: e.at } : {}) });
 const must = ({ data, error }) => { if (error) throw new Error(error.message); return data; };
 
 export const supabaseStore = {
@@ -58,7 +59,7 @@ export const supabaseStore = {
   async upsertItem(item) {
     const row = { name: item.name, size: item.size || null, qty: item.qty, unit: item.unit, category: item.category, location: item.location,
                   expiry: item.expiry || null, price: item.price ?? null, frozen_at: item.frozenAt || null, orig_expiry: item.origExpiry || null,
-                  barcode: item.barcode || null, nutrition: item.nutrition || null };
+                  barcode: item.barcode || null, nutrition: item.nutrition || null, pack: item.pack || null, opened_at: item.openedAt || null };
     if (item.id) {
       must(await sb.from('items').update(row).eq('id', item.id));
       return item;
@@ -128,7 +129,7 @@ export const supabaseStore = {
     if (!Array.isArray(data?.items) || !Array.isArray(data?.log)) throw new Error('Ungültige Datei');
     if (data.items.length) must(await sb.from('items').insert(data.items.map(i => ({
       household_id: household.id, name: i.name, size: i.size || null, qty: i.qty, unit: i.unit, category: i.category, location: i.location,
-      expiry: i.expiry || null, price: i.price ?? null, frozen_at: i.frozenAt || null, orig_expiry: i.origExpiry || null, barcode: i.barcode || null, nutrition: i.nutrition || null }))));
+      expiry: i.expiry || null, price: i.price ?? null, frozen_at: i.frozenAt || null, orig_expiry: i.origExpiry || null, barcode: i.barcode || null, nutrition: i.nutrition || null, pack: i.pack || null, opened_at: i.openedAt || null }))));
     if (data.log.length) must(await sb.from('log').insert(data.log.map(fromLog)));
   },
 };

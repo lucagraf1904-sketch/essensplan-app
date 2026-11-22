@@ -11,7 +11,7 @@ export const CATEGORIES = {
   'Tiefkühl':        { days: 180, location: 'Gefrierschrank', words: ['tk ','tiefk','pizza','eis ','pommes','frost'] },
   'Trockenware':     { days: 365, location: 'Vorratsschrank', words: ['nudel','pasta','spaghetti','reis','mehl','zucker','haferflocken','müsli','linsen','bohnen','kichererbsen','couscous','bulgur','quinoa'] },
   'Konserven':       { days: 540, location: 'Vorratsschrank', words: ['dose','konserve','passata','tomatenmark','mais','gehackte tomaten'] },
-  'Getränke':        { days: 180, location: 'Vorratsschrank', words: ['wasser','saft','cola','limo','bier','wein','tee','kaffee','schorle','sprudel'] },
+  'Getränke':        { days: 180, location: 'Vorratsschrank', words: ['wasser','saft','cola','limo','bier','wein','tee','kaffee','schorle','sprudel','sirup','sodastream','nektar','eistee','smoothie'] },
   'Gewürze & Öle':   { days: 365, location: 'Vorratsschrank', words: ['salz','pfeffer','öl','oel','essig','gewürz','senf','ketchup','mayo','soße','sauce','brühe'] },
   'Süßes & Snacks':  { days: 120, location: 'Vorratsschrank', words: ['schoko','chips','keks','riegel','gummi','nüsse','nuss','cracker'] },
   // Pfand wird nicht über Wörter erkannt, sondern direkt im Bon-Parser gesetzt (receipt.js)
@@ -25,6 +25,8 @@ export const isoLocal = (d = new Date()) => `${d.getFullYear()}-${String(d.getMo
 
 export function guessCategory(name) {
   const n = ' ' + name.toLowerCase() + ' ';
+  // Getränke vor Obst prüfen („Orangensaft“ ist ein Getränk, kein Obst)
+  if (/(saft|nektar|smoothie|sirup|schorle|limo|cola|sprudel|mineralwasser|eistee)/.test(n)) return 'Getränke';
   for (const [cat, def] of Object.entries(CATEGORIES)) {
     if (def.words.some(w => n.includes(w))) return cat;
   }
@@ -70,3 +72,21 @@ export function freezeExpiry(item, from = new Date()) {
   dt.setMonth(dt.getMonth() + r.months);
   return { ...r, date: isoLocal(dt) };
 }
+
+// ---------- Getränke: Haltbarkeit je Verpackung (ungeöffnet) ----------
+// Quelle: Verbraucherzentrale, „Fruchtsaft und Nektar: Haltbarkeit und Lagerung“ (Stand 20.07.2026):
+// Glasflasche 18–36 Monate, Kartonverbund 9–12, Einweg-PET 6–9, kühlpflichtige PET (2–8 °C) etwa 2 Monate.
+// Die App nimmt jeweils den unteren Wert. Gilt laut Quelle für Saft und Nektar; das MHD auf der Packung geht vor.
+export const PACKS = {
+  glas:    { label: 'Glasflasche', months: 18, range: '18–36 Monate' },
+  karton:  { label: 'Karton', months: 9, range: '9–12 Monate' },
+  pet:     { label: 'PET-Flasche', months: 6, range: '6–9 Monate' },
+  petKuehl:{ label: 'PET gekühlt (2–8 °C)', months: 2, range: 'etwa 2 Monate', location: 'Kühlschrank' },
+};
+export const PACK_SOURCE = 'Verbraucherzentrale (Saft und Nektar, Stand 20.07.2026)';
+export function packExpiry(pack, from = new Date()) {
+  const p = PACKS[pack]; if (!p) return '';
+  const d = new Date(from); d.setMonth(d.getMonth() + p.months); return isoLocal(d);
+}
+// Geöffnet: VZ sagt nur „wenige Tage gekühlt“. 4 Tage sind ein Richtwert (Annahme).
+export const OPENED_DAYS = 4;

@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = {
   ownBrandOk: true,      // Luca 22.11.: gleichwertige Eigenmarke mit gleicher Menge zählt als gleich
   health: [],            // Gesundheit (freiwillig, nur auf diesem Gerät): crohn, diabetes, bluthochdruck, cholesterin, laktose, zoeliakie, reizdarm, schwanger
   prefs: [],             // Vorlieben: wenigWeizen, keinSchwein, vegetarisch, wenigFleisch
+  drinks: 'a',           // Getränke-Umfang (Luca 22.11.): off | a Vorrat+Bilanz | b +kcal | c +Trinkzähler
+  glassMl: 250,          // Trinkzähler: Glasgröße
+  drinkGoalMl: 1500,     // Trinkzähler: Tagesziel (DGE-Richtwert 1,5 l laut Verbraucherzentrale)
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 

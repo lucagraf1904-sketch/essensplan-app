@@ -36,6 +36,9 @@ alter table items add column if not exists orig_expiry date;
 -- Barcode-Scan: EAN und Nährwerte je 100 g aus Open Food Facts
 alter table items add column if not exists barcode text;
 alter table items add column if not exists nutrition jsonb;
+-- Getränke: Verpackung und Öffnungsdatum (22.11.2026)
+alter table items add column if not exists pack text;
+alter table items add column if not exists opened_at date;
 create index if not exists items_household_expiry on items(household_id, expiry);
 
 create table if not exists log (
@@ -53,6 +56,10 @@ create table if not exists log (
   by_user uuid references auth.users(id) default auth.uid()
 );
 create index if not exists log_household_at on log(household_id, at desc);
+-- Getränke Stufe B (22.11.2026): Typ 'drink' mit kcal
+alter table log add column if not exists kcal integer;
+alter table log drop constraint if exists log_type_check;
+alter table log add constraint log_type_check check (type in ('bought','eaten','wasted','drink'));
 
 -- Zusammengefasste Produktnamen für die Monatsbilanz (z. B. "rinderhackfleisch" -> "rinderhack")
 create table if not exists aliases (

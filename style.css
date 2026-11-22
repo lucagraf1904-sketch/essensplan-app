@@ -158,3 +158,12 @@ input, select, textarea { font-size: max(16px, 1rem) !important; }
 .hbar span { font-size: .65rem; color: var(--muted); margin-top: 2px; }
 .health-refresh { width: 100%; margin: 8px 0 2px; padding: 12px; font-weight: 600; }
 #health-settings code { word-break: break-all; font-size: .8rem; }
+
+/* Getränke: Trinkzähler */
+.drink-card { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 12px; }
+.drink-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.drink-bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.drink-bar span { display: block; height: 100%; background: #2a7bbf; }
+#pack-row .seg { margin-top: 4px; }
+
+dialog h2:focus { outline: none; }
