@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = {
   maxStores: 2,          // Luca 22.11.: höchstens zwei Läden pro Einkauf
   minSaving: 2,          // Luca 22.11.: zweiter Laden lohnt ab 2 €
   ownBrandOk: true,      // Luca 22.11.: gleichwertige Eigenmarke mit gleicher Menge zählt als gleich
+  health: [],            // Gesundheit (freiwillig, nur auf diesem Gerät): crohn, diabetes, bluthochdruck, cholesterin, laktose, zoeliakie, reizdarm, schwanger
+  prefs: [],             // Vorlieben: wenigWeizen, keinSchwein, vegetarisch, wenigFleisch
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 

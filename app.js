@@ -773,6 +773,19 @@ const SWITCHES = {
     ['shopSuggestions', '„Wieder kaufen?“-Vorschläge auf der Einkaufsliste'],
   ],
 };
+// Gesundheit & Vorlieben: Mehrfachauswahl zum Antippen, nur auf diesem Gerät gespeichert.
+// Steuert Zusatzhinweise in den Tipps (tips.js extra) und später den Essensplan.
+const PROFILE = {
+  health: ['Gesundheit', [['crohn', 'Morbus Crohn / CED (auch in der Familie)'], ['diabetes', 'Diabetes / Blutzucker'], ['bluthochdruck', 'Bluthochdruck'],
+    ['cholesterin', 'Erhöhtes Cholesterin'], ['reizdarm', 'Reizdarm'], ['laktose', 'Laktoseintoleranz'], ['zoeliakie', 'Zöliakie (glutenfrei)'], ['schwanger', 'Schwanger / Stillzeit']]],
+  prefs: ['Vorlieben', [['wenigWeizen', 'Wenig Weizen'], ['keinSchwein', 'Kein Schweinefleisch'], ['wenigFleisch', 'Wenig Fleisch'], ['vegetarisch', 'Vegetarisch']]],
+};
+function renderProfile(s) {
+  $('#settings-profile').innerHTML = Object.entries(PROFILE).map(([k, [label, opts]]) => `<p class="tiny muted">${esc(label)} (Mehrfachauswahl)</p>
+    <div class="tip-alts">${opts.map(([v, t]) => `<button type="button" class="chip ${(s[k] ?? []).includes(v) ? 'accepted' : ''}" data-profile="${k}" data-v="${v}">${(s[k] ?? []).includes(v) ? '✓ ' : ''}${esc(t)}</button>`).join('')}</div>`).join('')
+    + '<p class="tiny muted">Freiwillig, jede Angabe kann leer bleiben. Wird nur auf diesem Gerät gespeichert. Ohne Angabe sind alle Tipps allgemein. Mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>';
+}
+
 // Auswahl-Zeilen (Knöpfe statt Tippen)
 const CHOICES = [
   ['homeStore', 'Stammladen', CHAINS.map(c => [c.id, c.name])],
@@ -810,8 +823,15 @@ function renderSettings() {
     }).join('');
   }
   renderChoices(s);
+  renderProfile(s);
 }
 $('#tab-kitchen').addEventListener('click', e => {
+  const pb = e.target.closest('[data-profile]');
+  if (pb) {
+    const k = pb.dataset.profile, cur = new Set(getSettings()[k] ?? []);
+    cur.has(pb.dataset.v) ? cur.delete(pb.dataset.v) : cur.add(pb.dataset.v);
+    setSetting(k, [...cur]); return renderSettings();
+  }
   const b = e.target.closest('[data-choice]'); if (!b) return;
   const v = b.dataset.v;
   setSetting(b.dataset.choice, /^\d+$/.test(v) ? +v : v);

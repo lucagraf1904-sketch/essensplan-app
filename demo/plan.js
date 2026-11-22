@@ -105,9 +105,17 @@ export async function getPlannedMeal(date, meal = 'dinner') {
   return { date, meal, title: r.title, totalMinutes: r.min, method: r.method, thawFrom: thawFor(r) ? addDays(date, -1) : null, status: d.status };
 }
 
+const loadShop = () => { try { return JSON.parse(localStorage.getItem(SHOP_KEY)) ?? []; } catch { return []; } };
+function toast(msg) {
+  let t = document.getElementById('plan-toast');
+  if (!t) { t = Object.assign(document.createElement('div'), { id: 'plan-toast' }); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
 function render() {
   const el = $('#tab-plan'); if (!el) return;
   const p = getPlan(), items = loadDb().items;
+  const listed = new Set(loadShop().filter(x => !x.done).map(x => x.name.toLowerCase()));
   const rs = p.days.filter(d => d.status !== 'uebersprungen').map(d => recipe(d.dinner));
   const fish = rs.filter(r => r.type === 'fisch').length, meat = rs.filter(r => r.type === 'rind').length;
   const veg = Math.round(rs.reduce((a, r) => a + r.veg, 0) / Math.max(1, rs.length));
@@ -117,6 +125,7 @@ function render() {
     <ul class="list plan-list">${p.days.map((d, i) => {
       const r = recipe(d.dinner), wd = new Date(d.date + 'T12:00'), thaw = thawFor(r);
       const missing = r.need.filter(([w]) => !has(items, w)).map(([, n]) => n);
+      const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
       const today = daysTo(d.date) === 0;
       return `<li class="plan-day ${d.status}" data-i="${i}">
         <div class="plan-date">${today ? 'Heute' : DAYS[wd.getDay()]}, ${wd.getDate()}.${wd.getMonth() + 1}.</div>
@@ -125,13 +134,14 @@ function render() {
           <div class="tiny">${esc(TYPE[r.type])} · ${esc(r.method)} · ${r.min >= 60 ? `${Math.floor(r.min / 60)} h ${r.min % 60 ? r.min % 60 + ' min' : ''}` : r.min + ' min'} · ca. ${r.kcal} kcal</div>
           ${d.why.length ? `<div class="tiny plan-why">${d.why.map(w => `<span>✓ ${esc(w)}</span>`).join('')}</div>` : ''}
           ${thaw ? `<div class="tiny plan-thaw">❄️ ${esc(thaw)} am Vorabend auftauen</div>` : ''}
-          ${missing.length ? `<div class="tiny muted">Fehlt: ${missing.map(esc).join(', ')}</div>` : ''}
+          ${missing.length ? `<div class="tiny muted">Fehlt: ${missing.map(n => listed.has(n.toLowerCase()) ? `${esc(n)} ✓` : esc(n)).join(', ')}</div>` : ''}
+          ${missing.length && !toBuy.length ? '<div class="tiny good-tag">🛒 Alles Fehlende steht auf der Einkaufsliste</div>' : ''}
         </div>
         ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gekocht</div>' : d.status === 'uebersprungen' ? '<div class="muted tiny">Übersprungen</div>' : `<div class="tip-alts">
           <button class="chip" data-act="swap">🔄 Anderes Gericht</button>
           <button class="chip" data-act="done">✓ Gekocht</button>
           <button class="chip" data-act="skip">Überspringen</button>
-          ${missing.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div>`}
+          ${toBuy.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div>`}
         ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}
       </li>`;
     }).join('')}</ul>
@@ -157,12 +167,12 @@ function onClick(e) {
   else if (act === 'skip') d.status = 'uebersprungen';
   else if (act === 'undo') d.status = 'geplant';
   else if (act === 'shop') {
-    const items = loadDb().items, list = (() => { try { return JSON.parse(localStorage.getItem(SHOP_KEY)) ?? []; } catch { return []; } })();
+    const items = loadDb().items, list = loadShop();
     const add = r.need.filter(([w]) => !has(items, w)).map(([, n]) => n).filter(n => !list.some(x => !x.done && x.name.toLowerCase() === n.toLowerCase()));
     for (const name of add) list.push({ id: crypto.randomUUID?.() ?? String(Math.random()), name, done: false });
     localStorage.setItem(SHOP_KEY, JSON.stringify(list));
     savePlan(p); render();
-    $('#plan-msg').textContent = add.length ? `Auf die Einkaufsliste: ${add.join(', ')}` : 'Steht schon alles auf der Liste.';
+    toast(add.length ? `🛒 Auf die Einkaufsliste: ${add.join(', ')}` : 'Steht schon alles auf der Liste.');
     return;
   }
   savePlan(p); render();

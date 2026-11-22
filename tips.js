@@ -1,4 +1,4 @@
-// Einkaufs-Tipps. Grundlage: Recherche „Mehlarten und Morbus-Crohn-Vorbeugung“ (Projektordner
+// Einkaufs-Tipps. Grundlage: Recherche „Mehlarten und Morbus-Crohn-Vorbeugung“ (Crohn-Bezüge nur über extra.crohn) (Projektordner
 // recherche/reports, Nov. 2026) mit Quellen u. a. Verbraucherzentrale Thüringen, Leitsätze für Brot,
 // Zimmermann et al. 2022, Ghazvini et al. 2025, Ananthakrishnan et al. 2013, Narula et al. 2021, AWMF S3 073-027.
 // Fleisch/Fisch: Recherche „Fleischarten und Gesundheit“ (Nov. 2026; u. a. IARC, Lescinsky et al. 2022, Jayedi et al. 2018,
@@ -7,10 +7,21 @@
 // (Senfsaat auf Brokkoli, Lagerung von Beeren/Salat/Tomaten) sind weggelassen; „Ableitung“ ist im Text gekennzeichnet.
 // Keine ärztliche Beratung. Neue Themen (Fleisch, mehr Obst/Gemüse) kommen mit den weiteren Recherchen.
 //
-// Regel: { topic, match, title, text, alts?, good?, details? }
+// Regel: { topic, match, title, text, alts?, good?, details?, extra? }
 //   topic: Schaltername aus settings.js; alts: Ersatzvorschläge zum Antippen; good: positive Bestätigung.
+//   text: NEUTRAL, für jeden passend (Luca 22.11.2026). extra: { <Profil-Schlüssel>: Zusatzsatz } erscheint nur,
+//   wenn in Einstellungen → Gesundheit & Vorlieben der Punkt gewählt ist (settings.health / settings.prefs).
+import { getSettings } from './settings.js';
 
-export const SOURCE = 'Recherchen „Mehlarten und Morbus Crohn“, „Fleischarten und Gesundheit“ und „Obst und Gemüse“, Nov. 2026. Keine ärztliche Beratung.';
+export const SOURCE = 'Recherchen zu Mehl und Brot, Fleisch und Fisch sowie Obst und Gemüse, Nov. 2026. Keine ärztliche Beratung.';
+
+// Gewählte Profilpunkte (Gesundheit + Vorlieben) als Set
+function profileKeys() { const s = getSettings(); return new Set([...(s.health ?? []), ...(s.prefs ?? [])]); }
+function compose(r, keys) {
+  if (!r) return null;
+  const extras = Object.entries(r.extra ?? {}).filter(([k]) => keys.has(k)).map(([, t]) => t);
+  return { ...r, text: [r.text, ...extras].filter(Boolean).join(' ') };
+}
 
 const BREAD_CHECK = [
   '„Vollkorn“ steht im Namen (Vollkornbrot = mind. 90 % Vollkorn).',
@@ -22,8 +33,9 @@ const BREAD_CHECK = [
 const RULES = [
   // ---- Fleisch & Fisch: zuerst die Problemfälle ----
   { topic: 'tipsMeat', match: /(gemischt|halb.?(und|&|\/).?halb|cevapcici|ćevapčići|br[äa]t\b|bratwurstbr|hacksteak|gew[üu]rzt.*hack|hack.*gew[üu]rzt)/i,
-    title: 'Lieber reines Rinderhack',
-    text: 'Reines Rinderhack mit wenig Fett ist die bessere Wahl und lässt sich gut einfrieren. Gemischtes Hack enthält Schwein. Fertige Cevapcici und Brät zählen als verarbeitetes Fleisch.',
+    title: 'Lieber reines, mageres Hack',
+    text: 'Reines Rinderhack mit wenig Fett ist die bessere Wahl und lässt sich gut einfrieren. Fertige Cevapcici und Brät zählen als verarbeitetes Fleisch.',
+    extra: { keinSchwein: 'Gemischtes Hack enthält Schweinefleisch.' },
     alts: ['Rinderhack (mager)'] },
   { topic: 'tipsMeat', match: /(fischst[äa]bchen|backfisch|paniert)/i,
     title: 'Panierter oder frittierter Fisch',
@@ -31,7 +43,8 @@ const RULES = [
     alts: ['Seelachsfilet (TK)', 'Lachsfilet (TK)'] },
   { topic: 'tipsMeat', match: /(thunfisch|schwertfisch|heilbutt|rotbarsch)/i,
     title: 'Große Raubfische selten',
-    text: 'Thunfisch, Schwertfisch, Heilbutt und Rotbarsch enthalten mehr Quecksilber. Selten einplanen, in der Schwangerschaft gar nicht. Hering, Lachs und Seelachs sind unproblematisch.',
+    text: 'Thunfisch, Schwertfisch, Heilbutt und Rotbarsch enthalten mehr Quecksilber. Selten einplanen. Hering, Lachs und Seelachs sind unproblematisch.',
+    extra: { schwanger: 'In der Schwangerschaft und Stillzeit ganz meiden.' },
     alts: ['Lachsfilet', 'Hering', 'Seelachsfilet'] },
   { topic: 'tipsMeat', match: /(fisch[öo]l|omega.?3.?(kapsel|caps))/i,
     title: 'Fischöl-Kapseln',
@@ -45,7 +58,8 @@ const RULES = [
     alts: ['Möhren', 'Kohlrabi'] },
   { topic: 'tipsProduce', match: /(saft|smoothie|nektar)/i,
     title: 'Saft zählt nicht als Obst',
-    text: 'Ganzes Obst zählt als Portion, Saft und Smoothie nicht. Der Nutzen beim Crohn-Risiko hängt am ganzen Obst.',
+    text: 'Ganzes Obst zählt als Portion, Saft und Smoothie nicht. Saft hat viel Zucker und kaum Ballaststoffe.',
+    extra: { crohn: 'Der Nutzen beim Crohn-Risiko hängt am ganzen Obst.', diabetes: 'Saft lässt den Blutzucker schnell steigen.' },
     alts: ['Äpfel', 'Orangen'] },
   { topic: 'tipsProduce', match: /(obstkonserve|fruchtcocktail|kompott|(pfirsich|ananas|mandarin|birne|aprikose)\w*.*(dose|konserve)|(dose|konserve).*(pfirsich|ananas|mandarin|birne|aprikose))/i,
     title: 'Obstkonserven',
@@ -62,13 +76,16 @@ const RULES = [
     alts: ['Hummus', 'Nüsse', 'Eier'] },
   { topic: 'tipsProcessed', match: /(fertiggericht|tiefkühlpizza|pizza|instant|nudelsnack|chips|softdrink|cola|limo)/i,
     title: 'Stark verarbeitet',
-    text: 'Viele stark verarbeitete Lebensmittel pro Tag gingen in einer großen Studie mit deutlich mehr Morbus Crohn einher. Auf Emulgatoren wie E466 (CMC) und E433 achten. Selbst kochen mit Gemüse ist die bessere Basis.' },
+    text: 'Stark verarbeitete Produkte enthalten oft viel Salz, Zucker, Fett und Zusatzstoffe. Selbst kochen mit frischen Zutaten ist die bessere Basis. Als Ausnahme okay.',
+    extra: { crohn: 'Viele stark verarbeitete Lebensmittel pro Tag gingen in einer großen Studie mit deutlich mehr Morbus Crohn einher. Auf Emulgatoren wie E466 (CMC) und E433 achten.' } },
 
   // ---- positiv ----
   { topic: 'tipsBread', good: true, match: /(roggen.*vollkorn|vollkorn.*roggen|pumpernickel|roggenvollkorn)/i,
-    title: 'Gute Wahl', text: 'Roggen-Vollkorn: viele Ballaststoffe, flachere Insulinantwort, kein Weizen.' },
+    title: 'Gute Wahl', text: 'Roggen-Vollkorn: viele Ballaststoffe, sättigt lange.',
+    extra: { diabetes: 'Flachere Blutzucker- und Insulinantwort als helles Brot.', wenigWeizen: 'Enthält keinen Weizen.' } },
   { topic: 'tipsBread', good: true, match: /(haferflocken|hafer)/i,
-    title: 'Gute Wahl', text: 'Hafer: kein Weizen, Beta-Glucan senkt das LDL-Cholesterin. Mit frischem Obst ein gutes kaltes Frühstück.' },
+    title: 'Gute Wahl', text: 'Hafer: Beta-Glucan senkt das LDL-Cholesterin. Mit frischem Obst ein gutes kaltes Frühstück.',
+    extra: { wenigWeizen: 'Hafer ist kein Weizen.' } },
   { topic: 'tipsMeat', good: true, match: /(lachs|hering|makrele|forelle|kabeljau|seelachs|dorsch|sardine|scholle)/i,
     title: 'Gute Wahl', text: 'Fisch 1–2× pro Woche schneidet am besten ab. Fetter Fisch liefert Omega-3, magerer Seefisch Jod.' },
   { topic: 'tipsMeat', good: true, match: /(rinderhack|rind|reh|hirsch|wildschwein|wild\b)/i,
@@ -78,9 +95,11 @@ const RULES = [
     text: 'Geflügel ist gesundheitlich neutral, hat aber wenig Eisen, Zink und B12. Etwa einmal pro Woche Rind oder Wild dazu. Beim Zubereiten: durchgaren, eigenes Schneidebrett, Hände waschen.',
     alts: ['Rinderhack (mager)', 'Rindergulasch'], add: true },
   { topic: 'tipsProduce', good: true, match: /(apfel|äpfel|birne)/i,
-    text: 'Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal. Waschen statt schälen, die Schale liefert Ballaststoffe.' },
+    text: 'Waschen statt schälen, die Schale liefert Ballaststoffe.',
+    extra: { crohn: 'Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal.' } },
   { topic: 'tipsProduce', good: true, match: /banane/i,
-    text: 'Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal.' },
+    text: 'Ganzes Obst zählt zu den zwei Portionen Obst am Tag.',
+    extra: { crohn: 'Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal.' } },
   { topic: 'tipsProduce', good: true, match: /(orange|mandarine|clementine|grapefruit|zitrone)/i,
     text: 'Zitrusfrüchte sind mit niedrigerer Sterblichkeit verbunden.' },
   { topic: 'tipsProduce', good: true, match: /(spinat|feldsalat|mangold|gr[üu]nkohl|rucola|blattsalat)/i,
@@ -90,7 +109,8 @@ const RULES = [
   { topic: 'tipsProduce', good: true, match: /(m[öo]hre|karotte|k[üu]rbis|paprika|s[üu]ßkartoffel|pastinake)/i,
     text: 'Orange Sorten liefern Beta-Carotin. Mit etwas Öl garen, dann nimmt der Körper es besser auf.' },
   { topic: 'tipsProduce', good: true, match: /(zwiebel|knoblauch|pilz|champignon)/i,
-    text: 'Zwiebeln, Knoblauch und Pilze waren in einer großen Studie (EPIC) mit weniger Morbus Crohn verbunden.' },
+    text: 'Zwiebeln, Knoblauch und Pilze bringen Geschmack und Ballaststoffe.',
+    extra: { crohn: 'Sie waren in einer großen Studie (EPIC) mit weniger Morbus Crohn verbunden.' } },
   { topic: 'tipsProduce', good: true, match: /(beere|himbeer|heidelbeer|erdbeer)/i,
     text: 'Auch als TK-Ware gleichwertig. Bio lohnt sich bei Beeren am ehesten, ist aber keine Voraussetzung.' },
   { topic: 'tipsProduce', good: true, match: /traube/i,
@@ -108,7 +128,8 @@ const RULES = [
   // ---- Brot & Mehl ----
   { topic: 'tipsBread', match: /dinkel/i,
     title: 'Dinkel ist Weizen',
-    text: 'Dinkel ist botanisch eine Weizenart. Helles Dinkelbrot (Type 630) ist kaum besser als Weizentoast, auch beim Blutzucker. Es zählt der Vollkornanteil.',
+    text: 'Dinkel ist botanisch eine Weizenart. Helles Dinkelbrot (Type 630) hat kaum mehr Ballaststoffe als Weizentoast. Es zählt der Vollkornanteil.',
+    extra: { diabetes: 'Auch beim Blutzucker ist helles Dinkelbrot kaum besser.', wenigWeizen: 'Wer Weizen meiden will: Roggen und Hafer sind kein Weizen.' },
     alts: ['Roggen-Vollkornbrot (Sauerteig)', 'Dinkel-Vollkornbrot'], details: BREAD_CHECK },
   { topic: 'tipsBread', match: /mehrkorn/i,
     title: 'Mehrkorn ist nicht Vollkorn',
@@ -116,11 +137,13 @@ const RULES = [
     alts: ['Roggen-Vollkornbrot (Sauerteig)', 'Vollkorntoast'], details: BREAD_CHECK },
   { topic: 'tipsBread', match: /(toast|sandwich)/i,
     title: 'Toast aus hellem Mehl',
-    text: 'Roggen-Vollkornbrot mit Sauerteig hat mehr Ballaststoffe, eine flachere Insulinkurve und keinen Weizen. Vollkorntoast ist die zweitbeste Wahl.',
+    text: 'Vollkornbrot, z. B. Roggen-Vollkorn mit Sauerteig, hat deutlich mehr Ballaststoffe und sättigt länger. Vollkorntoast ist die zweitbeste Wahl.',
+    extra: { diabetes: 'Vollkorn und Sauerteig lassen den Blutzucker flacher steigen.', wenigWeizen: 'Roggenbrot enthält keinen Weizen.' },
     alts: ['Roggen-Vollkornbrot (Sauerteig)', 'Vollkorntoast'], details: BREAD_CHECK },
   { topic: 'tipsBread', match: /(croissant|laugen|brezel|brezn|baguette|ciabatta|aufback|br[öo]tchen|semmel)/i,
     title: 'Helles Weizengebäck',
-    text: 'Als Ausnahme okay, etwa am Wochenende. Für den Blutzucker besser mit Eiweiß oder Fett kombinieren, z. B. Käse oder Ei.',
+    text: 'Als Ausnahme okay, etwa am Wochenende. Mit Eiweiß kombiniert, z. B. Käse oder Ei, sättigt es länger.',
+    extra: { diabetes: 'Die Kombination mit Eiweiß oder Fett dämpft auch den Blutzuckeranstieg.' },
     alts: ['Roggen-Vollkornbrötchen', 'Roggen-Vollkornbrot (Sauerteig)'] },
   { topic: 'tipsBread', match: /(weizenmehl|mehl\b|type 405|405er)/i,
     title: 'Helles Mehl',
@@ -128,13 +151,14 @@ const RULES = [
     alts: ['Weizenvollkornmehl', 'Roggenvollkornmehl'] },
   { topic: 'tipsBread', match: /(cornflakes|frühstücksflocken|knusper|schoko.?m[üu]sli|crunchy|cini|choco)/i,
     title: 'Gezuckerte Frühstücksflocken',
-    text: 'Haferflocken mit frischem Obst sind die bessere Wahl: kein Weizen, Ballaststoffe aus Hafer und Obst.',
+    text: 'Haferflocken mit frischem Obst sind die bessere Wahl: weniger Zucker, Ballaststoffe aus Hafer und Obst.',
+    extra: { wenigWeizen: 'Hafer ist kein Weizen.' },
     alts: ['Haferflocken', 'Haferflocken + Beeren'] },
 
 ];
 
 export function tipFor(name, isOn) {
-  return RULES.find(r => isOn(r.topic) && r.match.test(name)) ?? null;
+  return compose(RULES.find(r => isOn(r.topic) && r.match.test(name)), profileKeys());
 }
 
 // Hinweise zur ganzen Liste (Obst/Gemüse fehlt)
@@ -156,7 +180,7 @@ export function listHints(names, isOn) {
   const has = re => names.some(n => re.test(n));
   if (!has(FRUIT)) out.push({ key: 'obst',
     title: 'Noch kein Obst auf der Liste',
-    text: 'Ziel sind etwa zwei Portionen Obst am Tag. Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal, vor allem Äpfel, Birnen und Bananen (Beobachtungsstudien, Evidenz moderat bis niedrig).',
+    text: 'Ziel sind etwa zwei Portionen Obst am Tag, am besten ganzes Obst.' + (profileKeys().has('crohn') ? ' Ganzes Obst hat beim Crohn-Risiko das deutlichste Schutzsignal, vor allem Äpfel, Birnen und Bananen (Beobachtungsstudien, Evidenz moderat bis niedrig).' : ''),
     alts: ['Äpfel', 'Birnen', 'Bananen', 'Orangen'] });
   if (names.length >= 3 && !has(LEAFY)) out.push({ key: 'blatt',
     title: 'Grünes Blattgemüse fehlt',
