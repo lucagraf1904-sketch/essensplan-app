@@ -6,6 +6,7 @@ import { getSettings, setSetting, tipsOn } from './settings.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
+import { conditionLabel, searchConditions } from './conditions.js';
 import { initHealth } from './health.js';
 import { monthReport, productKey, pretty, ymOf, toCSV, parseSize } from './balance.js';
 
@@ -646,6 +647,7 @@ const saveUt = u => localStorage.setItem(UT_KEY, JSON.stringify(u));
 export const utensils = () => loadUt().filter(u => u.has).map(u => u.name);
 
 function renderUtensils() {
+  setTimeout(() => renderSummaries(getSettings()), 0);
   $('#utensil-list').innerHTML = loadUt().map((u, i) => `
     <li data-i="${i}" class="ut-row">
       <label class="main"><input type="checkbox" class="ut-has" ${u.has ? 'checked' : ''}>
@@ -666,7 +668,7 @@ $('#utensil-add').addEventListener('click', () => {
   saveUt([...loadUt(), { name: n, has: true }]); $('#utensil-new').value = ''; renderUtensils();
 });
 $('#warn-days').value = String(WARN_DAYS);
-$('#warn-days').addEventListener('change', e => { WARN_DAYS = +e.target.value; localStorage.setItem('warnDays', WARN_DAYS); renderPantry(); });
+$('#warn-days').addEventListener('change', e => { WARN_DAYS = +e.target.value; localStorage.setItem('warnDays', WARN_DAYS); renderPantry(); renderSummaries(getSettings()); });
 renderUtensils();
 
 // ---------- Einkaufsliste ----------
@@ -888,18 +890,48 @@ const SWITCHES = {
     ['shopSuggestions', '„Wieder kaufen?“-Vorschläge auf der Einkaufsliste'],
   ],
 };
-// Gesundheit & Vorlieben: Mehrfachauswahl zum Antippen, nur auf diesem Gerät gespeichert.
-// Steuert Zusatzhinweise in den Tipps (tips.js extra) und später den Essensplan.
-const PROFILE = {
-  health: ['Gesundheit', [['crohn', 'Morbus Crohn / CED (auch in der Familie)'], ['diabetes', 'Diabetes / Blutzucker'], ['bluthochdruck', 'Bluthochdruck'],
-    ['cholesterin', 'Erhöhtes Cholesterin'], ['reizdarm', 'Reizdarm'], ['laktose', 'Laktoseintoleranz'], ['zoeliakie', 'Zöliakie (glutenfrei)'], ['schwanger', 'Schwanger / Stillzeit']]],
-  prefs: ['Vorlieben', [['wenigWeizen', 'Wenig Weizen'], ['keinSchwein', 'Kein Schweinefleisch'], ['wenigFleisch', 'Wenig Fleisch'], ['vegetarisch', 'Vegetarisch']]],
-};
+// Gesundheit & Vorlieben (nur auf diesem Gerät). Erkrankungen über ein Suchfeld mit Vorschlägen,
+// Vorlieben als Knöpfe. Steuert Zusatzhinweise in den Tipps (tips.js extra) und später den Essensplan.
+const PREFS = [['wenigWeizen', 'Wenig Weizen'], ['keinSchwein', 'Kein Schweinefleisch'], ['wenigFleisch', 'Wenig Fleisch'], ['vegetarisch', 'Vegetarisch']];
 function renderProfile(s) {
-  $('#settings-profile').innerHTML = Object.entries(PROFILE).map(([k, [label, opts]]) => `<p class="tiny muted">${esc(label)} (Mehrfachauswahl)</p>
-    <div class="tip-alts">${opts.map(([v, t]) => `<button type="button" class="chip ${(s[k] ?? []).includes(v) ? 'accepted' : ''}" data-profile="${k}" data-v="${v}">${(s[k] ?? []).includes(v) ? '✓ ' : ''}${esc(t)}</button>`).join('')}</div>`).join('')
-    + '<p class="tiny muted">Freiwillig, jede Angabe kann leer bleiben. Wird nur auf diesem Gerät gespeichert. Ohne Angabe sind alle Tipps allgemein. Mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>';
+  const health = s.health ?? [], prefs = s.prefs ?? [];
+  $('#settings-profile').innerHTML = `<p class="tiny muted">Erkrankungen und Unverträglichkeiten</p>
+    <div class="tip-alts">${health.map(id => `<button type="button" class="chip accepted" data-health-del="${esc(id)}">${esc(conditionLabel(id))} ✕</button>`).join('') || '<span class="tiny muted">Keine Angabe</span>'}</div>
+    <div class="cond-search"><input id="cond-q" type="search" placeholder="Suchen, z. B. „M“ für Morbus Crohn, Migräne …" autocomplete="off" enterkeyhint="search">
+    <ul id="cond-sugg" class="cond-sugg"></ul></div>
+    <p class="tiny muted">Vorlieben (antippen, mehrere möglich)</p>
+    <div class="tip-alts">${PREFS.map(([v, t]) => `<button type="button" class="chip ${prefs.includes(v) ? 'accepted' : ''}" data-profile="prefs" data-v="${v}">${prefs.includes(v) ? '✓ ' : ''}${esc(t)}</button>`).join('')}</div>
+    <p class="tiny muted">Freiwillig, alles kann leer bleiben. Wird nur auf diesem Gerät gespeichert. Ohne Angabe sind alle Tipps allgemein; mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>`;
 }
+function renderCondSugg() {
+  const q = $('#cond-q')?.value ?? '', health = getSettings().health ?? [];
+  const hits = searchConditions(q, health).slice(0, 8);
+  const own = q.trim().length >= 3 && !hits.some(c => c.label.toLowerCase() === q.trim().toLowerCase()) && !health.includes(q.trim());
+  $('#cond-sugg').innerHTML = hits.map(c => `<li><button type="button" data-health-add="${c.id}">${esc(c.label)}</button></li>`).join('')
+    + (own ? `<li><button type="button" class="muted" data-health-add="${esc(q.trim())}">„${esc(q.trim())}“ als eigene Angabe hinzufügen</button></li>` : '');
+}
+document.addEventListener('input', e => { if (e.target.id === 'cond-q') renderCondSugg(); });
+function setHealth(fn) { setSetting('health', fn(getSettings().health ?? [])); renderSettings(); }
+
+// Kurzfassung je Bereich (zugeklappt sichtbar)
+function renderSummaries(s) {
+  const on = (b, t) => b ? t : null, join = a => a.filter(Boolean).join(' · ');
+  const n = (s.health ?? []).length + (s.prefs ?? []).length;
+  const sum = {
+    profile: n ? join([...(s.health ?? []).map(conditionLabel), ...(s.prefs ?? []).map(p => PREFS.find(x => x[0] === p)?.[1] ?? p)]) : 'Keine Angaben',
+    remind: join([on(s.remindExpiry, `Ablauf ${s.expiryTime}`), on(s.remindDinner, s.dinnerAuto ? `Abendessen automatisch (Essen ${s.dinnerAt})` : `Abendessen ${s.dinnerTime}`)]) || 'Aus',
+    pantry: join([`Warnung ${WARN_DAYS} ${WARN_DAYS === 1 ? 'Tag' : 'Tage'} vorher`, on(s.askFreeze, 'Einfrier-Frage'), on(s.shopSuggestions, 'Wieder kaufen')]),
+    tips: s.tips ? 'An' : 'Aus',
+    drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
+    offers: join([`Stammladen ${chainName(s.homeStore)}`, s.maxStores >= 2 ? `2. Laden ab ${eur(s.minSaving)}` : 'nur ein Laden', on(s.autoOffers, 'automatisch')]),
+    kitchen: (() => { const u = loadUt().filter(x => x.has); return `${u.length} Geräte`; })(),
+  };
+  for (const [k, t] of Object.entries(sum)) { const el = $('#sum-' + k); if (el) el.textContent = t; }
+}
+// Immer nur ein Bereich offen
+document.querySelectorAll('.set-group').forEach(d => d.addEventListener('toggle', () => {
+  if (d.open) document.querySelectorAll('.set-group').forEach(o => { if (o !== d) o.open = false; });
+}));
 
 // Auswahl-Zeilen (Knöpfe statt Tippen)
 const CHOICES = [
@@ -949,8 +981,13 @@ function renderSettings() {
   }
   renderChoices(s);
   renderProfile(s);
+  renderSummaries(s);
 }
 $('#tab-kitchen').addEventListener('click', e => {
+  const ha = e.target.closest('[data-health-add]');
+  if (ha) return setHealth(h => [...new Set([...h, ha.dataset.healthAdd])]);
+  const hd = e.target.closest('[data-health-del]');
+  if (hd) return setHealth(h => h.filter(x => x !== hd.dataset.healthDel));
   const pb = e.target.closest('[data-profile]');
   if (pb) {
     const k = pb.dataset.profile, cur = new Set(getSettings()[k] ?? []);

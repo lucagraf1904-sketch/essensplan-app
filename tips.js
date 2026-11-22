@@ -12,11 +12,12 @@
 //   text: NEUTRAL, für jeden passend (Luca 22.11.2026). extra: { <Profil-Schlüssel>: Zusatzsatz } erscheint nur,
 //   wenn in Einstellungen → Gesundheit & Vorlieben der Punkt gewählt ist (settings.health / settings.prefs).
 import { getSettings } from './settings.js';
+import { conditionTags } from './conditions.js';
 
 export const SOURCE = 'Recherchen zu Mehl und Brot, Fleisch und Fisch sowie Obst und Gemüse, Nov. 2026. Keine ärztliche Beratung.';
 
 // Gewählte Profilpunkte (Gesundheit + Vorlieben) als Set
-function profileKeys() { const s = getSettings(); return new Set([...(s.health ?? []), ...(s.prefs ?? [])]); }
+function profileKeys() { const s = getSettings(); return new Set([...conditionTags(s.health ?? []), ...(s.prefs ?? [])]); }
 function compose(r, keys) {
   if (!r) return null;
   const extras = Object.entries(r.extra ?? {}).filter(([k]) => keys.has(k)).map(([, t]) => t);

@@ -167,3 +167,19 @@ input, select, textarea { font-size: max(16px, 1rem) !important; }
 #pack-row .seg { margin-top: 4px; }
 
 dialog h2:focus { outline: none; }
+
+/* Einstellungen: aufklappbare Bereiche */
+.set-group { border: 1px solid var(--line); border-radius: 12px; margin: 8px 0; background: var(--card); }
+.set-group > summary { list-style: none; display: flex; align-items: center; gap: 12px; padding: 14px; cursor: pointer; }
+.set-group > summary::-webkit-details-marker { display: none; }
+.set-group > summary::after { content: '›'; margin-left: auto; font-size: 1.4rem; color: var(--muted); transition: transform .2s; }
+.set-group[open] > summary::after { transform: rotate(90deg); }
+.set-ico { font-size: 1.4rem; }
+.set-title { display: flex; flex-direction: column; font-weight: 600; min-width: 0; }
+.set-title small { font-weight: 400; font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-group[open] { padding: 0 12px 12px; }
+.set-group[open] > summary { padding: 14px 2px; }
+.cond-search { position: relative; margin: 8px 0; }
+.cond-sugg { list-style: none; padding: 0; margin: 4px 0 0; border-radius: 10px; overflow: hidden; }
+.cond-sugg:not(:empty) { border: 1px solid var(--line); }
+.cond-sugg button { width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); padding: 12px; background: var(--card); }

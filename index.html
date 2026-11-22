@@ -78,35 +78,50 @@
 
     <!-- Tab: Einstellungen -->
     <section id="tab-kitchen" class="tab">
-      <h2>Erinnerungen</h2>
-      <p id="push-status" class="muted tiny"></p>
-      <button id="btn-push" class="primary hidden">🔔 Benachrichtigungen erlauben</button>
-      <ul id="settings-remind" class="list settings"></ul>
-      <div id="health-settings" class="hidden"></div>
-      <h2>Tipps &amp; Hinweise</h2>
-      <ul id="settings-tips" class="list settings"></ul>
-      <h2>Gesundheit &amp; Vorlieben</h2>
-      <div id="settings-profile"></div>
-      <h2>Getränke</h2>
-      <ul id="settings-drinks" class="list settings"></ul>
-      <h2>Angebote &amp; Preisvergleich</h2>
-      <ul id="settings-offers" class="list settings"></ul>
-      <h2>Vorrat</h2>
-      <ul id="settings-pantry" class="list settings"></ul>
-      <h2>Küchenutensilien</h2>
-      <p class="muted">Grundlage für den späteren Essensplan: Es werden nur Zubereitungen vorgeschlagen, die mit diesen Geräten gehen.</p>
-      <ul id="utensil-list" class="list"></ul>
-      <div class="toolbar">
-        <input id="utensil-new" placeholder="Weiteres Gerät, z. B. Mixer">
-        <button id="utensil-add">Hinzufügen</button>
-      </div>
-      <h2>Ablaufwarnung</h2>
-      <label class="muted warn-days-row">Warnen ab
-        <select id="warn-days" style="width:auto">
-          <option value="1">1 Tag</option><option value="2">2 Tage</option><option value="3">3 Tage</option>
-          <option value="5">5 Tage</option><option value="7">7 Tage</option>
-        </select> vor Ablauf
-      </label>
+      <h2>Einstellungen</h2>
+      <p class="muted tiny">Bereich antippen zum Öffnen.</p>
+      <details class="set-group" data-group="profile">
+        <summary><span class="set-ico">🩺</span><span class="set-title">Gesundheit &amp; Vorlieben<small id="sum-profile"></small></span></summary>
+        <div id="settings-profile"></div>
+      </details>
+      <details class="set-group" data-group="remind">
+        <summary><span class="set-ico">🔔</span><span class="set-title">Erinnerungen<small id="sum-remind"></small></span></summary>
+        <p id="push-status" class="muted tiny"></p>
+        <button id="btn-push" class="primary hidden">🔔 Benachrichtigungen erlauben</button>
+        <ul id="settings-remind" class="list settings"></ul>
+        <div id="health-settings" class="hidden"></div>
+      </details>
+      <details class="set-group" data-group="pantry">
+        <summary><span class="set-ico">🥫</span><span class="set-title">Vorrat &amp; Ablaufwarnung<small id="sum-pantry"></small></span></summary>
+        <ul id="settings-pantry" class="list settings"></ul>
+        <label class="muted warn-days-row">Warnen ab
+          <select id="warn-days" style="width:auto">
+            <option value="1">1 Tag</option><option value="2">2 Tage</option><option value="3">3 Tage</option>
+            <option value="5">5 Tage</option><option value="7">7 Tage</option>
+          </select> vor Ablauf
+        </label>
+      </details>
+      <details class="set-group" data-group="tips">
+        <summary><span class="set-ico">💡</span><span class="set-title">Tipps &amp; Hinweise<small id="sum-tips"></small></span></summary>
+        <ul id="settings-tips" class="list settings"></ul>
+      </details>
+      <details class="set-group" data-group="drinks">
+        <summary><span class="set-ico">🥤</span><span class="set-title">Getränke<small id="sum-drinks"></small></span></summary>
+        <ul id="settings-drinks" class="list settings"></ul>
+      </details>
+      <details class="set-group" data-group="offers">
+        <summary><span class="set-ico">🏷️</span><span class="set-title">Angebote &amp; Preisvergleich<small id="sum-offers"></small></span></summary>
+        <ul id="settings-offers" class="list settings"></ul>
+      </details>
+      <details class="set-group" data-group="kitchen">
+        <summary><span class="set-ico">🍳</span><span class="set-title">Küchenutensilien<small id="sum-kitchen"></small></span></summary>
+        <p class="muted tiny">Grundlage für den späteren Essensplan: Es werden nur Zubereitungen vorgeschlagen, die mit diesen Geräten gehen.</p>
+        <ul id="utensil-list" class="list"></ul>
+        <div class="toolbar">
+          <input id="utensil-new" placeholder="Weiteres Gerät, z. B. Mixer">
+          <button id="utensil-add">Hinzufügen</button>
+        </div>
+      </details>
     </section>
 
     <!-- Tab: Verlauf -->
