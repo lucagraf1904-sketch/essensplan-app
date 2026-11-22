@@ -2,15 +2,3 @@
 #demo-bar .chip { padding: 4px 10px; font-size: .8rem; }
 @media (prefers-color-scheme: dark) { #demo-bar { background: #3d3200; color: #ffe8a3; } }
 .demo-tour { padding-left: 18px; } .demo-tour li { margin: 8px 0; line-height: 1.35; }
-.plan-sum { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: .9rem; margin: 10px 0; }
-.plan-day { display: block !important; }
-.plan-day.uebersprungen { opacity: .55; }
-.plan-date { font-weight: 600; margin-bottom: 2px; }
-.plan-dinner { margin: 6px 0; }
-.plan-why { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--green); margin-top: 3px; }
-.plan-thaw { color: #1d5f8a; margin-top: 3px; }
-@media (prefers-color-scheme: dark) { .plan-thaw { color: #8ec5ea; } }
-nav button span { font-size: .68rem; }
-#plan-toast { position: fixed; left: 16px; right: 16px; bottom: calc(90px + env(safe-area-inset-bottom)); background: #2f6f4f; color: #fff; padding: 12px 14px; border-radius: 12px; font-size: .95rem; box-shadow: 0 6px 18px rgba(0,0,0,.3); opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; z-index: 50; }
-#plan-toast.show { opacity: 1; transform: none; }
-.plan-rest { background: color-mix(in srgb, var(--green) 10%, transparent); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }

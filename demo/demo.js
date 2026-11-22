@@ -67,6 +67,9 @@
       { id: id(), source: 'manual', chain: 'aldi-nord', name: 'Lachsfilet', price: 3.49, regular: 4.99, until: untilSat },
       { id: id(), source: 'manual', chain: 'kaufland', name: 'Dinkel-Vollkorn-Toast', price: 1.19, regular: 1.49, until: untilWed },
     ]));
+    // Gerichte: Beispielgerichte übernehmen (plan.js liest diese Markierung), Beispiel-Dienstplan
+    localStorage.setItem('speisekammer.seedStarters', 'demo');
+    localStorage.setItem('speisekammer.shifts', JSON.stringify({ 'Beispiel Pflege': { [iso(1)]: 'S', [iso(2)]: 'S', [iso(4)]: 'N', [iso(5)]: 'N' } }));
     localStorage.setItem('demo.seeded', '1');
   }
   if (!localStorage.getItem('demo.seeded')) seed();
@@ -99,12 +102,12 @@ Summe                     12,77`;
         <ul class="demo-tour">
           <li><b>🥫 Vorrat:</b> Was zu Hause ist. Oben die Warnungen für bald ablaufende Sachen. Artikel antippen zum Verbrauchen, Einfrieren oder Wegwerfen. Mit ＋ etwas Neues anlegen; bei Fleisch fragt die App, ob es eingefroren wird.</li>
           <li><b>🧾 Bon:</b> Kassenbon fotografieren oder Text einfügen. In der Demo gibt es einen Beispiel-Bon zum Ausprobieren.</li>
-          <li><b>📅 Plan:</b> Beispiel-Wochenplan (Vorschau): Frühstück und Abendessen, passend zum Vorrat und zu bald ablaufenden Sachen. Gericht tauschen, als gekocht markieren oder Fehlendes auf die Einkaufsliste setzen.</li>
+          <li><b>📅 Plan:</b> Wochenplan aus euren Gerichten: bald Ablaufendes und Angebote zuerst, Lieblingsgerichte öfter. Unter „Gerichte“ eigene eintragen oder Rezepttext einfügen. Mit Dienstplan (Einstellungen → Persönlich) berücksichtigt der Plan Früh-, Spät- und Nachtschicht.</li>
           <li><b>🛒 Einkauf:</b> Einkaufsliste mit Tipps (z. B. beim Toast), Angeboten der Läden und dem Einkaufs-Check: lohnt sich ein zweiter Laden?</li>
-          <li><b>📊 Verlauf:</b> Was gekauft, gegessen und weggeworfen wurde, mit Monatsbilanz in Euro.</li>
+          <li><b>📊 Verlauf:</b> Was gekauft, gegessen und weggeworfen wurde, mit Monatsbilanz in Euro und Budget. Gewicht nur, wenn eingeschaltet.</li>
           <li><b>⚙️ Einstellungen:</b> Erinnerungen, Tipps, Stammladen und mehr. Alles per Antippen.</li>
         </ul>
-        <p class="tiny muted">Der Essensplan ist hier eine Vorschau mit Beispielgerichten; der richtige Planer mit euren Lieblingsgerichten kommt später. Die automatische Angebotssuche braucht den Server, die Angebote hier sind Beispiele.</p>
+        <p class="tiny muted">Die Gerichte sind Beispiele, die Schichten gehören zu einer Beispielperson. Automatische Angebote und Rezeptimport per Link brauchen den Server; Angebote hier sind Beispiele.</p>
         <button value="ok" class="primary">Los geht's</button>
       </form></dialog>`);
     const intro = document.getElementById('demo-intro');

@@ -5,6 +5,8 @@ import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
 import { initShared } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
+import { initPlan } from './plan.js';
+import { shiftOf, SHIFTS, mealAdvice } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
@@ -174,7 +176,9 @@ function ask(title, text, options) {
 
 // Eingabe im Frage-Dialog (Tastatur erst beim Antippen des Feldes)
 async function askInput(title, label, value = '', type = 'text', extra = '') {
-  const v = await ask(title, `${extra}<label class="ask-field">${esc(label)}<input id="ask-input" type="${type === 'number' ? 'text' : type}" ${type === 'number' ? 'inputmode="decimal"' : ''} value="${esc(value)}"></label>`,
+  const field = type === 'textarea' ? `<textarea id="ask-input" rows="8">${esc(value)}</textarea>`
+    : `<input id="ask-input" type="${type === 'number' ? 'text' : type}" ${type === 'number' ? 'inputmode="decimal"' : ''} value="${esc(value)}">`;
+  const v = await ask(title, `${extra}<label class="ask-field">${esc(label)}${field}</label>`,
     [{ value: 'ok', label: 'Übernehmen', cls: 'primary' }, { value: '', label: 'Abbrechen' }]);
   return v === 'ok' ? $('#ask-input').value.trim() : null;
 }
@@ -578,6 +582,9 @@ const minToHM = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m 
 const fmtDur = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}` : `${m} min`;
 // Wann soll heute ans Abendessen erinnert werden? { time, meal } oder null (übersprungen)
 export async function dinnerReminder(date = isoLocal(), s = getSettings()) {
+  // Eigener Dienstplan: Spätschicht = warm vor Dienstbeginn (Annahme 12 Uhr), sonst normal
+  const shift = s.shiftsOn && s.myName ? shiftOf(s.myName, date) : '';
+  if (shift === 'S') return { time: '11:30', meal: null, shift };
   const meal = await plannedDinner(date);
   if (meal?.status === 'uebersprungen') return null;
   if (s.dinnerAuto && meal?.totalMinutes > 0) return { time: minToHM(Math.max(0, hmToMin(s.dinnerAt) - meal.totalMinutes)), meal };
@@ -596,7 +603,9 @@ async function checkReminders(force = false) {
   if (dr && now >= dr.time && localStorage.getItem('lastDinnerNotify') !== today) {
     localStorage.setItem('lastDinnerNotify', today);
     const m = dr.meal;
-    if (m?.title && m.totalMinutes) await showNote(`Jetzt anfangen: ${m.title}`, `Dauert ${fmtDur(m.totalMinutes)}, dann ist es um ${s.dinnerAt} Uhr fertig.`, 'abendessen');
+    if (dr.shift === 'S') await showNote('Vor der Spätschicht', 'Warme Mahlzeit vor Dienstbeginn (z. B. die Portion von gestern) und eine Dose für die Pause einpacken.', 'abendessen');
+    else if (s.shiftsOn && s.myName && shiftOf(s.myName, today) === 'N' && m?.title) await showNote(`Vor der Nachtschicht: ${m.title}`, `Leicht essen und eine kleine Dose für die Nacht vorbereiten. Dauert ${fmtDur(m.totalMinutes)}.`, 'abendessen');
+    else if (m?.title && m.totalMinutes) await showNote(`Jetzt anfangen: ${m.title}`, `Dauert ${fmtDur(m.totalMinutes)}, dann ist es um ${s.dinnerAt} Uhr fertig.`, 'abendessen');
     else if (leftovers(await store.listItems()).length) await showNote('Zeit fürs Abendessen', `Reste im Kühlschrank: ${leftovers(await store.listItems()).map(i => i.name.replace(/^Rest: /, '')).join(', ')}. Gut durcherhitzen.`, 'abendessen');
     else await showNote('Zeit fürs Abendessen', soon.length ? `Zuerst verbrauchen: ${soonText(soon.slice(0, 3))}` : 'Schau in den Vorrat, was heute weg muss.', 'abendessen');
   }
@@ -734,6 +743,7 @@ $('#gate-create').addEventListener('click', () => guard(async () => { await stor
 $('#gate-join').addEventListener('click', () => guard(async () => { await store.joinHousehold($('#gate-join-code').value); await start(); }));
 $('#btn-logout')?.addEventListener('click', async () => { await store.signOut(); location.reload(); });
 
+let planStarted = false;
 async function start() {
   const st = await store.init();
   if (st.needsLogin) return showGate('email');
@@ -754,6 +764,7 @@ async function start() {
     WARN_DAYS = +(localStorage.getItem('warnDays') ?? 3); $('#warn-days').value = String(WARN_DAYS); renderSettings(); renderUtensils();
   }
   await renderPantry();
+  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
   initHealth(store, $);
   checkReminders();
   pushStatus();
@@ -823,10 +834,11 @@ const loadShop = () => { try { return JSON.parse(localStorage.getItem(SHOP_KEY))
 const saveShop = l => localStorage.setItem(SHOP_KEY, JSON.stringify(l));
 const shopId = () => crypto.randomUUID?.() ?? String(Date.now() + Math.random());
 function addShop(name) {
-  name = name.trim(); if (!name) return;
+  name = name.trim(); if (!name) return false;
   const l = loadShop();
-  if (!l.some(x => !x.done && x.name.toLowerCase() === name.toLowerCase())) l.push({ id: shopId(), name, done: false });
-  saveShop(l); renderShop();
+  if (l.some(x => !x.done && x.name.toLowerCase() === name.toLowerCase())) return false;
+  l.push({ id: shopId(), name, done: false });
+  saveShop(l); renderShop(); return true;
 }
 // Listen-Hinweise lassen sich für die laufende Woche ausblenden
 const weekKey = () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return isoLocal(d); };
@@ -1101,6 +1113,9 @@ const SWITCHES = {
     ['workNoFridge', 'Kein Kühlschrank auf der Arbeit', 'Mitnehm-Essen, das ungekühlt hält', 'shiftsOn'],
     ['workNoMicrowave', 'Keine Mikrowelle auf der Arbeit', 'Mitnehm-Essen, das kalt schmeckt', 'shiftsOn'],
   ],
+  '#settings-plan': [
+    ['planHealthRules', 'Wochenregeln im Plan', '2× Fisch, höchstens 2× Rind pro Woche (aus der Fleisch-Recherche)'],
+  ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
@@ -1140,6 +1155,7 @@ function renderSummaries(s) {
     tips: s.tips ? 'An' : 'Aus',
     show: { minimal: 'Minimal: nur das Nötigste', normal: 'Normal', alles: 'Alles anzeigen', eigene: 'Eigene Auswahl' }[showPreset(s)],
     drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
+    plan: s.planHealthRules ? 'Wochenregeln an' : 'Wochenregeln aus',
     me: join([s.myName || null, on(s.weightOn, 'Gewicht'), on(s.shiftsOn, 'Dienstplan')]) || 'Nichts aktiv',
     budget: s.budget > 0 ? `${eur(s.budget)} im Monat, Warnung ab ${s.budgetWarnPct} %` : 'Aus',
     offers: join([`Stammladen ${chainName(s.homeStore)}`, s.maxStores >= 2 ? `2. Laden ab ${eur(s.minSaving)}` : 'nur ein Laden', on(s.autoOffers, 'automatisch')]),

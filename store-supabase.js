@@ -54,6 +54,20 @@ export const supabaseStore = {
       .subscribe();
   },
 
+  // Essensplan: Abendessen in meal_plan spiegeln (für die Push-Erinnerung der Edge Function „reminders“)
+  async savePlanRows(days) {
+    const rows = days.filter(d => d.title).map(d => ({ household_id: household.id, date: d.date, meal: 'dinner', title: d.title, method: d.method || null,
+      total_minutes: d.minutes || null, status: d.status === 'gekocht' || d.status === 'uebersprungen' ? d.status : 'geplant' }));
+    if (rows.length) must(await sb.from('meal_plan').upsert(rows, { onConflict: 'household_id,date,meal' }));
+  },
+  // Rezept per Link (Edge Function „recipe-import“ liest die Seite und deren Rezept-Daten nach schema.org)
+  async importRecipe(url) {
+    const { data, error } = await sb.functions.invoke('recipe-import', { body: { url } });
+    if (error) throw new Error(error.context?.error ?? error.message);
+    if (data?.error) throw new Error(data.error);
+    return data;
+  },
+
   // Gemeinsame und persönliche Schlüssel-Werte (shared.js)
   async listShared() { return must(await sb.from('household_data').select('key, value')); },
   async setShared(key, value) { must(await sb.from('household_data').upsert({ household_id: household.id, key, value, updated_at: new Date().toISOString() })); },

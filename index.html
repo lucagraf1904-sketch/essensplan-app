@@ -54,6 +54,9 @@
       </details>
     </section>
 
+    <!-- Tab: Essensplan -->
+    <section id="tab-plan" class="tab"></section>
+
     <!-- Tab: Einkauf -->
     <section id="tab-shop" class="tab">
       <h2>Einkaufsliste</h2>
@@ -104,6 +107,10 @@
         <button id="btn-push" class="primary hidden">🔔 Benachrichtigungen erlauben</button>
         <ul id="settings-remind" class="list settings"></ul>
         <div id="health-settings" class="hidden"></div>
+      </details>
+      <details class="set-group" data-group="plan">
+        <summary><span class="set-ico">📅</span><span class="set-title">Essensplan<small id="sum-plan"></small></span></summary>
+        <ul id="settings-plan" class="list settings"></ul>
       </details>
       <details class="set-group" data-group="pantry">
         <summary><span class="set-ico">🥫</span><span class="set-title">Vorrat &amp; Ablaufwarnung<small id="sum-pantry"></small></span></summary>
@@ -170,6 +177,7 @@
   <nav>
     <button data-tab="pantry" class="active">🥫<span>Vorrat</span></button>
     <button data-tab="scan">🧾<span>Bon</span></button>
+    <button data-tab="plan">📅<span>Plan</span></button>
     <button data-tab="shop">🛒<span>Einkauf</span></button>
     <button data-tab="log">📊<span>Verlauf</span></button>
     <button data-tab="kitchen">⚙️<span>Einstellungen</span></button>

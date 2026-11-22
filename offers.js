@@ -39,10 +39,13 @@ export function defaultUntil(chain) {
 
 // Passt ein Angebot zu einem Listeneintrag? Vergleich über die Wortstämme (mind. 4 Zeichen).
 const words = s => s.toLowerCase().replace(/[^a-zäöüß ]/g, ' ').split(/\s+/).filter(w => w.length >= 4);
+const FALSE_FRIENDS = ['see', 'kokos', 'erd', 'blut'];
 export function offersFor(name, offers) {
   const w = words(name);
   if (!w.length) return [];
-  return offers.filter(o => { const ow = words(o.name); return w.some(a => ow.some(b => a.includes(b) || b.includes(a))); })
+  // Teilwort-Treffer zählen, außer bei bekannten Falschfreunden (Seelachs ist kein Lachs)
+  const part = (long, short) => long.includes(short) && !FALSE_FRIENDS.some(p => long.startsWith(p + short));
+  return offers.filter(o => { const ow = words(o.name); return w.some(a => ow.some(b => part(a, b) || part(b, a))); })
     .sort((a, b) => a.price - b.price);
 }
 
