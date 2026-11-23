@@ -64,14 +64,17 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
 }));
 
 // ---------- Vorrat ----------
-async function renderPantry() {
-  const items = await store.listItems();
-  const q = $('#search').value.toLowerCase();
+let pantryCache = null;
+const norm = t => String(t ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss');
+async function renderPantry(useCache) {
+  const items = useCache === true && pantryCache ? pantryCache : (pantryCache = await store.listItems());
+  const words = norm($('#search').value).split(/\s+/).filter(Boolean);
   const loc = $('#filter-loc').value;
   // Gefrierschrank-Inventar: älteste Einfrierung zuerst, mit Datum und Dauer
   const fz = loc === 'Gefrierschrank', frozeOn = i => i.frozenAt || (i.location === 'Gefrierschrank' ? (i.addedAt ?? '').slice(0, 10) : null);
   const shown = items
-    .filter(i => (!q || i.name.toLowerCase().includes(q)) && (!loc || i.location === loc))
+    .filter(i => { const hay = norm([i.name, i.category, i.location, i.size].join(' ')); return words.every(w => hay.includes(w)); })
+    .filter(i => !loc || i.location === loc)
     .sort(fz ? (a, b) => (frozeOn(a) || '9').localeCompare(frozeOn(b) || '9')
              : (a, b) => (daysLeft(a.expiry) ?? 1e9) - (daysLeft(b.expiry) ?? 1e9));
   const inFreezer = items.filter(i => i.location === 'Gefrierschrank');
@@ -101,6 +104,7 @@ async function renderPantry() {
       ${sh.showExpiryBadge ? expiryBadge(daysLeft(i.expiry), !!i.frozenAt) : ''}
     </li>`).join('');
   $('#pantry-empty').classList.toggle('hidden', items.length > 0);
+  if (!shown.length && items.length) $('#pantry-list').innerHTML = `<li class="muted">Nichts gefunden für „${esc($('#search').value)}“${loc ? ' in ' + esc(loc) : ''}.</li>`;
 
   const soon = items.filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; });
   const soonW = soon.filter(i => !leftovers([i]).length);
@@ -113,7 +117,7 @@ async function renderPantry() {
   renderDrinkCounter();
   return soon;
 }
-$('#search').addEventListener('input', renderPantry);
+$('#search').addEventListener('input', () => renderPantry(true));
 document.addEventListener('click', e => { if (e.target.id === 'freezer-open') { $('#filter-loc').value = 'Gefrierschrank'; renderPantry(); } });
 $('#filter-loc').addEventListener('change', renderPantry);
 
@@ -1373,7 +1377,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v53 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v54 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);
