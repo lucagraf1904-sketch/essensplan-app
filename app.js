@@ -1361,8 +1361,15 @@ async function saveAllNow(btn) {
   const bad = [], okKeys = [];
   try {
     for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
-      if (MERGE_KEYS.includes(key)) continue;          // Listen werden eintragsweise gesendet
       const local = raw(key); if (local == null) continue;
+      if (MERGE_KEYS.includes(key)) { // Listen: eintragsweise, der neuere Stand gewinnt (Server entscheidet)
+        try {
+          const merged = await store.mergeList(key, Array.isArray(local) ? local : []);
+          const have = new Set((merged ?? []).filter(x => !x.del).map(x => x.id)), miss = (Array.isArray(local) ? local : []).filter(x => !x.del && !have.has(x.id));
+          if (miss.length) bad.push(`${key.replace('speisekammer.', '')}: ${miss.length} Einträge fehlen beim Server`); else okKeys.push(key);
+        } catch (e) { bad.push(`${key.replace('speisekammer.', '')}: ${String(e?.message ?? e).slice(0, 80)}`); }
+        continue;
+      }
       try {
         let send;
         if (MEMBER_KEYS.includes(key)) { const { health, ...rest } = local; send = rest; await store.setMine(key, send); }
@@ -1408,19 +1415,20 @@ document.addEventListener('shared:saved', e => { if (['speisekammer.settings', '
 // Abgleich-Anzeige in der Kopfzeile: ☁️ gespeichert, ⏳ wird gesendet, ⚠️ nicht gesendet (antippen = erneut versuchen)
 (() => {
   const el = $('#sync-state'); if (!el) return;
-  let timer, failed = new Set(), sending = new Set();
-  const set = (txt, cls) => { el.classList.remove('hidden'); el.textContent = txt; el.className = `ghost sync-state ${cls}`; };
-  const upd = () => { if (failed.size) set('⚠️', 'bad'); else if (sending.size) set('⏳', 'wait'); else { set('☁️✓', 'ok'); clearTimeout(timer); timer = setTimeout(() => el.classList.add('hidden'), 3000); } };
+  let failed = new Set(), sending = new Set();
+  const set = (txt, cls) => { el.textContent = txt; el.className = `ghost sync-state ${cls}`; };
+  const upd = () => { if (failed.size) set('⚠️ Speichern', 'bad'); else if (sending.size) set('⏳', 'wait'); else set('💾 Speichern', 'ok'); };
+  if (store.mode === 'supabase') upd();   // in der Demo/ohne Server bleibt der Knopf weg
   document.addEventListener('shared:sending', e => { sending.add(e.detail.key); upd(); });
   document.addEventListener('shared:saved', e => { sending.delete(e.detail.key); failed.delete(e.detail.key); upd(); });
   document.addEventListener('shared:error', e => { sending.delete(e.detail.key); failed.add(e.detail.key); upd(); });
-  el.addEventListener('click', () => { failed.clear(); document.dispatchEvent(new CustomEvent('shared:retry')); toast(el.classList.contains('bad') ? 'Noch nicht gesendet, ich versuche es erneut' : 'Alles gespeichert ✓'); });
+  el.addEventListener('click', async () => { document.dispatchEvent(new CustomEvent('shared:retry')); await saveAllNow(null); failed.clear(); upd(); });
 })();
 function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v61 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v62 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

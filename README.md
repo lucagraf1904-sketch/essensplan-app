@@ -169,3 +169,6 @@ Beim Start zählen Serverzeilen nur noch aus der richtigen Tabelle (Haushalt: `h
 
 ## v61: Speichern-Knopf
 Einstellungen → oben und unter „Budget": „💾 Jetzt speichern und mit dem Server abgleichen". Schreibt Haushalts- und persönliche Einstellungen (ohne Listen) direkt zum Server, liest zurück und zeigt, was dort steht (Budget, Warnschwelle) oder welcher Schlüssel nicht ankam. Ohne Supabase (Demo) liegt alles auf dem Gerät.
+
+## v62: Speichern-Knopf überall
+Oben in der Kopfzeile steht immer „💾 Speichern" (nur mit Supabase). Tippen: alles zum Server schreiben (Haushalts- und persönliche Einstellungen direkt, Listen eintragsweise, Plan nach Tageszeit), zurücklesen und Ergebnis melden. Die Anzeige wird zu ⏳ beim Senden und ⚠️ bei Fehlern.
