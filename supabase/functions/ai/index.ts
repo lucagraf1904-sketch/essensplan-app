@@ -86,16 +86,19 @@ async function mistralVision(prompt: string, image: string): Promise<string> {
   return t;
 }
 
-async function cfVision(prompt: string, image: string): Promise<string> {
-  return await cfChat([{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], 2500, CF_VISION_MODEL());
+// Maximale Antwortlänge je Foto-Art: kurze Antworten (Verpackung) kommen deutlich schneller
+const MAX_OUT: Record<string, number> = { package: 400, recipe: 2000, receipt: 3000 };
+async function cfVision(prompt: string, image: string, kind: string): Promise<string> {
+  return await cfChat([{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], MAX_OUT[kind] ?? 2000, CF_VISION_MODEL());
 }
 // Foto-Dienste der Reihe nach versuchen. Fehlt ein Schlüssel oder schlägt ein Dienst fehl, kommt der nächste dran.
-async function vision(prompt: string, image: string): Promise<string> {
+async function vision(prompt: string, image: string, kind: string): Promise<string> {
   const errors: Fail[] = [];
   for (const p of VISION_ORDER()) {
     try {
-      if (p === 'cloudflare') return await cfVision(prompt, image);
-      if (p === 'mistral') { if (!Deno.env.get('MISTRAL_API_KEY') && errors.length) continue; return await mistralVision(prompt, image); }
+      const t0 = Date.now();
+      if (p === 'cloudflare') { const out = await cfVision(prompt, image, kind); console.log(`Foto ${kind} über Cloudflare: ${Date.now() - t0} ms`); return out; }
+      if (p === 'mistral') { if (!Deno.env.get('MISTRAL_API_KEY') && errors.length) continue; const out = await mistralVision(prompt, image); console.log(`Foto ${kind} über Mistral: ${Date.now() - t0} ms`); return out; }
     } catch (e) { if (e instanceof Fail) errors.push(e); else throw e; }
   }
   const first = errors[0];
@@ -187,7 +190,7 @@ Deno.serve(async req => {
       const d = parseJson(await cfChat([{ role: 'system', content: SYSTEM + (ctx ? '\n\n' + ctx : '') }, { role: 'user', content: prompt }], 1400));
       out = { recipe: { ...cleanParsed('recipe', d), note: str(d?.note, 400) } };
     } else {
-      out = { data: cleanParsed(body.kind, parseJson(await vision(PARSE_PROMPTS[body.kind], image))) };
+      out = { data: cleanParsed(body.kind, parseJson(await vision(PARSE_PROMPTS[body.kind], image, body.kind))) };
     }
     return json(out);
   } catch (e) {

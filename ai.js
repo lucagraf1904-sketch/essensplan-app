@@ -24,7 +24,7 @@ export async function photoToDataUrl(file, max = 1280, quality = 0.8) {
 
 // Foto einlesen. kind: 'recipe' | 'receipt' | 'package'. Liefert die bereinigten Daten der Funktion.
 export async function parsePhoto(kind, file) {
-  const image = await photoToDataUrl(file);
+  const image = await photoToDataUrl(file, kind === 'package' ? 1024 : 1280); // Verpackung: kleineres Bild genügt und geht schneller
   const r = await ctx.store.askAi({ action: 'parse', kind, image });
   return r.data;
 }
