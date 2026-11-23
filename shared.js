@@ -25,6 +25,7 @@ const keepLocal = (key, v, cur) => { const f = LOCAL_ONLY[key]; if (!f || !cur |
 const kind = k => HOUSEHOLD_KEYS.includes(k) ? 'hh' : MEMBER_KEYS.includes(k) ? 'me' : null;
 const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 
+const DIRTY = 'speisekammer.dirty.';
 export async function initShared(store, onChange) {
   if (!store.listShared) return;
   const raw = Storage.prototype.setItem.bind(localStorage);
@@ -35,6 +36,7 @@ export async function initShared(store, onChange) {
   const have = new Set();
   for (const { key, value } of [...hh, ...me]) {
     have.add(key);
+    if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), null).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen
     raw(key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key)))));
   }
   for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
@@ -59,8 +61,14 @@ export async function initShared(store, onChange) {
     pending.set(key, value);
     if (busy.has(key)) return;
     busy.add(key);
-    try { while (pending.has(key)) { const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v)); await fn(v); } }
-    finally { busy.delete(key); }
+    try {
+      while (pending.has(key)) {
+        const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v));
+        raw(DIRTY + key, '1'); // noch nicht beim Server angekommen (App kann vorher geschlossen werden)
+        await fn(v);
+        if (!pending.has(key)) localStorage.removeItem(DIRTY + key);
+      }
+    } finally { busy.delete(key); }
   }
   async function push(key, value, before) {
     if (kind(key) === 'me') return send(key, strip(key, value), v => store.setMine(key, v));
