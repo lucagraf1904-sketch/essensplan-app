@@ -143,7 +143,7 @@ function build(start = isoLocal(), keep = [], dry = false) {
   const chosen = [], days = [], usedBf = new Set();
   let forgotten = 0;
   for (let i = 0; i < 7; i++) {
-    const date = addDays(start, i), kept = keep.find(d => d.date === date && (d.status !== 'geplant' || d.leftover || (d.need && recipe(d.dinner) && !excludedBy(recipe(d.dinner)))));
+    const date = addDays(start, i), kept = keep.find(d => d.date === date && (d.status !== 'geplant' || d.leftover || (d.pinned && recipe(d.dinner)) || (d.need && recipe(d.dinner) && !excludedBy(recipe(d.dinner)))));
     if (kept) { days.push(kept); const r = recipe(kept.dinner); if (r) chosen.push(r); continue; }
     const best = rank(i, date, chosen, forgotten)[0];
     if (!best) { days.push({ date, dinner: null, why: [], breakfast: breakfastFor(i, date, usedBf), status: 'geplant' }); continue; }
@@ -309,7 +309,7 @@ function renderRecipes(body) {
       <button class="chip ai-only" data-rec="photo">📷 Per Foto (KI)</button>
       ${missingStarters ? `<button class="chip" data-rec="starters">Beispielgerichte (${missingStarters})</button>` : ''}</div>
     <input id="rec-q" type="search" placeholder="Rezept suchen …" autocomplete="off" value="${esc(recQ)}">
-    <ul class="list rec-list">${l.map(r => `<li data-rec-id="${r.id}" data-q="${esc(recText(r))}" class="${r.paused ? 'paused' : ''}"${recQ && !recText(r).includes(recQ.toLowerCase()) ? ' hidden' : ''}>
+    <ul class="list rec-list">${l.map(r => `<li data-rec-id="${r.id}" data-q="${esc(recText(r))}" class="${r.paused ? 'paused' : ''}"${recQ && !matchAll(recQ, recText(r)) ? ' hidden' : ''}>
       <details><summary><div class="name">${r.fav ? '★ ' : ''}${esc(r.title)}${r.paused ? ' <span class="muted tiny">(pausiert)</span>' : ''}</div>
         <div class="meta">${esc(KINDS[r.kind] ?? '')} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}${(r.tags ?? []).map(t => ' · ' + esc(TAGS[t] ?? t)).join('')}${r.last ? ` · zuletzt ${new Date(r.last + 'T12:00').toLocaleDateString('de-DE')}` : ''}</div></summary>
         ${r.method ? `<p class="tiny">🍳 ${esc(r.method)}${r.servings ? ` · ${esc(r.servings)}` : ''}</p>` : ''}
@@ -549,9 +549,8 @@ function eatEl() {
   document.body.appendChild(d);
   d.addEventListener('input', e => {
     if (e.target.id === 'es-name') eatName = e.target.value;
-    const f = (inp, sel, attr) => { const q = inp.value.trim().toLowerCase(); d.querySelectorAll(sel).forEach(el => { el.hidden = !!q && !el.dataset[attr].includes(q); }); };
-    if (e.target.id === 'es-q') f(e.target, '[data-e-item]', 'q');
-    if (e.target.id === 'es-r') f(e.target, '[data-e-pick]', 'q');
+    if (e.target.id === 'es-q') { eatQ = e.target.value; applyEatFilter(); }
+    if (e.target.id === 'es-r') { eatR = e.target.value; applyEatFilter(); }
   });
   d.addEventListener('click', async e => {
     if (e.target === d) return d.close();
@@ -570,7 +569,7 @@ function eatEl() {
       const pr = recipe(b.dataset.ePick); if (!pr) return;
       if (pr.store) updateRecipe(pr.id, x => { x.store = false; });
       if (day.dinner && !day.free) day.plannedDinner = day.plannedDinner ?? day.dinner;
-      Object.assign(day, { dinner: pr.id, title: pr.title, why: ['Von dir gewählt'], status: 'geplant' }); delete day.need; delete day.free;
+      Object.assign(day, { pinned: true, dinner: pr.id, title: pr.title, why: ['Von dir gewählt'], status: 'geplant' }); delete day.need; delete day.free;
       savePlan(p); d.close(); toast(`„${pr.title}“ eingeplant`); return render();
     }
     if (b.dataset.e === 'free') {
@@ -596,6 +595,14 @@ function eatEl() {
   });
   return d;
 }
+let eatQ = '', eatR = '';
+const nrm = t => String(t ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss');
+const matchAll = (q, hay) => nrm(q).split(/\s+/).filter(Boolean).every(w => nrm(hay).includes(w));
+function applyEatFilter() {
+  const d = eatEl();
+  d.querySelectorAll('[data-e-item]').forEach(el => { el.hidden = !matchAll(eatQ, el.dataset.q); });
+  d.querySelectorAll('[data-e-pick]').forEach(el => { el.hidden = !matchAll(eatR, el.dataset.q); });
+}
 function fillEat() {
   const d = eatEl(), day = loadPlan()?.days?.find(x => x.date === d.dataset.date); if (!day) return;
   const r = recipe(day.dinner), pantry = items.filter(i => i.qty > 0 && i.category !== 'Reste').sort((a, b) => a.name.localeCompare(b.name, 'de'));
@@ -605,14 +612,15 @@ function fillEat() {
     <p class="sheet-label">Etwas anderes gegessen?</p>
     <label class="sheet-f"><span>Was? (freier Text)</span><input id="es-name" placeholder="z. B. Spiegelei mit Brot" value="${esc(eatName)}"></label>
     <p class="tiny muted">Aus dem Vorrat abbuchen: Zutaten antippen (mehrere möglich).</p>
-    <input id="es-q" type="search" placeholder="Vorrat suchen …" autocomplete="off">
+    <input id="es-q" type="search" placeholder="Vorrat suchen …" autocomplete="off" value="${esc(eatQ)}">
     <div class="tip-alts es-items">${pantry.map(i => `<button type="button" class="chip ${eatSel.has(i.id) ? 'accepted' : ''}" data-e-item="${i.id}" data-q="${esc(i.name.toLowerCase())}">${eatSel.has(i.id) ? '✓ ' : ''}${esc(i.name)}</button>`).join('') || '<span class="tiny muted">Der Vorrat ist leer, ihr könnt trotzdem etwas eintippen.</span>'}</div>
     <button type="button" class="primary" data-e="free">✅ Eintragen${eatSel.size ? ` und ${eatSel.size} aus dem Vorrat abbuchen` : ''}</button>
     <p class="sheet-label">Oder ein anderes Gericht aus eurer Liste</p>
-    <input id="es-r" type="search" placeholder="Gericht suchen …" autocomplete="off">
+    <input id="es-r" type="search" placeholder="Gericht suchen …" autocomplete="off" value="${esc(eatR)}">
     <div class="tip-alts es-rec">${recs.slice(0, 60).map(x => `<button type="button" class="chip" data-e-pick="${x.id}" data-q="${esc(recText(x))}">${esc(x.title)}</button>`).join('') || '<span class="tiny muted">Noch keine weiteren Gerichte.</span>'}</div>`;
+  applyEatFilter();
 }
-async function openEat(date) { const d = eatEl(); d.dataset.date = date; eatSel = new Set(); eatName = ''; [items] = await Promise.all([ctx.store.listItems()]); fillEat(); if (!d.open) d.showModal(); }
+async function openEat(date) { const d = eatEl(); d.dataset.date = date; eatSel = new Set(); eatName = ''; eatQ = ''; eatR = ''; [items] = await Promise.all([ctx.store.listItems()]); fillEat(); if (!d.open) d.showModal(); }
 
 // ---------- Aktionen ----------
 async function onClick(e) {
@@ -644,7 +652,7 @@ async function onClick(e) {
   }
   if (b.dataset.recToday) {
     const p = getPlan(), d = p.days.find(x => daysTo(x.date) === 0), r = recipe(b.dataset.recToday); if (!d || !r) return;
-    Object.assign(d, { dinner: r.id, title: r.title, why: ['selbst ausgewählt'] }); savePlan(p); view = 'week'; toast(`🍳 Heute: ${r.title}`); return render();
+    Object.assign(d, { pinned: true, dinner: r.id, title: r.title, why: ['selbst ausgewählt'] }); savePlan(p); view = 'week'; toast(`🍳 Heute: ${r.title}`); return render();
   }
   if (b.dataset.calDay) { calSel = b.dataset.calDay; await render(); return openSheet(calSel); }
   if (b.dataset.sheet) { return openSheet(b.dataset.sheet, b.dataset.sheetPerson); }
@@ -677,7 +685,7 @@ async function onClick(e) {
     const next = ranked.find(c => !seen.includes(c.r.id)) ?? ranked[0];
     if (!next) return toast('Keine weiteren Gerichte.');
     delete d.need;
-    Object.assign(d, { dinner: next.r.id, title: next.r.title, why: next.sc.why.slice(0, 3), swapped: seen.length >= activeRecipes().length - 1 ? [] : seen });
+    Object.assign(d, { pinned: true, dinner: next.r.id, title: next.r.title, why: next.sc.why.slice(0, 3), swapped: seen.length >= activeRecipes().length - 1 ? [] : seen });
   } else if (act === 'needs') {
     return openNeeds(d.date);
   } else if (act === 'eat') {
@@ -837,8 +845,8 @@ export function initPlan(c) {
   });
   document.addEventListener('input', e => {
     if (e.target.id !== 'rec-q') return;
-    recQ = e.target.value; const q = recQ.trim().toLowerCase();
-    document.querySelectorAll('.rec-list li[data-q]').forEach(li => li.hidden = !!q && !li.dataset.q.includes(q));
+    recQ = e.target.value;
+    document.querySelectorAll('.rec-list li[data-q]').forEach(li => li.hidden = !matchAll(recQ, li.dataset.q));
   });
   document.addEventListener('toggle', e => { if (e.target.classList?.contains('day')) dayOpen.set(e.target.dataset.date, e.target.open); }, true);
   document.addEventListener('toggle', e => { if (e.target.classList?.contains('plan-head')) goalsOpen = e.target.open; }, true);

@@ -154,3 +154,6 @@ Am Tag: „🍴 Anders gegessen“ öffnet ein Blatt: wie geplant abhaken, Zutat
 
 ## Plan-Tab vereinfacht (v49)
 Tage sind eingeklappt (nur heute offen, Auswahl bleibt beim Neuzeichnen), Kopfzeile fasst Fisch/Rind/Gemüse zusammen und enthält Wochenziele, Hinweise und Regeln, „🔄 Neu prüfen“ steht oben. Pro Tag: „✓ Gekocht“ und „⋯ Mehr“ (Anderes Gericht, Zutaten anpassen, Anders gegessen, Überspringen, Fehlendes auf die Liste). Nur Struktur, keine Funktionsänderung.
+
+## v55: Plan-Änderungen bleiben, Suche im Plan
+Selbst gewählte Gerichte (Anderes Gericht, Heute kochen, „Anders gegessen → Gericht aus der Liste") sind mit `pinned` markiert und gehen bei einer Neuplanung (Wochenziele, Rezepte, Schichten, „Neu prüfen") nicht mehr verloren. Die Suchfelder im Plan (Vorrat/Gericht in „Anders gegessen", Rezeptsuche) blenden jetzt wirklich aus (`[hidden]` wurde von Knopf-Styles überschrieben), behalten den Text beim Antippen und ignorieren Umlaute/Groß-/Kleinschreibung.
