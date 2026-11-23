@@ -338,3 +338,22 @@ dialog p, dialog small, dialog span, dialog div, dialog li, dialog label, #ask-t
 .plan-diff { list-style: none; padding: 0; margin: 8px 0; text-align: left; font-size: .92rem; }
 .plan-diff li { padding: 5px 0; border-bottom: 1px solid rgba(128,128,128,.25); }
 .es-items, .es-rec { max-height: 30vh; overflow-y: auto; margin: 6px 0 10px; }
+
+/* Plan-Tab vereinfacht (v49) */
+.plan-top { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; }
+.plan-top .plan-head { flex: 1; min-width: 0; margin: 0; }
+.plan-top #plan-new { flex: none; white-space: nowrap; }
+.plan-day details.day > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 4px 0; }
+.plan-day details.day > summary::-webkit-details-marker { display: none; }
+.plan-day details.day > summary::after { content: '▾'; margin-left: auto; color: var(--muted, #888); }
+.plan-day details.day[open] > summary::after { content: '▴'; }
+.ds-date { font-size: .85rem; color: var(--muted, #888); }
+.ds-buy { font-size: .8rem; }
+.chip.main-act { font-weight: 600; }
+details.more { display: block; margin: 0; }
+details.more > summary { list-style: none; cursor: pointer; display: block; margin: 0; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more[open] { display: block; width: 100%; }
+details.more > summary.chip { padding: 8px 12px; font-size: .9rem; border-radius: 99px; border: 1px solid var(--line); background: var(--card); }
+.chip.main-act { background: var(--green); color: #fff; border-color: var(--green); }
+.plan-day .tip-alts { align-items: flex-start; }

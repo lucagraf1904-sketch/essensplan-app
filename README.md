@@ -151,3 +151,6 @@ Einrichtung Schritt für Schritt: [anleitung/ai-setup.md](anleitung/ai-setup.md)
 
 ## Essen im Plan frei ändern (23.11.)
 Am Tag: „🍴 Anders gegessen“ öffnet ein Blatt: wie geplant abhaken, Zutaten anpassen, frei eintippen und Zutaten aus dem Vorrat antippen (Packungen mit Teilen per Zähler, sonst „alles/Teil/nichts“) oder ein anderes Gericht aus der Liste wählen. Freie Tage (`d.free`) können als Gericht in den Rezeptspeicher übernommen oder zurückgesetzt werden (abgebuchter Vorrat bleibt abgebucht).
+
+## Plan-Tab vereinfacht (v49)
+Tage sind eingeklappt (nur heute offen, Auswahl bleibt beim Neuzeichnen), Kopfzeile fasst Fisch/Rind/Gemüse zusammen und enthält Wochenziele, Hinweise und Regeln, „🔄 Neu prüfen“ steht oben. Pro Tag: „✓ Gekocht“ und „⋯ Mehr“ (Anderes Gericht, Zutaten anpassen, Anders gegessen, Überspringen, Fehlendes auf die Liste). Nur Struktur, keine Funktionsänderung.

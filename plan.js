@@ -12,6 +12,7 @@ import { loadMeds } from './meds.js';
 import { GRUNDSTOCK, GRUNDSTOCK_SOURCE } from './suggestions.js';
 
 let goalsOpen = false;
+const dayOpen = new Map(); // Datum -> aufgeklappt (Nutzerwahl); Standard: nur heute
 const PLAN_KEY = 'speisekammer.plan', SHOP_KEY = 'speisekammer.shopping';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -231,32 +232,39 @@ function renderWeek(body, s) {
   const ex = s.planExclude ?? [], hasInfo = (s.health ?? []).length || loadMeds().groups.length || ex.length;
   const info = hasInfo ? `<div class="tip hint tiny">ℹ️ Der Plan richtet sich nicht selbst nach Erkrankungen oder Medikamenten. Hinweise und Vorschläge stehen unter Einstellungen; Lebensmittel schließt du dort selbst aus.${ex.length ? ` Ausgeschlossen: ${ex.map(e => esc(e.label)).join(', ')}.` : ''}</div>` : '';
   const goal = (k, icon, label, def, max, suffix = '×', step = 1) => { const v = s[k] ?? def; return `<span class="goal"><span>${icon} ${label}</span><button type="button" class="chip" data-goal="${k}" data-d="${-step}" data-max="${max}" aria-label="weniger">−</button><b>${v ? v + suffix : 'aus'}</b><button type="button" class="chip" data-goal="${k}" data-d="${step}" data-max="${max}" aria-label="mehr">＋</button></span>`; };
-  const goals = s.planHealthRules ? `<details class="tip hint goals" ${goalsOpen ? 'open' : ''}><summary>🎯 Wochenziele: Fisch ${s.weekFish ?? 2}×, Rind höchstens ${s.weekBeef ?? 1}×${(s.weekVeg ?? 0) ? `, vegetarisch ${s.weekVeg}×` : ''}${(s.weekVegG ?? 0) ? `, Gemüse ab ${s.weekVegG} g` : ''}</summary>
-      <div class="goal-rows">${goal('weekFish', '🐟', 'Fisch pro Woche', 2, 5)}${goal('weekBeef', '🥩', 'Rind höchstens', 1, 5)}${goal('weekVeg', '🥦', 'Vegetarische Abende', 0, 7)}${goal('weekVegG', '🥗', 'Gemüse pro Abend mind.', 0, 500, ' g', 50)}</div>
-      <p class="tiny muted">Der Plan richtet sich danach, soweit eure Gerichte es hergeben. Änderungen gelten für den Haushalt und planen die offenen Tage neu (Gekochtes bleibt).</p></details>` : '';
-  body.innerHTML = `${info}${goals}<div class="plan-sum"><span>🐟 Fisch ${fish}×</span><span>🥩 Rind/Schwein ${meat}×</span>${veg ? `<span>🥦 ca. ${veg} g Gemüse/Abend</span>` : ''}</div>
+  const goalRows = s.planHealthRules ? `<div class="goal-rows">${goal('weekFish', '🐟', 'Fisch pro Woche', 2, 5)}${goal('weekBeef', '🥩', 'Rind höchstens', 1, 5)}${goal('weekVeg', '🥦', 'Vegetarische Abende', 0, 7)}${goal('weekVegG', '🥗', 'Gemüse pro Abend mind.', 0, 500, ' g', 50)}</div>
+      <p class="tiny muted">Der Plan richtet sich danach, soweit eure Gerichte es hergeben. Änderungen gelten für den Haushalt und planen die offenen Tage neu (Gekochtes bleibt).</p>` : '';
+  const sumLine = `🐟 ${fish}${s.planHealthRules ? '/' + (s.weekFish ?? 2) : ''}× · 🥩 ${meat}${s.planHealthRules ? '/' + (s.weekBeef ?? 1) : ''}×${veg ? ` · 🥦 ca. ${veg} g` : ''}`;
+  const head0 = `<div class="plan-top"><details class="tip hint goals plan-head" ${goalsOpen ? 'open' : ''}><summary>🎯 Woche: ${sumLine}</summary>
+      ${goalRows}${info}
+      <p class="tiny muted">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. „Neu prüfen“ zeigt zuerst eine Vorschau; Gekochtes, Übersprungenes, angepasste Tage und eingeplante Reste bleiben.</p></details>
+    <button id="plan-new" class="chip" title="Plan anhand Vorrat neu prüfen">🔄 Neu prüfen</button></div>`;
+  const firstOpen = p.days.find(x => x.status === 'geplant' && daysTo(x.date) >= 0)?.date;
+  const isOpen = d => dayOpen.has(d.date) ? dayOpen.get(d.date) : (daysTo(d.date) === 0 || (!p.days.some(x => daysTo(x.date) === 0) && d.date === firstOpen));
+  const wrap = (d, i, pre, sum, inner, cls = '') => `<li class="plan-day ${cls} ${d.status}" data-i="${i}">${pre}<details class="day" data-date="${d.date}" ${isOpen(d) ? 'open' : ''}><summary>${sum}</summary>${inner}</details></li>`;
+  const sumOf = (d, title, extra = '') => `<span class="ds-date">${dayLabel(d.date)}</span> <b>${esc(title)}</b>${d.status === 'gekocht' ? ' <span class="good-tag">✓</span>' : d.status === 'uebersprungen' ? ' <span class="muted tiny">übersprungen</span>' : ''}${extra}`;
+  body.innerHTML = `${head0}
     <ul class="list plan-list">${p.days.map((d, i) => {
       const today = daysTo(d.date) === 0, r = recipe(d.dinner), m = mealOf(d);
-      const head = `<div class="plan-date">${dayLabel(d.date)}</div>${shiftLine(d.date, s)}<div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>`;
+      const head = `${shiftLine(d.date, s)}<div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>`;
       const restBox = i === restDay && rests.length ? `<div class="plan-rest">🍲 Im Kühlschrank: ${rests.map(x => `<b>${esc(x.name)}</b> (${esc(x.qty)} ${x.qty === 1 ? 'Portion' : 'Portionen'})`).join(', ')}
           <div class="tip-alts">${rests.map(x => `<button class="chip" data-act="useleft" data-rest="${x.id}">🍽️ ${today ? 'Heute' : 'Dann'} Rest essen${rests.length > 1 ? ': ' + esc(x.name.replace(/^Rest: /, '')) : ''}</button>`).join('')}</div>
           <div class="tiny muted">Das geplante Gericht rückt dann einen Tag nach hinten. Reste höchstens 2 Tage im Kühlschrank (Verbraucherzentrale).</div></div>` : '';
-      if (d.leftover) return `<li class="plan-day ${d.status}" data-i="${i}">${head}
+      if (d.leftover) return wrap(d, i, '', sumOf(d, '🍲 ' + d.leftover.name), `${head}
         <div class="plan-dinner"><b>🍲 ${esc(d.leftover.name)}</b><div class="tiny">Reste · Aufwärmen, gut durcherhitzen · ca. 10 min</div>
           ${r ? `<div class="tiny muted">${esc(r.title)} ist auf den nächsten Tag verschoben.</div>` : ''}</div>
-        ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gegessen</div>' : `<div class="tip-alts"><button class="chip" data-act="done">✓ Gegessen</button><button class="chip" data-act="unleft">Doch frisch kochen</button></div>`}
-      </li>`;
-      if (d.free) return `<li class="plan-day ${d.status}" data-i="${i}">${head}
+        ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gegessen</div>' : `<div class="tip-alts"><button class="chip" data-act="done">✓ Gegessen</button><button class="chip" data-act="unleft">Doch frisch kochen</button></div>`}`);
+      if (d.free) return wrap(d, i, '', sumOf(d, '🍴 ' + d.title), `${head}
         <div class="plan-dinner"><b>🍴 ${esc(d.title)}</b><div class="tiny muted">Selbst eingetragen${d.free.items?.length ? ' · ' + d.free.items.map(esc).join(', ') : ''}</div></div>
         <div class="good-tag">✓ Gegessen</div>
-        <div class="tip-alts"><button class="chip" data-act="eat">✏️ Ändern</button><button class="chip" data-act="savefree">📚 Als Gericht speichern</button><button class="chip" data-act="unfree">Rückgängig</button></div></li>`;
-      if (!r) return `<li class="plan-day" data-i="${i}">${restBox}${head}<div class="plan-dinner muted">Kein passendes Gericht. <button class="chip" data-act="swap">🔄 Vorschlag</button></div></li>`;
+        <div class="tip-alts"><button class="chip" data-act="eat">✏️ Ändern</button><button class="chip" data-act="savefree">📚 Als Gericht speichern</button><button class="chip" data-act="unfree">Rückgängig</button></div>`);
+      if (!r) return wrap(d, i, restBox, sumOf(d, 'Kein passendes Gericht'), `${head}<div class="plan-dinner muted"><button class="chip" data-act="swap">🔄 Vorschlag</button></div>`);
       const missing = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
       const thaw = needOf(d, r).map(([w]) => has(items, w)).find(x => x?.frozenAt);
       const tomorrowAway = shiftsOn(addDays(d.date, 1)).filter(x => (x.code === 'S' || x.code === 'N') && shiftDay(x.person, addDays(d.date, 1))?.snack);
-      return `<li class="plan-day ${d.status}" data-i="${i}">${restBox}${head}
-        <div class="plan-dinner"><b>🍽️ ${esc(m.title)}</b>${r.fav ? ' <span title="Lieblingsgericht">★</span>' : ''}
+      return wrap(d, i, restBox, sumOf(d, m.title, `${r.fav ? ' ★' : ''}${toBuy.length ? ` <span class="ds-buy">🛒 ${toBuy.length}</span>` : missing.length ? ' <span class="ds-buy">🛒 ✓</span>' : ''}`), `${head}
+        <div class="plan-dinner">
           <div class="tiny">${esc(KINDS[r.kind] ?? '')}${r.method ? ' · ' + esc(r.method) : ''} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}</div>
           ${d.need ? `<div class="tiny plan-changed">✏️ Zutaten für diesen Tag angepasst</div>` : ''}
           ${d.why?.length ? `<div class="tiny plan-why">${d.why.map(w => `<span>✓ ${esc(w)}</span>`).join('')}</div>` : ''}
@@ -270,18 +278,17 @@ function renderWeek(body, s) {
             ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Originalrezept öffnen ↗</a>` : ''}</details>` : ''}
         </div>
         ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gekocht</div>' : d.status === 'uebersprungen' ? '<div class="muted tiny">Übersprungen</div>' : `<div class="tip-alts">
-          <button class="chip" data-act="swap">🔄 Anderes Gericht</button>
-          <button class="chip" data-act="done">✓ Gekocht</button>
-          <button class="chip" data-act="needs">✏️ Zutaten anpassen</button>
-          <button class="chip" data-act="eat">🍴 Anders gegessen</button>
-          <button class="chip" data-act="skip">Überspringen</button>
-          ${toBuy.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div>`}
-        ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}
-      </li>`;
-    }).join('')}</ul>
-    <button id="plan-new">🔄 Plan anhand Vorrat neu prüfen</button><p class="tiny muted">Zeigt zuerst eine Vorschau. Gekochte, übersprungene und eigene angepasste Tage sowie eingeplante Reste bleiben, die Wochenziele auch.</p>
-    <p class="muted tiny">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. Nährstoffe pro Woche kommen später.</p>`;
+          <button class="chip main-act" data-act="done">✓ Gekocht</button>
+          <details class="more"><summary class="chip">⋯ Mehr</summary><div class="tip-alts">
+            <button class="chip" data-act="swap">🔄 Anderes Gericht</button>
+            <button class="chip" data-act="needs">✏️ Zutaten anpassen</button>
+            <button class="chip" data-act="eat">🍴 Anders gegessen</button>
+            <button class="chip" data-act="skip">Überspringen</button>
+            ${toBuy.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div></details></div>`}
+        ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}`);
+    }).join('')}</ul>`;
 }
+
 
 let recTab = 'plan';
 function renderRecipes(body) {
@@ -833,6 +840,8 @@ export function initPlan(c) {
     recQ = e.target.value; const q = recQ.trim().toLowerCase();
     document.querySelectorAll('.rec-list li[data-q]').forEach(li => li.hidden = !!q && !li.dataset.q.includes(q));
   });
+  document.addEventListener('toggle', e => { if (e.target.classList?.contains('day')) dayOpen.set(e.target.dataset.date, e.target.open); }, true);
+  document.addEventListener('toggle', e => { if (e.target.classList?.contains('plan-head')) goalsOpen = e.target.open; }, true);
   document.addEventListener('toggle', e => { if (e.target.classList?.contains('shift-cal')) e.target.open ? localStorage.removeItem('shiftCalClosed') : localStorage.setItem('shiftCalClosed', '1'); }, true);
   document.addEventListener('toggle', e => { if (e.target.classList?.contains('shift-conf')) e.target.open ? localStorage.setItem('shiftConfOpen', '1') : localStorage.removeItem('shiftConfOpen'); }, true);
   // Demo: Beispielgerichte einmal übernehmen, mit Beispiel-Lieblingsgericht und lange nicht Gegessenem
