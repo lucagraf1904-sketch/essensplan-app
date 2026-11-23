@@ -712,7 +712,8 @@ async function syncPush() {
       ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC_KEY) });
     const s = getSettings();
     await store.savePush(sub.toJSON(), { remindExpiry: s.remindExpiry, expiryTime: s.expiryTime, remindDinner: s.remindDinner,
-      dinnerTime: s.dinnerTime, dinnerAuto: s.dinnerAuto, dinnerAt: s.dinnerAt, warnDays: WARN_DAYS, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      dinnerTime: s.dinnerTime, dinnerAuto: s.dinnerAuto, dinnerAt: s.dinnerAt, warnDays: WARN_DAYS,
+      askEatenBf: s.askEatenBf, eatenBfTime: s.eatenBfTime, askEatenDin: s.askEatenDin, eatenDinTime: s.eatenDinTime, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
     return true;
   } catch (e) { console.warn('Push-Abo fehlgeschlagen', e); return false; }
 }

@@ -41,7 +41,19 @@ Deno.serve(async req => {
       }
     }
     const dueDinner = s.remind_dinner && dinnerTime !== null && time >= dinnerTime && s.last_dinner_sent !== date;
-    if (!dueExpiry && !dueDinner) continue;
+    // „Was wurde gegessen?“ (Frühstück / Abendessen), nur wenn Packungen mit Teilmengen im Vorrat liegen
+    const dueEatBf = s.ask_eaten_bf && time >= s.eaten_bf_time.slice(0, 5) && s.last_eaten_bf_sent !== date;
+    const dueEatDin = s.ask_eaten_din && time >= s.eaten_din_time.slice(0, 5) && s.last_eaten_din_sent !== date;
+    let hasParts = false;
+    if (dueEatBf || dueEatDin) {
+      const [{ data: its }, { data: kv }] = await Promise.all([
+        sb.from('items').select('name').eq('household_id', s.household_id).gt('qty', 0),
+        sb.from('household_data').select('value').eq('household_id', s.household_id).eq('key', 'speisekammer.parts').maybeSingle()]);
+      const keys = Object.keys((kv?.value ?? {}) as Record<string, unknown>);
+      hasParts = (its ?? []).some(i => { const n = String(i.name).toLowerCase(); return keys.includes(n) || /toast|\beier\b/.test(n); });
+    }
+    const eatBf = dueEatBf && hasParts, eatDin = dueEatDin && hasParts;
+    if (!dueExpiry && !dueDinner && !dueEatBf && !dueEatDin) continue;
 
     const { data: items } = await sb.from('items').select('name, expiry')
       .eq('household_id', s.household_id).not('expiry', 'is', null).lte('expiry', addDays(date, s.warn_days ?? 3)).order('expiry');
@@ -57,6 +69,8 @@ Deno.serve(async req => {
     else if (dueDinner) messages.push({ title: 'Zeit fürs Abendessen',
       body: soon.length ? `Zuerst verbrauchen: ${soon.slice(0, 3).map(label).join(', ')}` : 'Schau in den Vorrat, was heute weg muss.', tag: 'abendessen' });
 
+    if (eatBf) messages.push({ title: 'Was hast du gefrühstückt?', body: 'Kurz antippen, dann stimmt der Vorrat.', tag: 'gegessen-bf' });
+    if (eatDin) messages.push({ title: 'Was wurde zum Abendessen gegessen?', body: 'Kurz antippen, dann stimmt der Vorrat.', tag: 'gegessen-din' });
     const sub = { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } };
     let gone = false;
     for (const m of messages) {
@@ -66,6 +80,7 @@ Deno.serve(async req => {
     if (gone) { await sb.from('push_subscriptions').delete().eq('id', s.id); continue; }
     await sb.from('push_subscriptions').update({
       ...(dueExpiry ? { last_expiry_sent: date } : {}), ...(dueDinner ? { last_dinner_sent: date } : {}),
+      ...(dueEatBf ? { last_eaten_bf_sent: date } : {}), ...(dueEatDin ? { last_eaten_din_sent: date } : {}),
     }).eq('id', s.id);
   }
   return Response.json({ sent });

@@ -385,3 +385,12 @@ alter default privileges in schema public grant select, insert, update, delete o
 alter default privileges in schema public grant all on tables to service_role;
 alter default privileges in schema public grant usage, select on sequences to authenticated, service_role;
 alter default privileges in schema public grant execute on functions to authenticated, service_role;
+
+-- „Was wurde gegessen?“-Nachfrage per Push (23.11.2026)
+alter table push_subscriptions add column if not exists ask_eaten_bf boolean not null default true;
+alter table push_subscriptions add column if not exists eaten_bf_time time not null default '12:45';
+alter table push_subscriptions add column if not exists ask_eaten_din boolean not null default true;
+alter table push_subscriptions add column if not exists eaten_din_time time not null default '18:30';
+alter table push_subscriptions add column if not exists last_eaten_bf_sent date;
+alter table push_subscriptions add column if not exists last_eaten_din_sent date;
+notify pgrst, 'reload schema';

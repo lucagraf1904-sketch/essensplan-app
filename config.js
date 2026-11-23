@@ -5,7 +5,7 @@ export const SUPABASE_ANON_KEY = 'sb_publishable_WudPbBqhAU-WS1lB0JuQqQ_uCfn77PK
 
 // Öffentlicher VAPID-Schlüssel für Push-Nachrichten (siehe README „Push-Erinnerungen“).
 // Leer = Erinnerungen nur, solange die App offen ist bzw. beim Öffnen.
-export const VAPID_PUBLIC_KEY = '';
+export const VAPID_PUBLIC_KEY = 'BKPA0uZjhhZuaNxsFzjBaCtPtK6wBJZKizhpI5JmZAWcdvkmf7is8E1fHfZtpeTmwtLHrPeWvf_OeUU4ugL0In4'; // öffentlicher Schlüssel, darf sichtbar sein (23.11.)
 
 // Bewegung aus Apple Health per iPhone-Kurzbefehl (siehe KURZBEFEHL.md). VORBEREITET, noch nicht live:
 // erst auf true setzen, wenn Supabase läuft und der Essensplaner fertig ist.

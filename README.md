@@ -81,7 +81,7 @@ Einstellungen → Erinnerungen: Ablaufwarnung und Abendessen, je Uhrzeit (Standa
 Ohne Server erinnert die App, sobald sie nach der Uhrzeit offen ist. Für echte Push-Nachrichten:
 1. VAPID-Schlüssel erzeugen: `npx web-push generate-vapid-keys`. Öffentlichen Schlüssel in `config.js` (VAPID_PUBLIC_KEY).
 2. `supabase secrets set VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT=mailto:… CRON_SECRET=<zufällig>`
-3. `supabase functions deploy reminders --no-verify-jwt` (die Funktion prüft stattdessen den Header x-cron-secret).
+3. (inkl. „Was wurde gegessen?“) `supabase functions deploy reminders --no-verify-jwt` (die Funktion prüft stattdessen den Header x-cron-secret).
 4. `supabase/cron.sql` mit Projekt-Ref und CRON_SECRET im SQL Editor ausführen.
 5. Auf dem iPhone: App über „Teilen → Zum Home-Bildschirm“ installieren (iOS 16.4+), dann in den Einstellungen „Benachrichtigungen erlauben“.
 

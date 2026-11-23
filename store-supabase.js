@@ -142,6 +142,7 @@ export const supabaseStore = {
       household_id: household.id, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth, tz: prefs.tz,
       remind_expiry: prefs.remindExpiry, expiry_time: prefs.expiryTime, remind_dinner: prefs.remindDinner,
       dinner_time: prefs.dinnerTime, dinner_auto: prefs.dinnerAuto, dinner_at: prefs.dinnerAt, warn_days: prefs.warnDays,
+      ask_eaten_bf: prefs.askEatenBf !== false, eaten_bf_time: prefs.eatenBfTime || '12:45', ask_eaten_din: prefs.askEatenDin !== false, eaten_din_time: prefs.eatenDinTime || '18:30',
     }, { onConflict: 'endpoint' }));
   },
 
