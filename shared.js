@@ -37,6 +37,10 @@ export async function initShared(store, onChange) {
   for (const { key, value } of [...hh, ...me]) {
     have.add(key);
     if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), null).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen
+    if (key === 'speisekammer.settings') { // Diagnose: was hat der Server beim Start überschrieben?
+      const loc = parse(rawGet(key)) ?? {}, diff = Object.keys({ ...loc, ...value }).filter(k => k !== 'health' && JSON.stringify(loc[k]) !== JSON.stringify(value[k]));
+      raw('speisekammer.dbg', JSON.stringify({ at: new Date().toISOString(), diff: diff.map(k => `${k}: lokal ${JSON.stringify(loc[k])} → Server ${JSON.stringify(value[k])}`).slice(0, 6) }));
+    }
     raw(key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key)))));
   }
   for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
@@ -65,8 +69,9 @@ export async function initShared(store, onChange) {
       while (pending.has(key)) {
         const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v));
         raw(DIRTY + key, '1'); // noch nicht beim Server angekommen (App kann vorher geschlossen werden)
+        raw('speisekammer.dbg2', JSON.stringify({ at: new Date().toISOString(), key, sent: v?.eatenBfTime ?? v?.expiryTime ?? null }));
         try { await fn(v); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
-        if (!pending.has(key)) { localStorage.removeItem(DIRTY + key); document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } })); }
+        if (!pending.has(key)) { localStorage.removeItem(DIRTY + key); raw('speisekammer.dbg3', new Date().toISOString()); document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } })); }
       }
     } finally { busy.delete(key); }
   }

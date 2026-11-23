@@ -1366,6 +1366,14 @@ $('#tab-kitchen').addEventListener('change', e => {
 // ---------- KI (ai.js): Chat, Gericht anpassen, Fotos einlesen ----------
 document.addEventListener('shared:error', e => toast(`Speichern beim Server fehlgeschlagen: ${String(e.detail.message).slice(0, 120)}`, 6000));
 document.addEventListener('shared:saved', e => { if (e.detail.key === 'speisekammer.settings') toast('Einstellung gespeichert ✓', 1500); });
+function showDebug() {
+  const el = $('#app-version'); if (!el) return;
+  const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
+  const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
+  el.textContent = `Version v43 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+}
+document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
+setTimeout(showDebug, 3000);
 function toast(msg, ms = 2500) {
   let t = document.getElementById('plan-toast');
   if (!t) { t = Object.assign(document.createElement('div'), { id: 'plan-toast' }); document.body.appendChild(t); }
