@@ -134,11 +134,11 @@ function rank(i, date, chosen, forgottenUsed, exclude = []) {
     .filter(x => x.sc).sort((a, b) => b.sc.p - a.sc.p);
 }
 
-function build(start = isoLocal(), keep = []) {
+function build(start = isoLocal(), keep = [], dry = false) {
   const chosen = [], days = [], usedBf = new Set();
   let forgotten = 0;
   for (let i = 0; i < 7; i++) {
-    const date = addDays(start, i), kept = keep.find(d => d.date === date && (d.status !== 'geplant' || (d.need && !d.leftover && recipe(d.dinner) && !excludedBy(recipe(d.dinner)))));
+    const date = addDays(start, i), kept = keep.find(d => d.date === date && (d.status !== 'geplant' || d.leftover || (d.need && recipe(d.dinner) && !excludedBy(recipe(d.dinner)))));
     if (kept) { days.push(kept); const r = recipe(kept.dinner); if (r) chosen.push(r); continue; }
     const best = rank(i, date, chosen, forgotten)[0];
     if (!best) { days.push({ date, dinner: null, why: [], breakfast: breakfastFor(i, date, usedBf), status: 'geplant' }); continue; }
@@ -146,7 +146,7 @@ function build(start = isoLocal(), keep = []) {
     chosen.push(best.r);
     days.push({ date, dinner: best.r.id, title: best.r.title, why: best.sc.why.slice(0, 3), breakfast: breakfastFor(i, date, usedBf), status: 'geplant' });
   }
-  const p = { start, days, made: new Date().toISOString() }; savePlan(p); return p;
+  const p = { start, days, made: new Date().toISOString() }; if (!dry) savePlan(p); return p;
 }
 function getPlan() {
   const p = loadPlan();
@@ -270,7 +270,7 @@ function renderWeek(body, s) {
         ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}
       </li>`;
     }).join('')}</ul>
-    <button id="plan-new">Plan neu erstellen</button>
+    <button id="plan-new">🔄 Plan anhand Vorrat neu prüfen</button><p class="tiny muted">Zeigt zuerst eine Vorschau. Gekochte, übersprungene und eigene angepasste Tage sowie eingeplante Reste bleiben, die Wochenziele auch.</p>
     <p class="muted tiny">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. Nährstoffe pro Woche kommen später.</p>`;
 }
 
@@ -464,6 +464,22 @@ function openSheet(date, person) {
   if (!d.open) d.showModal();
 }
 
+// Plan neu prüfen: Vorschau, dann übernehmen (nichts wird ohne Bestätigung geändert)
+async function recheckPlan() {
+  const old = loadPlan(); if (!old?.days?.length) { build(); return render(); }
+  [items, offers] = await Promise.all([ctx.store.listItems(), ctx.allOffers().catch(() => offers)]);
+  const keep = old.days.filter(d => daysTo(d.date) >= 0), fresh = build(isoLocal(), keep, true);
+  const title = d => d.leftover ? `Reste: ${d.leftover.name}` : (d.dinner ? (recipe(d.dinner)?.title ?? d.title) : 'kein Gericht');
+  const rows = fresh.days.map(d => { const o = keep.find(x => x.date === d.date); const kept = o && (o.status !== 'geplant' || o.leftover || o.need);
+    if (kept) return { d, kind: 'kept', old: o }; return { d, kind: !o || o.dinner === d.dinner ? 'same' : 'changed', old: o }; });
+  const changed = rows.filter(r => r.kind === 'changed');
+  const line = r => `<li><b>${esc(dayLabel(r.d.date))}</b> ${r.kind === 'changed' ? `${esc(title(r.old))} → <b>${esc(title(r.d))}</b>${r.d.why?.[0] ? `<br><small class="muted">${esc(r.d.why[0])}</small>` : ''}` : `${esc(title(r.d))} <small class="muted">${r.kind === 'kept' ? (r.old.status === 'gekocht' ? '(gekocht, bleibt)' : r.old.status === 'uebersprungen' ? '(übersprungen, bleibt)' : r.old.leftover ? '(Rest, bleibt)' : '(angepasst, bleibt)') : '(bleibt)'}</small>`}</li>`;
+  const v = await ctx.ask(changed.length ? `${changed.length} ${changed.length === 1 ? 'Tag ändert' : 'Tage ändern'} sich` : 'Der Plan passt schon', `<ul class="plan-diff">${rows.map(line).join('')}</ul><p class="tiny muted">Berücksichtigt Vorrat, Ablaufdaten, Angebote und eure Wochenziele.</p>`,
+    changed.length ? [{ value: 'yes', label: 'Neuen Plan übernehmen', cls: 'primary' }, { value: '', label: 'Abbrechen' }] : [{ value: '', label: 'OK', cls: 'primary' }]);
+  if (v === 'yes') { savePlan(fresh); toast('Plan erneuert'); }
+  render();
+}
+
 // Zutaten eines Tages anpassen (ersetzen, weglassen, ergänzen). Gilt nur für diesen Tag; „Im Rezept übernehmen“ ändert das Gerichte-Rezept.
 function needsEl() {
   let d = document.getElementById('need-sheet'); if (d) return d;
@@ -512,7 +528,7 @@ function openNeeds(date) { const d = needsEl(); d.dataset.date = date; fillNeeds
 async function onClick(e) {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.view) { view = b.dataset.view; goalsOpen = false; return render(); }
-  if (b.id === 'plan-new') { build(isoLocal(), (loadPlan()?.days ?? []).filter(d => daysTo(d.date) >= 0)); return render(); }
+  if (b.id === 'plan-new') return recheckPlan();
   if (b.dataset.goal) {
     const k = b.dataset.goal, def = { weekFish: 2, weekBeef: 1, weekVeg: 0, weekVegG: 0 }[k], cur = getSettings()[k] ?? def;
     ctx.setSetting(k, Math.max(0, Math.min(+b.dataset.max, cur + +b.dataset.d)));

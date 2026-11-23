@@ -332,3 +332,5 @@ dialog { max-width: min(92vw, 440px); overflow-x: hidden; }
 dialog.sheet { max-width: 560px; }
 dialog p, dialog small, dialog span, dialog div, dialog li, dialog label, #ask-text, #item-nutrition, #scan-status { overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
 .toast { overflow-wrap: anywhere; }
+.plan-diff { list-style: none; padding: 0; margin: 8px 0; text-align: left; font-size: .92rem; }
+.plan-diff li { padding: 5px 0; border-bottom: 1px solid rgba(128,128,128,.25); }
