@@ -359,3 +359,4 @@ details.more > summary.chip { padding: 8px 12px; font-size: .9rem; border-radius
 .plan-day .tip-alts { align-items: flex-start; }
 .offer-err { display: block; color: var(--red); user-select: text; margin-bottom: 4px; }
 [hidden] { display: none !important; }
+.sync-state { font-size: .85rem !important; padding: 4px 6px; } .sync-state.bad { color: var(--red); }

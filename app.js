@@ -1373,11 +1373,22 @@ $('#tab-kitchen').addEventListener('change', e => {
 function shortErr(m, n = 160) { const s = String(m ?? '').replace(/\s+/g, ' ').trim(); try { const j = JSON.parse(s.slice(s.indexOf('{'))); if (j?.error || j?.message) return String(j.error ?? j.message).slice(0, n); } catch { /* kein JSON */ } return s.length > n ? s.slice(0, n) + ' …' : s; }
 document.addEventListener('shared:error', e => toast(`Speichern beim Server fehlgeschlagen: ${String(e.detail.message).slice(0, 120)}`, 6000));
 document.addEventListener('shared:saved', e => { if (e.detail.key === 'speisekammer.settings') toast('Einstellung gespeichert ✓', 1500); });
+// Abgleich-Anzeige in der Kopfzeile: ☁️ gespeichert, ⏳ wird gesendet, ⚠️ nicht gesendet (antippen = erneut versuchen)
+(() => {
+  const el = $('#sync-state'); if (!el) return;
+  let timer, failed = new Set(), sending = new Set();
+  const set = (txt, cls) => { el.classList.remove('hidden'); el.textContent = txt; el.className = `ghost sync-state ${cls}`; };
+  const upd = () => { if (failed.size) set('⚠️', 'bad'); else if (sending.size) set('⏳', 'wait'); else { set('☁️✓', 'ok'); clearTimeout(timer); timer = setTimeout(() => el.classList.add('hidden'), 3000); } };
+  document.addEventListener('shared:sending', e => { sending.add(e.detail.key); upd(); });
+  document.addEventListener('shared:saved', e => { sending.delete(e.detail.key); failed.delete(e.detail.key); upd(); });
+  document.addEventListener('shared:error', e => { sending.delete(e.detail.key); failed.add(e.detail.key); upd(); });
+  el.addEventListener('click', () => { failed.clear(); document.dispatchEvent(new CustomEvent('shared:retry')); toast(el.classList.contains('bad') ? 'Noch nicht gesendet, ich versuche es erneut' : 'Alles gespeichert ✓'); });
+})();
 function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v55 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v56 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

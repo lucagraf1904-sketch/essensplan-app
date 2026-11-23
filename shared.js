@@ -96,6 +96,7 @@ export async function initShared(store, onChange) {
         const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v));
         raw(DIRTY + key, '1'); // noch nicht beim Server angekommen (App kann vorher geschlossen werden)
         raw('speisekammer.dbg2', JSON.stringify({ at: new Date().toISOString(), key, sent: v?.eatenBfTime ?? v?.expiryTime ?? null }));
+        document.dispatchEvent(new CustomEvent('shared:sending', { detail: { key } }));
         try { await fn(v); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
         if (!pending.has(key)) { localStorage.removeItem(DIRTY + key); raw('speisekammer.dbg3', new Date().toISOString()); document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } })); }
       }
@@ -126,10 +127,26 @@ export async function initShared(store, onChange) {
     }
     for (const id of old.keys()) changed.push({ id, del: true, t: now });
     if (!changed.length) return;
-    const merged = await store.mergeList(key, changed);
+    document.dispatchEvent(new CustomEvent('shared:sending', { detail: { key } }));
+    let merged;
+    try { merged = await store.mergeList(key, changed); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
+    document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } }));
     raw(key, JSON.stringify(merged.filter(x => !x.del)));
     onChange?.(key);
   }
+
+  // Unterwegs verlorene Änderungen erneut senden: beim Zurückkehren in die App, bei Netz und alle 20 s
+  const retryDirty = () => {
+    if (navigator.onLine === false) return;
+    for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
+      if (MERGE_KEYS.includes(key) || busy.has(key) || !rawGet(DIRTY + key) || rawGet(key) == null) continue;
+      push(key, parse(rawGet(key)), null).catch(e => console.warn('Erneut senden', key, e));
+    }
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) retryDirty(); });
+  window.addEventListener('online', retryDirty);
+  document.addEventListener('shared:retry', retryDirty);
+  setInterval(retryDirty, 20000);
 
   // 3) Änderungen vom anderen Handy
   store.onShared((scope, key, value) => {

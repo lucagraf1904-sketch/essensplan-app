@@ -157,3 +157,6 @@ Tage sind eingeklappt (nur heute offen, Auswahl bleibt beim Neuzeichnen), Kopfze
 
 ## v55: Plan-Änderungen bleiben, Suche im Plan
 Selbst gewählte Gerichte (Anderes Gericht, Heute kochen, „Anders gegessen → Gericht aus der Liste") sind mit `pinned` markiert und gehen bei einer Neuplanung (Wochenziele, Rezepte, Schichten, „Neu prüfen") nicht mehr verloren. Die Suchfelder im Plan (Vorrat/Gericht in „Anders gegessen", Rezeptsuche) blenden jetzt wirklich aus (`[hidden]` wurde von Knopf-Styles überschrieben), behalten den Text beim Antippen und ignorieren Umlaute/Groß-/Kleinschreibung.
+
+## v56: Abgleich sichtbar und wiederholt
+Jede Änderung an Haushaltsdaten (Plan, Rezepte, Einkaufsliste, Einstellungen für alle …) wird sofort gesendet. Kopfzeile zeigt ⏳ (wird gesendet), ☁️✓ (gespeichert, verschwindet nach 3 s) oder ⚠️ (nicht gesendet; antippen = erneut versuchen). Nicht gesendete Änderungen werden beim Zurückkehren in die App, bei Netz und alle 20 s erneut geschickt (shared.js `retryDirty`). Gesundheitsangaben und Medikamente bleiben lokal.
