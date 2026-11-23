@@ -704,6 +704,7 @@ $('#btn-push').addEventListener('click', enableNotifications);
 
 // Push-Abo bei Supabase speichern (nur wenn eingerichtet). Uhrzeiten wandern mit.
 const b64ToBytes = b => { const p = '='.repeat((4 - b.length % 4) % 4); const r = atob((b + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(r, c => c.charCodeAt(0)); };
+let pushTimer;
 async function syncPush() {
   if (store.mode !== 'supabase' || !VAPID_PUBLIC_KEY || !canNotify() || !('PushManager' in window)) return false;
   try {
@@ -1353,6 +1354,9 @@ $('#tab-kitchen').addEventListener('change', e => {
     setSetting(e.target.dataset.k, e.target.value);
     // heute neu prüfen, falls die Uhrzeit verschoben wurde
     localStorage.removeItem(e.target.dataset.k === 'expiryTime' ? 'lastNotify' : 'lastDinnerNotify');
+    // Nicht neu zeichnen: Sonst schließt sich die Zeitauswahl bei jedem Drehen am iPhone (Luca 23.11.)
+    clearTimeout(pushTimer); pushTimer = setTimeout(syncPush, 1500);
+    return;
   } else return;
   renderSettings();
   renderPantry();

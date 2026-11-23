@@ -51,9 +51,20 @@ export async function initShared(store, onChange) {
     if (k) push(key, parse(value), before).catch(e => console.warn('Abgleich', key, e));
   };
 
+  // Eigene Schreibzugriffe: nacheinander senden (nur der neueste Wert zählt) und das Echo vom Server nicht zurückspielen,
+  // sonst überschreibt ein verspätetes Echo eines älteren Wertes die aktuelle Einstellung (Uhrzeit sprang zurück, 23.11.)
+  const mine = new Map(), busy = new Set(), pending = new Map();
+  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(json); mine.set(key, l.slice(-30)); };
+  async function send(key, value, fn) {
+    pending.set(key, value);
+    if (busy.has(key)) return;
+    busy.add(key);
+    try { while (pending.has(key)) { const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v)); await fn(v); } }
+    finally { busy.delete(key); }
+  }
   async function push(key, value, before) {
-    if (kind(key) === 'me') return store.setMine(key, strip(key, value));
-    if (!MERGE_KEYS.includes(key)) return store.setShared(key, value);
+    if (kind(key) === 'me') return send(key, strip(key, value), v => store.setMine(key, v));
+    if (!MERGE_KEYS.includes(key)) return send(key, value, v => store.setShared(key, v));
     // Liste: nur geänderte und gelöschte Einträge schicken
     const now = Date.now(), old = new Map((Array.isArray(before) ? before : []).map(x => [x.id, x]));
     const changed = [];
@@ -72,6 +83,7 @@ export async function initShared(store, onChange) {
   // 3) Änderungen vom anderen Handy
   store.onShared((scope, key, value) => {
     if (!kind(key)) return;
+    if (!MERGE_KEYS.includes(key) && (mine.get(key) ?? []).includes(JSON.stringify(kind(key) === 'me' ? strip(key, value) : value))) return; // eigenes Echo
     const v = JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
     raw(key, v); onChange?.(key);
