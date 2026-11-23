@@ -9,7 +9,9 @@ import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setSh
 import { getSettings } from './settings.js';
 import { offersFor, chainName } from './offers.js';
 import { loadMeds } from './meds.js';
+import { GRUNDSTOCK, GRUNDSTOCK_SOURCE } from './suggestions.js';
 
+let goalsOpen = false;
 const PLAN_KEY = 'speisekammer.plan', SHOP_KEY = 'speisekammer.shopping';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,6 +38,8 @@ function savePlan(p) {
   // Für pünktliche Push-Erinnerungen (Edge Function „reminders“ liest meal_plan)
   ctx?.store?.savePlanRows?.(p.days.map(d => { const m = mealOf(d); return { date: d.date, title: m.title, method: m.method, minutes: m.min, status: d.status }; })).catch?.(e => console.warn('Plan-Abgleich', e));
 }
+const needOf = (d, r) => d?.need ?? r?.need ?? [];
+const needLabel = n => n[2] ? `${n[1]} (${n[2]})` : n[1];
 const recipe = id => loadRecipes().find(r => r.id === id) ?? STARTERS.find(r => r.id === id);
 function mealOf(d) {
   if (d.leftover) return { title: d.leftover.name, method: 'Aufwärmen', min: 10 };
@@ -85,10 +89,13 @@ function score(r, i, date, chosen, forgottenUsed) {
   if (prefs.includes('wenigFleisch') && meat.includes(r.kind) && meatN >= 2) p -= 3;
   // Wochenregeln (Schalter „planHealthRules“)
   if (s.planHealthRules) {
-    const fish = chosen.filter(c => c.kind === 'fisch').length, beef = chosen.filter(c => c.kind === 'rind').length;
-    if (r.kind === 'fisch' && fish < 2) { p += 2; if (i >= 3) why.push('Fischabend (Ziel 2× pro Woche)'); }
-    if (r.kind === 'fisch' && fish >= 2) p -= 3;
-    if (r.kind === 'rind' && beef >= 2) p -= 4;
+    const fish = chosen.filter(c => c.kind === 'fisch').length, beef = chosen.filter(c => c.kind === 'rind').length, veg = chosen.filter(c => c.kind === 'veggie').length;
+    const wf = s.weekFish ?? 2, wb = s.weekBeef ?? 1, wv = s.weekVeg ?? 0, wg = s.weekVegG ?? 0;
+    if (r.kind === 'fisch' && fish < wf) { p += 2; if (i >= 3) why.push(`Fischabend (Ziel ${wf}× pro Woche)`); }
+    if (r.kind === 'fisch' && fish >= wf) p -= wf ? 3 : 6;
+    if (r.kind === 'rind' && beef >= wb) p -= wb ? 4 : 6;
+    if (r.kind === 'veggie' && veg < wv) { p += 2; if (i >= 3) why.push(`Vegetarischer Abend (Ziel ${wv}× pro Woche)`); }
+    if (wg && r.veg) p += r.veg >= wg ? 1 : -1;
   }
   // Abwechslung
   const prev = chosen.at(-1);
@@ -131,7 +138,7 @@ function build(start = isoLocal(), keep = []) {
   const chosen = [], days = [], usedBf = new Set();
   let forgotten = 0;
   for (let i = 0; i < 7; i++) {
-    const date = addDays(start, i), kept = keep.find(d => d.date === date && d.status !== 'geplant');
+    const date = addDays(start, i), kept = keep.find(d => d.date === date && (d.status !== 'geplant' || (d.need && !d.leftover && recipe(d.dinner) && !excludedBy(recipe(d.dinner)))));
     if (kept) { days.push(kept); const r = recipe(kept.dinner); if (r) chosen.push(r); continue; }
     const best = rank(i, date, chosen, forgotten)[0];
     if (!best) { days.push({ date, dinner: null, why: [], breakfast: breakfastFor(i, date, usedBf), status: 'geplant' }); continue; }
@@ -167,7 +174,7 @@ export async function getPlannedMeal(date, meal = 'dinner') {
   if (meal !== 'dinner') return null;
   const d = loadPlan()?.days?.find(x => x.date === date); if (!d || (!d.dinner && !d.leftover)) return null;
   const m = mealOf(d), r = recipe(d.dinner);
-  const thaw = r && !d.leftover ? (r.need ?? []).map(([w]) => has(items, w)).find(i => i?.frozenAt) : null;
+  const thaw = r && !d.leftover ? needOf(d, r).map(([w]) => has(items, w)).find(i => i?.frozenAt) : null;
   return { date, meal, title: m.title, totalMinutes: m.min, method: m.method, thawFrom: thaw ? addDays(date, -1) : null, status: d.status };
 }
 
@@ -219,7 +226,11 @@ function renderWeek(body, s) {
   const restDay = p.days.findIndex(d => d.status === 'geplant' && !d.leftover && daysTo(d.date) >= 0);
   const ex = s.planExclude ?? [], hasInfo = (s.health ?? []).length || loadMeds().groups.length || ex.length;
   const info = hasInfo ? `<div class="tip hint tiny">ℹ️ Der Plan richtet sich nicht selbst nach Erkrankungen oder Medikamenten. Hinweise und Vorschläge stehen unter Einstellungen; Lebensmittel schließt du dort selbst aus.${ex.length ? ` Ausgeschlossen: ${ex.map(e => esc(e.label)).join(', ')}.` : ''}</div>` : '';
-  body.innerHTML = `${info}<div class="plan-sum"><span>🐟 Fisch ${fish}×</span><span>🥩 Rind/Schwein ${meat}×</span>${veg ? `<span>🥦 ca. ${veg} g Gemüse/Abend</span>` : ''}</div>
+  const goal = (k, icon, label, def, max, suffix = '×', step = 1) => { const v = s[k] ?? def; return `<span class="goal"><span>${icon} ${label}</span><button type="button" class="chip" data-goal="${k}" data-d="${-step}" data-max="${max}" aria-label="weniger">−</button><b>${v ? v + suffix : 'aus'}</b><button type="button" class="chip" data-goal="${k}" data-d="${step}" data-max="${max}" aria-label="mehr">＋</button></span>`; };
+  const goals = s.planHealthRules ? `<details class="tip hint goals" ${goalsOpen ? 'open' : ''}><summary>🎯 Wochenziele: Fisch ${s.weekFish ?? 2}×, Rind höchstens ${s.weekBeef ?? 1}×${(s.weekVeg ?? 0) ? `, vegetarisch ${s.weekVeg}×` : ''}${(s.weekVegG ?? 0) ? `, Gemüse ab ${s.weekVegG} g` : ''}</summary>
+      <div class="goal-rows">${goal('weekFish', '🐟', 'Fisch pro Woche', 2, 5)}${goal('weekBeef', '🥩', 'Rind höchstens', 1, 5)}${goal('weekVeg', '🥦', 'Vegetarische Abende', 0, 7)}${goal('weekVegG', '🥗', 'Gemüse pro Abend mind.', 0, 500, ' g', 50)}</div>
+      <p class="tiny muted">Der Plan richtet sich danach, soweit eure Gerichte es hergeben. Änderungen gelten für den Haushalt und planen die offenen Tage neu (Gekochtes bleibt).</p></details>` : '';
+  body.innerHTML = `${info}${goals}<div class="plan-sum"><span>🐟 Fisch ${fish}×</span><span>🥩 Rind/Schwein ${meat}×</span>${veg ? `<span>🥦 ca. ${veg} g Gemüse/Abend</span>` : ''}</div>
     <ul class="list plan-list">${p.days.map((d, i) => {
       const today = daysTo(d.date) === 0, r = recipe(d.dinner), m = mealOf(d);
       const head = `<div class="plan-date">${dayLabel(d.date)}</div>${shiftLine(d.date, s)}<div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>`;
@@ -232,26 +243,28 @@ function renderWeek(body, s) {
         ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gegessen</div>' : `<div class="tip-alts"><button class="chip" data-act="done">✓ Gegessen</button><button class="chip" data-act="unleft">Doch frisch kochen</button></div>`}
       </li>`;
       if (!r) return `<li class="plan-day" data-i="${i}">${restBox}${head}<div class="plan-dinner muted">Kein passendes Gericht. <button class="chip" data-act="swap">🔄 Vorschlag</button></div></li>`;
-      const missing = (r.need ?? []).filter(([w]) => !has(items, w)).map(([, n]) => n);
+      const missing = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
-      const thaw = (r.need ?? []).map(([w]) => has(items, w)).find(x => x?.frozenAt);
+      const thaw = needOf(d, r).map(([w]) => has(items, w)).find(x => x?.frozenAt);
       const tomorrowAway = shiftsOn(addDays(d.date, 1)).filter(x => (x.code === 'S' || x.code === 'N') && shiftDay(x.person, addDays(d.date, 1))?.snack);
       return `<li class="plan-day ${d.status}" data-i="${i}">${restBox}${head}
         <div class="plan-dinner"><b>🍽️ ${esc(m.title)}</b>${r.fav ? ' <span title="Lieblingsgericht">★</span>' : ''}
           <div class="tiny">${esc(KINDS[r.kind] ?? '')}${r.method ? ' · ' + esc(r.method) : ''} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}</div>
+          ${d.need ? `<div class="tiny plan-changed">✏️ Zutaten für diesen Tag angepasst</div>` : ''}
           ${d.why?.length ? `<div class="tiny plan-why">${d.why.map(w => `<span>✓ ${esc(w)}</span>`).join('')}</div>` : ''}
           ${thaw ? `<div class="tiny plan-thaw">❄️ ${esc(thaw.name)} am Vorabend in den Kühlschrank legen</div>` : ''}
           ${tomorrowAway.length ? `<div class="tiny plan-thaw">🍱 Vorkochen: ${tomorrowAway.map(x => `${esc(x.person)} hat morgen ${SHIFTS[x.code].label}schicht`).join(', ')}. ${r.tags?.includes('mitnehmen') ? '1 Portion mehr kochen und in die Dose.' : 'Für die Dose eignet sich das Gericht weniger, lieber etwas Kaltes vorbereiten.'}</div>` : ''}
           ${missing.length ? `<div class="tiny muted">Fehlt: ${missing.map(n => listed.has(n.toLowerCase()) ? `${esc(n)} ✓` : esc(n)).join(', ')}</div>` : ''}
           ${missing.length && !toBuy.length ? '<div class="tiny good-tag">🛒 Alles Fehlende steht auf der Einkaufsliste</div>' : ''}
           ${r.ingredients?.length || r.steps?.length || r.url ? `<details class="tiny"><summary>Rezept</summary>
-            ${r.ingredients?.length ? `<ul>${r.ingredients.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+            ${d.need ? `<ul>${d.need.map(n => `<li>${esc(needLabel(n))}</li>`).join('')}</ul>` : r.ingredients?.length ? `<ul>${r.ingredients.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
             ${r.steps?.length ? `<ol>${r.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
             ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Originalrezept öffnen ↗</a>` : ''}</details>` : ''}
         </div>
         ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gekocht</div>' : d.status === 'uebersprungen' ? '<div class="muted tiny">Übersprungen</div>' : `<div class="tip-alts">
           <button class="chip" data-act="swap">🔄 Anderes Gericht</button>
           <button class="chip" data-act="done">✓ Gekocht</button>
+          <button class="chip" data-act="needs">✏️ Zutaten anpassen</button>
           <button class="chip" data-act="skip">Überspringen</button>
           ${toBuy.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div>`}
         ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}
@@ -263,13 +276,15 @@ function renderWeek(body, s) {
 
 let recTab = 'plan';
 function renderRecipes(body) {
+  if (recTab === 'ideas') return renderIdeas(body);
   const all = loadRecipes(), missingStarters = STARTERS.filter(x => !all.some(r => r.id === x.id)).length;
   const inPlan = all.filter(r => !r.store), stored = all.filter(r => r.store);
   const l = (recTab === 'store' ? stored : inPlan).sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || a.title.localeCompare(b.title, 'de'));
   const today = loadPlan()?.days?.find(d => daysTo(d.date) === 0);
   body.innerHTML = `<div class="seg wrap rec-tabs">
       <button type="button" data-rectab="plan" class="${recTab === 'plan' ? 'active' : ''}">🍽️ Im Plan (${inPlan.length})</button>
-      <button type="button" data-rectab="store" class="${recTab === 'store' ? 'active' : ''}">📚 Rezeptspeicher (${stored.length})</button></div>
+      <button type="button" data-rectab="store" class="${recTab === 'store' ? 'active' : ''}">📚 Rezeptspeicher (${stored.length})</button>
+      <button type="button" data-rectab="ideas" class="${recTab === 'ideas' ? 'active' : ''}">💡 Vorschläge</button></div>
     <p class="tiny muted">${recTab === 'store' ? 'Hier liegen Rezepte zum Nachschlagen. Der Plan nimmt sie nicht von selbst; ihr könnt sie jederzeit kochen oder in den Plan aufnehmen.' : 'Aus diesen Gerichten stellt die App den Wochenplan zusammen.'}</p>
     <div class="tip-alts">
       <button class="chip" data-rec="new">＋ Neues Rezept</button>
@@ -295,6 +310,53 @@ function renderRecipes(body) {
     <p class="muted tiny">★ = Lieblingsgericht (kommt öfter). Gilt für den ganzen Haushalt. Importierte Rezepte nur für den privaten Gebrauch; der Link zum Original bleibt gespeichert.</p>`;
 }
 let recQ = '';
+// ---------- Vorschläge (Vorauswahl) ----------
+const HIDE_KEY = 'speisekammer.recHidden'; // nur auf diesem Gerät
+const hidden = () => { try { return JSON.parse(localStorage.getItem(HIDE_KEY)) ?? []; } catch { return []; } };
+function ideas() {
+  const own = loadRecipes(), hid = hidden();
+  const pool = [...own.filter(r => r.store), ...GRUNDSTOCK.filter(g => !own.some(r => r.id === g.id))].filter(r => !hid.includes(r.id));
+  return pool.map(r => ({ r, sc: score(r, 1, isoLocal(), [], 0) })).filter(x => x.sc).sort((a, b) => b.sc.p - a.sc.p).slice(0, 10);
+}
+function renderIdeas(body) {
+  const list = ideas(), hid = hidden().length;
+  const own = loadRecipes();
+  body.innerHTML = `<div class="seg wrap rec-tabs">
+      <button type="button" data-rectab="plan">🍽️ Im Plan</button><button type="button" data-rectab="store">📚 Rezeptspeicher</button><button type="button" data-rectab="ideas" class="active">💡 Vorschläge</button></div>
+    <p class="tiny muted">Passend zu Vorrat, Ablaufdaten, euren Vorlieben und Ausschlüssen. Vorschläge kommen aus eurem Rezeptspeicher und einem Grundstock einfacher Gerichte. Nichts wird von selbst übernommen.</p>
+    <div class="tip-alts"><button class="chip" data-rec="search">🔎 Rezept dazu suchen (Chefkoch)</button></div>
+    <ul class="list rec-list">${list.map(({ r, sc }) => `<li data-idea="${esc(r.id)}"><details><summary><div class="name">${esc(r.title)}</div>
+        <div class="meta">${esc(KINDS[r.kind] ?? '')} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}${r.store ? ' · aus dem Rezeptspeicher' : ' · Grundstock'}</div>
+        ${sc.why.length ? `<div class="tiny plan-why">${sc.why.slice(0, 3).map(w => `<span>✓ ${esc(w)}</span>`).join('')}</div>` : ''}</summary>
+        ${(r.ingredients?.length ? r.ingredients : r.need.map(n => n[1])).length ? `<p class="tiny"><b>Zutaten</b></p><ul class="tiny">${(r.ingredients?.length ? r.ingredients : r.need.map(n => n[1])).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${r.steps?.length ? `<p class="tiny"><b>Zubereitung</b></p><ol class="tiny">${r.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
+        <div class="tip-alts"><button class="chip" data-idea-add="${esc(r.id)}">＋ In meine Gerichte</button><button class="chip" data-idea-store="${esc(r.id)}">📚 In den Rezeptspeicher</button><button class="chip" data-idea-hide="${esc(r.id)}">Nicht zeigen</button></div></details></li>`).join('') || '<li class="muted tiny">Keine Vorschläge mehr.</li>'}</ul>
+    ${hid ? '<button class="chip" data-idea-reset>Ausgeblendete wieder zeigen</button>' : ''}
+    <p class="muted tiny">Quelle Grundstock: ${esc(GRUNDSTOCK_SOURCE)} Eigene Rezepte im Speicher: ${own.filter(r => r.store).length}.</p>`;
+}
+function searchChefkoch() {
+  const dlg = Object.assign(document.createElement('dialog'), { className: 'sheet' });
+  const pantry = items.filter(i => i.qty > 0 && !['Reste', 'Getränke'].includes(i.category) && !i.frozenAt).sort((a, b) => (a.expiry || '9') .localeCompare(b.expiry || '9')).slice(0, 24);
+  const pick = new Set(pantry.filter(i => i.expiry && daysTo(i.expiry) <= 3).slice(0, 3).map(i => i.id));
+  const fill = () => {
+    dlg.innerHTML = `<div class="sheet-head"><button type="button" class="link" data-x="close">Schließen</button><b>Rezept dazu suchen</b><span></span></div>
+      <p class="tiny muted">Wähle bis zu 3 Zutaten. Chefkoch öffnet sich in einem neuen Tab. Gefällt dir ein Rezept, kopiere den Link und nimm ihn über „🔗 Per Link“ in den Rezeptspeicher auf.</p>
+      <div class="tip-alts">${pantry.map(i => `<button type="button" class="chip ${pick.has(i.id) ? 'accepted' : ''}" data-x="${i.id}">${esc(i.name)}</button>`).join('') || '<span class="tiny muted">Der Vorrat ist leer.</span>'}</div>
+      <button type="button" class="primary" data-x="go" ${pick.size ? '' : 'disabled'}>Auf Chefkoch suchen</button>`;
+  };
+  dlg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (e.target === dlg) return dlg.close(); if (!b) return;
+    const x = b.dataset.x; if (x === 'close') return dlg.close();
+    if (x === 'go') {
+      const q = pantry.filter(i => pick.has(i.id)).map(i => encodeURIComponent(i.name.split(/[ ,(]/)[0].toLowerCase())).join('+');
+      window.open(`https://www.chefkoch.de/rs/s0/${q}/Rezepte.html`, '_blank', 'noopener'); return;
+    }
+    if (pick.has(x)) pick.delete(x); else if (pick.size < 3) pick.add(x); else toast('Höchstens 3 Zutaten, sonst findet Chefkoch kaum etwas.');
+    fill();
+  });
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.appendChild(dlg); fill(); dlg.showModal();
+}
 const recText = r => [r.title, ...(r.ingredients ?? []), ...(r.need ?? []).map(n => n[1]), ...(r.tags ?? []).map(t => TAGS[t] ?? t)].join(' ').toLowerCase();
 
 // ---------- Kalender (Luca 23.11.: „wie die Kalender-App auf dem iPhone“) ----------
@@ -401,12 +463,68 @@ function openSheet(date, person) {
   if (!d.open) d.showModal();
 }
 
+// Zutaten eines Tages anpassen (ersetzen, weglassen, ergänzen). Gilt nur für diesen Tag; „Im Rezept übernehmen“ ändert das Gerichte-Rezept.
+function needsEl() {
+  let d = document.getElementById('need-sheet'); if (d) return d;
+  d = Object.assign(document.createElement('dialog'), { id: 'need-sheet', className: 'sheet' });
+  document.body.appendChild(d);
+  d.addEventListener('click', async e => {
+    if (e.target === d) return d.close();
+    const b = e.target.closest('button'); if (!b) return;
+    const p = loadPlan(), day = p?.days?.find(x => x.date === d.dataset.date), r = day && recipe(day.dinner); if (!r) return d.close();
+    const cur = () => (day.need ?? r.need ?? []).map(n => [...n]);
+    const save = need => { day.need = need; savePlan(p); fillNeeds(); render(); };
+    if (b.dataset.close != null) return d.close();
+    if (b.dataset.nDel != null) { const n = cur(); n.splice(+b.dataset.nDel, 1); return save(n); }
+    if (b.dataset.nEdit != null) {
+      const n = cur(), o = n[+b.dataset.nEdit];
+      const v = (await ctx.askInput('Zutat ändern', 'Neue Zutat oder Menge, z. B. „Hähnchen“ oder „400 g Pute“', o[2] ?? o[1]))?.trim(); if (!v) return;
+      const nn = needFromLine(v); if (!nn) return toast('Das habe ich nicht verstanden.');
+      n[+b.dataset.nEdit] = /\d/.test(v) ? [nn[0], nn[1], v] : nn; return save(n);
+    }
+    if (b.dataset.nAdd != null) {
+      const v = (await ctx.askInput('Zutat ergänzen', 'Zutat, z. B. „Zucchini“ oder „200 g Feta“', ''))?.trim(); if (!v) return;
+      const nn = needFromLine(v); if (!nn) return toast('Das habe ich nicht verstanden.');
+      return save([...cur(), /\d/.test(v) ? [nn[0], nn[1], v] : nn]);
+    }
+    if (b.dataset.nReset != null) { delete day.need; savePlan(p); fillNeeds(); return render(); }
+    if (b.dataset.nKeep != null) {
+      const need = cur();
+      updateRecipe(r.id, x => { x.need = need.map(n => [n[0], n[1]]); if (x.ingredients?.length) x.ingredients = need.map(n => n[2] ?? n[1]); });
+      delete day.need; savePlan(p); d.close(); toast('Im Rezept übernommen'); return render();
+    }
+  });
+  return d;
+}
+function fillNeeds() {
+  const d = needsEl(), day = loadPlan()?.days?.find(x => x.date === d.dataset.date), r = day && recipe(day.dinner); if (!r) return;
+  const need = needOf(day, r);
+  d.innerHTML = `<div class="sheet-head"><button type="button" class="link" data-close>Fertig</button><b>Zutaten anpassen</b><span></span></div>
+    <p class="tiny muted">${esc(r.title)} · ${esc(dayLabel(day.date))} – gilt nur für diesen Tag; das gespeicherte Rezept bleibt unverändert. Vorrat-Abgleich und Einkaufsliste folgen deiner Änderung.</p>
+    <ul class="need-list">${need.map((n, i) => `<li><span>${esc(needLabel(n))}${has(items, n[0]) ? ' <small class="good-tag">im Vorrat</small>' : ''}</span><button type="button" class="chip" data-n-edit="${i}">Ändern</button><button type="button" class="chip" data-n-del="${i}" aria-label="Weglassen">✕</button></li>`).join('') || '<li class="muted tiny">Keine Zutaten erfasst.</li>'}</ul>
+    <div class="tip-alts"><button type="button" class="chip" data-n-add>＋ Zutat ergänzen</button>
+      ${day.need ? '<button type="button" class="chip" data-n-keep>💾 Im Rezept übernehmen</button><button type="button" class="chip" data-n-reset>Zurücksetzen</button>' : ''}</div>`;
+}
+function openNeeds(date) { const d = needsEl(); d.dataset.date = date; fillNeeds(); if (!d.open) d.showModal(); }
+
 // ---------- Aktionen ----------
 async function onClick(e) {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.view) { view = b.dataset.view; return render(); }
+  if (b.dataset.view) { view = b.dataset.view; goalsOpen = false; return render(); }
   if (b.id === 'plan-new') { build(isoLocal(), (loadPlan()?.days ?? []).filter(d => daysTo(d.date) >= 0)); return render(); }
+  if (b.dataset.goal) {
+    const k = b.dataset.goal, def = { weekFish: 2, weekBeef: 1, weekVeg: 0, weekVegG: 0 }[k], cur = getSettings()[k] ?? def;
+    ctx.setSetting(k, Math.max(0, Math.min(+b.dataset.max, cur + +b.dataset.d)));
+    rebuildOpen(); goalsOpen = true; return render();
+  }
   if (b.dataset.rec) return recipeAction(b.dataset.rec);
+  if (b.dataset.ideaAdd || b.dataset.ideaStore) {
+    const id = b.dataset.ideaAdd || b.dataset.ideaStore, g = GRUNDSTOCK.find(x => x.id === id), ex = loadRecipes().find(x => x.id === id);
+    if (g) upsertRecipe({ ...g, src: 'grundstock', store: !!b.dataset.ideaStore }); else if (ex) updateRecipe(id, x => { x.store = !!b.dataset.ideaStore; });
+    rebuildOpen(); toast(b.dataset.ideaAdd ? 'In deinen Gerichten, der Plan kann es nutzen' : 'Im Rezeptspeicher'); return render();
+  }
+  if (b.dataset.ideaHide) { localStorage.setItem(HIDE_KEY, JSON.stringify([...hidden(), b.dataset.ideaHide])); return render(); }
+  if (b.dataset.ideaReset != null) { localStorage.removeItem(HIDE_KEY); return render(); }
   if (b.dataset.recEdit) return editRecipe(b.dataset.recEdit);
   if (b.dataset.rectab) { recTab = b.dataset.rectab; return render(); }
   if (b.dataset.recFav) { updateRecipe(b.dataset.recFav, x => x.fav = !x.fav); return render(); }
@@ -451,16 +569,19 @@ async function onClick(e) {
     const ranked = rank(i, d.date, chosen, 0);
     const next = ranked.find(c => !seen.includes(c.r.id)) ?? ranked[0];
     if (!next) return toast('Keine weiteren Gerichte.');
+    delete d.need;
     Object.assign(d, { dinner: next.r.id, title: next.r.title, why: next.sc.why.slice(0, 3), swapped: seen.length >= activeRecipes().length - 1 ? [] : seen });
+  } else if (act === 'needs') {
+    return openNeeds(d.date);
   } else if (act === 'useleft') {
     const it = items.find(x => x.id === b.dataset.rest); if (!it) return;
-    const last = p.days.at(-1), dropped = { dinner: last.dinner, title: last.title, why: last.why };
-    for (let j = p.days.length - 1; j > i; j--) Object.assign(p.days[j], { dinner: p.days[j - 1].dinner, title: p.days[j - 1].title, why: p.days[j - 1].why });
+    const last = p.days.at(-1), dropped = { dinner: last.dinner, title: last.title, why: last.why, need: last.need };
+    for (let j = p.days.length - 1; j > i; j--) Object.assign(p.days[j], { dinner: p.days[j - 1].dinner, title: p.days[j - 1].title, why: p.days[j - 1].why, need: p.days[j - 1].need });
     d.leftover = { id: it.id, name: it.name, dropped };
     savePlan(p); render(); toast(`🍲 ${it.name} eingeplant`); return;
   } else if (act === 'unleft') {
     const dropped = d.leftover.dropped; delete d.leftover;
-    for (let j = i; j < p.days.length - 1; j++) Object.assign(p.days[j], { dinner: p.days[j + 1].dinner, title: p.days[j + 1].title, why: p.days[j + 1].why });
+    for (let j = i; j < p.days.length - 1; j++) Object.assign(p.days[j], { dinner: p.days[j + 1].dinner, title: p.days[j + 1].title, why: p.days[j + 1].why, need: p.days[j + 1].need });
     Object.assign(p.days.at(-1), dropped);
   } else if (act === 'done' && d.leftover) {
     d.status = 'gekocht'; savePlan(p); render();
@@ -468,14 +589,14 @@ async function onClick(e) {
     return;
   } else if (act === 'done') {
     d.status = 'gekocht'; savePlan(p); markCooked(r.id, d.date); render();
-    await askUsed(r);
+    await askUsed(needOf(d, r));
     document.dispatchEvent(new CustomEvent('plan:cooked', { detail: { title: r.title, date: d.date } }));
     return;
   } else if (act === 'skip') {
     d.status = 'uebersprungen';
   } else if (act === 'undo') d.status = 'geplant';
   else if (act === 'shop') {
-    const add = (r.need ?? []).filter(([w]) => !has(items, w)).map(([, n]) => n);
+    const add = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
     const added = add.filter(n => ctx.addShop(n));
     savePlan(p); render();
     toast(added.length ? `🛒 Auf die Einkaufsliste: ${added.join(', ')}` : 'Steht schon alles auf der Liste.');
@@ -487,8 +608,8 @@ async function onClick(e) {
 function rebuildOpen() { const p = loadPlan(); if (p?.days?.length) build(isoLocal(), p.days.filter(d => daysTo(d.date) >= 0)); }
 
 // „Gekocht“: verbrauchte Zutaten antippen (bucht sie im Vorrat ab)
-async function askUsed(r) {
-  let left = (r.need ?? []).map(([w]) => has(items, w)).filter(Boolean).filter((x, i, a) => a.indexOf(x) === i);
+async function askUsed(need) {
+  let left = need.map(([w]) => has(items, w)).filter(Boolean).filter((x, i, a) => a.indexOf(x) === i);
   while (left.length) {
     const v = await ctx.ask('Was wurde verbraucht?', 'Antippen, was aufgebraucht ist. Der Rest bleibt im Vorrat.',
       [...left.map(x => ({ value: x.id, label: `${x.name} (${x.qty} ${x.unit})` })), { value: '', label: 'Fertig', cls: 'primary' }]);
@@ -503,6 +624,7 @@ async function askUsed(r) {
 async function recipeAction(kind) {
   if (kind === 'starters') { addStarters(); build(); toast('Beispielgerichte übernommen'); return render(); }
   if (kind === 'new') return openEditor(null);
+  if (kind === 'search') return searchChefkoch();
   if (kind === 'link') {
     if (!ctx.store.importRecipe) {
       await ctx.ask('Import per Link', 'Der Import per Link braucht die gemeinsame Datenbank (Supabase), weil das Handy fremde Webseiten nicht direkt lesen darf. Bis dahin: auf der Rezeptseite Titel, Zutaten und Zubereitung markieren, kopieren und unter „Rezepttext einfügen“ einfügen.', [{ value: 'ok', label: 'OK', cls: 'primary' }]);

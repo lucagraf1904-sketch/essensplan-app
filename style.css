@@ -292,3 +292,13 @@ dialog.onb[open] { display: flex; }
 .onb-foot > span { display: flex; gap: 8px; }
 .onb-stock { display: inline-flex; gap: 2px; align-items: center; }
 .onb-minus { padding-left: 8px; padding-right: 8px; }
+/* Wochenziele, Zutaten pro Tag */
+.goals summary { cursor: pointer; font-size: .92rem; }
+.goal-rows { display: grid; gap: 8px; margin: 8px 0; }
+.goal { display: flex; align-items: center; gap: 10px; }
+.goal > span:first-child { flex: 1; }
+.goal b { min-width: 3.2em; text-align: center; }
+.plan-changed { color: var(--accent, #2a7); }
+.need-list { list-style: none; padding: 0; margin: 8px 0; }
+.need-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(128,128,128,.25); }
+.need-list li > span { flex: 1; }

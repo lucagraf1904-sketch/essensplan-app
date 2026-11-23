@@ -1132,7 +1132,7 @@ const SWITCHES = {
     ['workNoMicrowave', 'Keine Mikrowelle auf der Arbeit', 'Mitnehm-Essen, das kalt schmeckt', 'shiftsOn'],
   ],
   '#settings-plan': [
-    ['planHealthRules', 'Wochenregeln im Plan', '2× Fisch, höchstens 2× Rind pro Woche (aus der Fleisch-Recherche)'],
+    ['planHealthRules', 'Wochenregeln im Plan', 'Die Zahlen stellst du im Wochenplan unter „Wochenziele“ ein (Standard: 2× Fisch, höchstens 1× Rind)'],
   ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],

@@ -121,3 +121,9 @@ Bauen: `sh demo/build.sh /pfad/ausgabe` → dann veröffentlichen. Veröffentlic
 ## Bewegung aus Apple Health (vorbereitet, nicht live)
 Tagesschritte und aktive Kalorien per iPhone-Kurzbefehl → Edge Function `health-ingest` → Tabelle `health_daily` → Anzeige „Bewegung heute“ im Tab Verlauf (health.js).
 Aus, solange `HEALTH_ENABLED = false` in config.js. Konzept, Live-Schritte und Kurzbefehl-Anleitung: `KURZBEFEHL.md`.
+
+## Wochenziele, Zutaten pro Tag, Vorschläge (23.11.)
+- **Wochenziele** (Plan-Tab, aufklappbar): Fisch pro Woche, Rind höchstens, vegetarische Abende, Mindest-Gemüse pro Abend. Gelten für den Haushalt, offene Tage werden neu geplant. Nur aktiv bei „Wochenregeln im Plan“.
+- **Zutaten anpassen** pro Tag: ersetzen, weglassen, ergänzen. Gilt nur für den Tag (`d.need` im Plan), Vorrat-Abgleich, Einkaufsliste und „Verbraucht?“ folgen. „Im Rezept übernehmen“ schreibt es ins Rezept. Der Tag bleibt beim Neuplanen erhalten; „Anderes Gericht“ verwirft die Anpassung.
+- **Vorschläge** (Gerichte-Tab): Rezeptspeicher + Grundstock (`suggestions.js`, eigene Formulierungen, keine fremden Rezepte), bewertet wie der Plan (Vorrat, Ablauf, Vorlieben, Ausschlüsse). Ausgeblendete Vorschläge nur lokal.
+- **Rezept dazu suchen**: öffnet Chefkoch-Suche mit bis zu 3 Vorrat-Zutaten (URL-Format ungeprüft); Rezept danach per „Per Link“ importieren (braucht die Edge Function `recipe-import`).
