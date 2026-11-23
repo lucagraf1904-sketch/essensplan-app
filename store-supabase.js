@@ -156,7 +156,7 @@ export const supabaseStore = {
       unitPrice: r.reference_price && r.unit ? { value: +r.reference_price, per: r.unit } : null, loyalty: r.loyalty, source: r.source }));
   },
   async refreshOffers(terms) {
-    const { data, error } = await sb.functions.invoke('offers', { body: { terms } });
+    const { data, error } = await sb.functions.invoke('quick-action', { body: { terms } });
     if (error) {
       let msg = error.message; const r = error.context, st = r?.status ? ` (Status ${r.status})` : '';
       try { const t = await r.clone().text(); msg = t || msg; } catch { /* Antwort nicht lesbar */ }
