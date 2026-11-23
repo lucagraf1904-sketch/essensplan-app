@@ -64,7 +64,8 @@ export async function initShared(store, onChange) {
   // 1) Stand vom Server holen; was es dort noch nicht gibt, einmal vom Handy hochladen
   const [hh, me] = await Promise.all([store.listShared(), store.listMine()]);
   const have = new Set();
-  for (const { key, value } of [...hh, ...me]) {
+  // Nur Zeilen aus der jeweils richtigen Tabelle zählen (alte Zeilen mit gleichem Schlüssel in der anderen Tabelle ignorieren)
+  for (const { key, value } of [...hh.filter(r => kind(r.key) === 'hh'), ...me.filter(r => kind(r.key) === 'me')]) {
     have.add(key);
     if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), parse(rawGet(BASEK + key))).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen (Grundlage: zuletzt bekannter Serverstand, damit nur echte Änderungen überschreiben)
     if (key === 'speisekammer.settings') { // Diagnose: was hat der Server beim Start überschrieben?
@@ -75,6 +76,12 @@ export async function initShared(store, onChange) {
       const loc = parse(rawGet(key)), m = mergePlan(null, loc, value);
       raw(key, JSON.stringify(m));
       if (!same(m, value)) push(key, m, null).catch(e => console.warn('Abgleich', key, e));
+      continue;
+    }
+    if (kind(key) === 'me' && isObj(parse(rawGet(key))) && isObj(value)) { // Persönliche Einstellungen: lokale Änderungen bleiben, was der Server mehr weiß, kommt dazu
+      const loc = parse(rawGet(key)), m = keepLocal(key, merge3(parse(rawGet(BASEK + key)), loc, value), loc);
+      raw(BASEK + key, JSON.stringify(value)); raw(key, JSON.stringify(m));
+      if (!same(strip(key, m), value)) push(key, m, null).catch(e => console.warn('Abgleich', key, e));
       continue;
     }
     if (!MERGE_KEYS.includes(key)) raw(BASEK + key, JSON.stringify(value));

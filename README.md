@@ -163,3 +163,6 @@ Jede Änderung an Haushaltsdaten (Plan, Rezepte, Einkaufsliste, Einstellungen f�
 
 ## v59: Abgleich-Fehler beim Start behoben
 `initShared` benutzte beim Start `bases`/`busy` vor deren Deklaration (TDZ-Fehler, still abgefangen): Hochladen lokaler, noch nicht gesendeter Stände und fehlender Schlüssel beim Start schlug fehl. Jetzt deklariert vor Gebrauch. Dazu: zuletzt bekannter Serverstand wird je Schlüssel gespeichert (`speisekammer.base.*`) und als Grundlage für Wiederholungen genutzt, damit ein veralteter Zweitstand keine neueren Einstellungen überschreibt; nach jedem Senden wird zurückgelesen und ein Fehler gemeldet, wenn der Server etwas anderes hat.
+
+## v60: Persönliche Einstellungen beim Start
+Beim Start zählen Serverzeilen nur noch aus der richtigen Tabelle (Haushalt: `household_data`, persönlich: `member_data`). Eine alte Zeile `speisekammer.settings` in `household_data` hatte vorgetäuscht, die persönliche Zeile existiere, überschrieb lokale Werte (z. B. Erinnerungszeit) und verhinderte das erste Hochladen. Persönliche Einstellungen werden beim Start dreifach zusammengeführt (lokale Änderungen bleiben, Neues vom Server kommt dazu) und bei Abweichung hochgeladen.
