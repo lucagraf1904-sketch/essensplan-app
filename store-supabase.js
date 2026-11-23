@@ -65,14 +65,14 @@ export const supabaseStore = {
       total_minutes: d.minutes || null, status: d.status === 'gekocht' || d.status === 'uebersprungen' ? d.status : 'geplant' }));
     if (rows.length) must(await sb.from('meal_plan').upsert(rows, { onConflict: 'household_id,date,meal' }));
   },
-  // Rezept per Link (Edge Function „recipe-import“ liest die Seite und deren Rezept-Daten nach schema.org)
+  // Rezept per Link (Edge Function „recipe-import“, im Dashboard unter dem technischen Namen „smooth-worker“ angelegt liest die Seite und deren Rezept-Daten nach schema.org)
   async importRecipe(url) {
-    const { data, error } = await sb.functions.invoke('recipe-import', { body: { url } });
+    const { data, error } = await sb.functions.invoke('smooth-worker', { body: { url } });
     if (error) {
       // Bei Statusfehlern steckt die eigentliche Meldung der Funktion im Response-Objekt
       let msg = error.message; const r = error.context, st = r?.status ? ` (Status ${r.status})` : '';
       try { const t = await r.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; } catch { msg = t || msg; } } catch { /* Antwort nicht lesbar */ }
-      msg = `${String(msg).slice(0, 300)}${st} [v36]`;
+      msg = `${String(msg).slice(0, 300)}${st} [v37]`;
       throw new Error(msg);
     }
     if (data?.error) throw new Error(data.error);
