@@ -15,7 +15,8 @@
 <body>
   <header>
     <h1>Speisekammer</h1>
-    <button id="btn-notify" class="ghost" title="Ablaufwarnungen aktivieren">🔔</button>
+    <span class="head-btns"><button id="btn-ai" class="ghost" title="Küchen-Assistent (KI)">🤖</button>
+    <button id="btn-notify" class="ghost" title="Ablaufwarnungen aktivieren">🔔</button></span>
   </header>
 
   <main>
@@ -42,6 +43,8 @@
       <h2>Kassenbon scannen</h2>
       <p class="muted">Foto vom Papierbon oder Screenshot des digitalen Bons aus Lidl Plus. Die Texterkennung läuft auf dem Handy, nichts wird hochgeladen.</p>
       <label class="btn">📷 Foto wählen<input id="scan-file" type="file" accept="image/*" hidden></label>
+      <label class="btn ai-only">🤖 Foto mit KI einlesen<input id="scan-ai-file" type="file" accept="image/*" hidden></label>
+      <p class="tiny muted ai-only">Genauer bei schlechten Fotos. Das Foto geht dafür an einen KI-Dienst (nur das Bild, ohne Gesundheitsangaben). Die Texterkennung oben bleibt auf dem Handy.</p>
       <p id="scan-status" class="muted"></p>
       <ul id="scan-result" class="list"></ul>
       <div id="scan-actions" class="hidden">
@@ -126,6 +129,11 @@
             <option value="5">5 Tage</option><option value="7">7 Tage</option>
           </select> vor Ablauf
         </label>
+      </details>
+      <details class="set-group" data-group="ai">
+        <summary><span class="set-ico">🤖</span><span class="set-title">KI-Assistent<small id="sum-ai"></small></span></summary>
+        <ul id="settings-ai" class="list settings"></ul>
+        <p class="tiny muted">Chat, Gerichte anpassen und Fotos einlesen laufen über kostenlose KI-Dienste (Text: Cloudflare, Fotos: Mistral). Gesundheitsangaben gehen nur mit, wenn du es bei der einzelnen Anfrage antippst. Fotos gehen nie zusammen mit Gesundheitsangaben weg. Pro Haushalt und Tag sind 40 Text- und 10 Foto-Anfragen möglich.</p>
       </details>
       <details class="set-group" data-group="tips">
         <summary><span class="set-ico">💡</span><span class="set-title">Tipps &amp; Hinweise<small id="sum-tips"></small></span></summary>
@@ -216,11 +224,22 @@
     </div>
   </div>
 
+  <!-- Küchen-Assistent (KI) -->
+  <dialog id="ai-dialog" class="sheet">
+    <div class="ai-head"><h2>🤖 Küchen-Assistent</h2><span><button type="button" id="ai-new" class="ghost tiny">Neu</button><button type="button" id="ai-close" class="ghost">✕</button></span></div>
+    <div id="ai-msgs" class="ai-msgs"></div>
+    <div id="ai-chips" class="tip-alts"></div>
+    <label id="ai-health-row" class="ai-health hidden"><input type="checkbox" id="ai-health"> <span id="ai-health-text"></span></label>
+    <form id="ai-form" class="toolbar"><input id="ai-input" placeholder="Frage zum Essen …" enterkeyhint="send" autocomplete="off"><button class="primary">➤</button></form>
+    <p class="tiny muted">Die Frage und euer Vorrat gehen an einen kostenlosen KI-Dienst (Cloudflare), ohne Namen. Antworten sind Vorschläge, keine ärztliche Beratung.</p>
+  </dialog>
+
   <!-- Artikel-Dialog -->
   <dialog id="item-dialog">
     <form method="dialog" id="item-form">
       <h2 id="item-title">Artikel</h2>
       <button type="button" id="btn-barcode" class="barcode-btn">📷 Barcode scannen</button>
+      <label class="btn ai-only barcode-btn">🤖 Verpackung fotografieren (KI)<input id="pack-ai-file" type="file" accept="image/*" hidden></label>
       <p id="item-nutrition" class="muted tiny"></p>
       <label>Name<input name="name" required></label>
       <label>Packungsgröße<input name="size" placeholder="z. B. 500 g, 1 l, 10 Stk"></label>
@@ -320,6 +339,7 @@
       <div id="rec-tags" class="tip-alts"></div>
       <p class="muted tiny">Wo?</p>
       <div id="rec-place" class="seg wrap"></div>
+      <div class="tip-alts ai-only"><button type="button" class="chip" id="rec-ai">🤖 Mit KI anpassen</button></div>
       <menu>
         <button value="cancel" formnovalidate>Abbrechen</button>
         <button value="save" class="primary">Speichern</button>

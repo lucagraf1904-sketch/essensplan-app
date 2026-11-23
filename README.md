@@ -127,3 +127,12 @@ Aus, solange `HEALTH_ENABLED = false` in config.js. Konzept, Live-Schritte und K
 - **Zutaten anpassen** pro Tag: ersetzen, weglassen, ergänzen. Gilt nur für den Tag (`d.need` im Plan), Vorrat-Abgleich, Einkaufsliste und „Verbraucht?“ folgen. „Im Rezept übernehmen“ schreibt es ins Rezept. Der Tag bleibt beim Neuplanen erhalten; „Anderes Gericht“ verwirft die Anpassung.
 - **Vorschläge** (Gerichte-Tab): Rezeptspeicher + Grundstock (`suggestions.js`, eigene Formulierungen, keine fremden Rezepte), bewertet wie der Plan (Vorrat, Ablauf, Vorlieben, Ausschlüsse). Ausgeblendete Vorschläge nur lokal.
 - **Rezept dazu suchen**: öffnet Chefkoch-Suche mit bis zu 3 Vorrat-Zutaten (URL-Format ungeprüft); Rezept danach per „Per Link“ importieren (braucht die Edge Function `recipe-import`).
+
+
+## KI-Assistent (Chat, Gericht anpassen, Fotos einlesen)
+Über die Edge Function `ai` (`supabase/functions/ai`), nur mit kostenlosen Anbietern: Text über Cloudflare Workers AI, Fotos über Mistral.
+Einrichtung Schritt für Schritt: [anleitung/ai-setup.md](anleitung/ai-setup.md).
+- 🤖 oben: Chat mit Vorrat, Geräten und Vorlieben als Kontext. Antworten sind Vorschläge, keine Beratung.
+- Rezept bearbeiten → „🤖 Mit KI anpassen“ (Knopf-Wünsche), Vorschlag füllt das Formular, gespeichert wird erst nach deiner Prüfung.
+- Gerichte → „📷 Per Foto (KI)“, Bon → „🤖 Foto mit KI einlesen“, Artikel → „🤖 Verpackung fotografieren“.
+- Gesundheitsangaben nur mit Haken pro Anfrage, Fotos nie damit. Tageslimit pro Haushalt: 40 Text, 10 Foto. Schalter: Einstellungen → 🤖 KI-Assistent.

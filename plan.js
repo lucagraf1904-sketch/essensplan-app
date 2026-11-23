@@ -290,6 +290,7 @@ function renderRecipes(body) {
       <button class="chip" data-rec="new">＋ Neues Rezept</button>
       <button class="chip" data-rec="link">🔗 Per Link</button>
       <button class="chip" data-rec="paste">📋 Rezepttext einfügen</button>
+      <button class="chip ai-only" data-rec="photo">📷 Per Foto (KI)</button>
       ${missingStarters ? `<button class="chip" data-rec="starters">Beispielgerichte (${missingStarters})</button>` : ''}</div>
     <input id="rec-q" type="search" placeholder="Rezept suchen …" autocomplete="off" value="${esc(recQ)}">
     <ul class="list rec-list">${l.map(r => `<li data-rec-id="${r.id}" data-q="${esc(recText(r))}" class="${r.paused ? 'paused' : ''}"${recQ && !recText(r).includes(recQ.toLowerCase()) ? ' hidden' : ''}>
@@ -634,6 +635,10 @@ async function recipeAction(kind) {
     try { toast('Rezept wird geladen …'); const data = await ctx.store.importRecipe(url); return confirmImport(recipeFromParts({ ...data, url })); }
     catch (e) { await ctx.ask('Import hat nicht geklappt', esc(e.message) + '<br>Tipp: Rezepttext kopieren und unter „Rezepttext einfügen“ einfügen.', [{ value: 'ok', label: 'OK' }]); return; }
   }
+  if (kind === 'photo') {
+    const parts = await ctx.aiRecipePhoto?.(); if (!parts) return;
+    return confirmImport(recipeFromParts(parts));
+  }
   if (kind === 'paste') {
     const t = await ctx.askInput('Rezepttext einfügen', 'Titel, Zutaten und Zubereitung (von der Webseite kopiert)', '', 'textarea'); if (!t) return;
     const parsed = parseRecipeText(t); if (!parsed) return;
@@ -678,6 +683,19 @@ function openEditor(r) {
     draw();
   };
   f.min.oninput = draw;
+  // KI: Gericht anpassen (Vorschlag füllt das Formular, gespeichert wird erst nach deiner Prüfung)
+  $('#rec-ai').onclick = async () => {
+    const ls = t => t.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const r = await ctx.aiAdapt?.({ title: f.title.value.trim(), ingredients: ls(f.ingredients.value), steps: ls(f.steps.value), min: parseInt(f.min.value) || null, servings: f.servings.value.trim() || null });
+    if (!r) return;
+    if (r.title) f.title.value = r.title;
+    if (r.ingredients?.length) f.ingredients.value = r.ingredients.join('\n');
+    if (r.steps?.length) f.steps.value = r.steps.join('\n');
+    if (r.min) f.min.value = r.min;
+    if (r.servings) f.servings.value = r.servings;
+    draw();
+    await ctx.ask('Vorschlag der KI übernommen', `${esc(r.note || 'Das Gericht wurde angepasst.')}<br><span class="muted tiny">Bitte prüfen (Mengen, Zeiten) und dann speichern. Kalorien sind nicht neu berechnet.</span>`, [{ value: 'ok', label: 'OK', cls: 'primary' }]);
+  };
   const d = $('#rec-dialog');
   d.onclose = () => {
     if (d.returnValue !== 'save' || !f.title.value.trim()) return;

@@ -75,6 +75,7 @@ export const localStore = {
   async listOffers() { return []; },
   async refreshOffers() { throw new Error('Automatische Angebote brauchen Supabase'); },
 
+  async askAi() { throw new Error('Die KI braucht die gemeinsame Datenbank (Supabase) und ist in der Demo nicht verfügbar.'); },
   async listHealth() { return null; }, // Bewegung nur mit Supabase
   async exportAll() { return load(); },
   async importAll(data) {

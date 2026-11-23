@@ -302,3 +302,16 @@ dialog.onb[open] { display: flex; }
 .need-list { list-style: none; padding: 0; margin: 8px 0; }
 .need-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(128,128,128,.25); }
 .need-list li > span { flex: 1; }
+/* KI-Assistent */
+.head-btns { display: inline-flex; gap: 2px; }
+body.no-ai .ai-only, body.no-ai #btn-ai { display: none; }
+.ai-head { display: flex; justify-content: space-between; align-items: center; }
+.ai-head h2 { margin: 0; }
+.ai-msgs { max-height: 46vh; min-height: 90px; overflow-y: auto; display: grid; gap: 8px; margin: 10px 0; -webkit-overflow-scrolling: touch; }
+.ai-msg { padding: 8px 12px; border-radius: 14px; max-width: 92%; line-height: 1.4; font-size: .95rem; }
+.ai-msg.user { justify-self: end; background: rgba(47,111,79,.18); }
+.ai-msg.assistant { justify-self: start; background: rgba(127,127,127,.15); }
+.ai-health { display: flex !important; gap: 8px; align-items: flex-start; font-size: .85rem; margin: 6px 0; }
+.ai-health input { width: auto; margin-top: 3px; }
+#ai-form input { flex: 1; }
+.ai-health.hidden { display: none !important; }

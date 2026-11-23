@@ -79,6 +79,18 @@ export const supabaseStore = {
     return data;
   },
 
+  // KI (Edge Function „ai“): Text, Gericht anpassen, Foto einlesen. Gesundheitsangaben nur, wenn body.health gesetzt ist (pro Anfrage angetippt).
+  async askAi(body) {
+    const { data, error } = await sb.functions.invoke('ai', { body });
+    if (error) {
+      let msg = error.message;
+      try { const t = await error.context.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; } catch { msg = t || msg; } } catch { /* Antwort nicht lesbar */ }
+      throw new Error(String(msg).slice(0, 300));
+    }
+    if (data?.error) throw new Error(data.error);
+    return data;
+  },
+
   // Gemeinsame und persönliche Schlüssel-Werte (shared.js)
   async listShared() { return must(await sb.from('household_data').select('key, value')); },
   async setShared(key, value) { must(await sb.from('household_data').upsert({ household_id: household.id, key, value, updated_at: new Date().toISOString() })); },

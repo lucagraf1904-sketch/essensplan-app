@@ -4,6 +4,7 @@
 const KEY = 'speisekammer.settings', HH_KEY = 'speisekammer.hhSettings';
 
 export const DEFAULT_SETTINGS = {
+  aiOn: true,            // KI-Assistent (Edge Function „ai“): Chat, Gericht anpassen, Fotos einlesen
   tips: true,            // Hauptschalter für alle Tipps und Hinweise
   tipsBread: true,       // Brot, Mehl, Frühstück
   tipsProduce: true,     // Obst und Gemüse
