@@ -181,13 +181,12 @@ function toast(msg) {
 const tabsHtml = s => `<div class="seg wrap plan-views">
   <button type="button" data-view="week" class="${view === 'week' ? 'active' : ''}">📅 Woche</button>
   <button type="button" data-view="recipes" class="${view === 'recipes' ? 'active' : ''}">📖 Gerichte</button>
-  ${s.shiftsOn ? `<button type="button" data-view="shifts" class="${view === 'shifts' ? 'active' : ''}">🕐 Dienstplan</button>` : ''}</div>`;
+  <button type="button" data-view="shifts" class="${view === 'shifts' ? 'active' : ''}">🗓️ Kalender</button></div>`;
 
 export async function render() {
   const el = $('#tab-plan'); if (!el || !ctx) return;
   [items, offers] = await Promise.all([ctx.store.listItems(), ctx.allOffers().catch(() => [])]);
   const s = getSettings();
-  if (view === 'shifts' && !s.shiftsOn) view = 'week';
   el.innerHTML = `<h2>Essensplan</h2>${tabsHtml(s)}<div id="plan-body"></div>`;
   const body = $('#plan-body');
   if (view === 'recipes') return renderRecipes(body);
@@ -298,48 +297,108 @@ function renderRecipes(body) {
 let recQ = '';
 const recText = r => [r.title, ...(r.ingredients ?? []), ...(r.need ?? []).map(n => n[1]), ...(r.tags ?? []).map(t => TAGS[t] ?? t)].join(' ').toLowerCase();
 
-let calMonth = 0, calSel = isoLocal();
+// ---------- Kalender (Luca 23.11.: „wie die Kalender-App auf dem iPhone“) ----------
+let calMonth = 0, calSel = isoLocal(), sheetPerson = '';
+const MONTHS_BACK = -12, MONTHS_AHEAD = 24;
+const persons = me => [me, ...Object.keys(JSON.parse(localStorage.getItem('speisekammer.shifts') ?? '{}')).filter(p => p && p !== me)];
+const initial = p => esc((p || '?').trim().slice(0, 1).toUpperCase());
+const longDate = d => new Date(d + 'T12:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 function calendar(me, s) {
   const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() + calMonth, 1);
   const lead = (first.getDay() + 6) % 7, n = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate(), today = isoLocal();
-  const cells = Array(lead).fill('<span></span>');
+  const ps = persons(me), cells = Array.from({ length: lead }, () => '<span class="cal-d empty"></span>');
   for (let i = 1; i <= n; i++) {
-    const d = isoLocal(new Date(first.getFullYear(), first.getMonth(), i)), code = shiftOf(me, d), sd = shiftDay(me, d);
-    cells.push(`<button type="button" data-cal-day="${d}" class="cal-d${d === today ? ' today' : ''}${d === calSel ? ' sel' : ''}${d < today ? ' past' : ''}${code ? ' has' : ''}">
-      <span class="cal-n">${i}</span><span class="cal-i">${code ? SHIFTS[code].icon : ''}</span><span class="cal-t">${sd ? esc(sd.main || s.dinnerAt) : ''}${sd?.own ? '*' : ''}</span></button>`);
+    const d = isoLocal(new Date(first.getFullYear(), first.getMonth(), i)), wd = (lead + i - 1) % 7;
+    const ev = ps.map(p => ({ p, code: shiftOf(p, d) })).filter(x => x.code);
+    cells.push(`<button type="button" data-cal-day="${d}" class="cal-d${d === today ? ' today' : ''}${d === calSel ? ' sel' : ''}${wd >= 5 ? ' we' : ''}" aria-label="${esc(longDate(d))}">
+      <span class="cal-n">${i}</span>
+      ${ev.slice(0, 3).map(x => `<span class="cal-ev ev-${x.code}">${x.p === me ? SHIFTS[x.code].label : `${initial(x.p)} ${SHIFTS[x.code].label.slice(0, 1)}`}</span>`).join('')}
+      ${ev.length > 3 ? `<span class="cal-more">+${ev.length - 3}</span>` : ''}</button>`);
   }
-  return `<div class="cal-head"><button type="button" class="ghost" data-cal-move="-1" ${calMonth <= -1 ? 'disabled' : ''} aria-label="Voriger Monat">‹</button>
-      <b>${first.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })}</b>
-      <button type="button" class="ghost" data-cal-move="1" ${calMonth >= 3 ? 'disabled' : ''} aria-label="Nächster Monat">›</button></div>
-    <div class="cal-grid">${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(w => `<span class="cal-w">${w}</span>`).join('')}${cells.join('')}</div>
-    <p class="tiny muted">${Object.entries(SHIFTS).map(([, v]) => `${v.icon} ${v.label}`).join(' · ')} · Uhrzeit = Hauptmahlzeit · * = nur an dem Tag geändert</p>`;
+  while (cells.length % 7) cells.push('<span class="cal-d empty"></span>');
+  return `<div class="ical">
+    <div class="ical-top"><div><span class="ical-month">${first.toLocaleDateString('de-DE', { month: 'long' })}</span> <span class="ical-year">${first.getFullYear()}</span></div>
+      <div class="ical-nav"><button type="button" data-cal-today ${calMonth === 0 && calSel === today ? 'disabled' : ''}>Heute</button>
+        <button type="button" data-cal-move="-1" ${calMonth <= MONTHS_BACK ? 'disabled' : ''} aria-label="Voriger Monat">‹</button>
+        <button type="button" data-cal-move="1" ${calMonth >= MONTHS_AHEAD ? 'disabled' : ''} aria-label="Nächster Monat">›</button></div></div>
+    <div class="ical-wd">${['M', 'D', 'M', 'D', 'F', 'S', 'S'].map((w, i) => `<span class="${i >= 5 ? 'we' : ''}">${w}</span>`).join('')}</div>
+    <div class="ical-grid" id="ical-grid">${cells.join('')}</div></div>`;
 }
-function dayPanel(me, d, s, others) {
-  const sd = shiftDay(me, d), long = new Date(d + 'T12:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
-  const adv = sd && s.shiftTips ? mealAdvice(sd, { noFridge: s.workNoFridge, noMicrowave: s.workNoMicrowave, dinnerAt: s.dinnerAt }) : null;
-  return `<div class="card shift-panel"><b>${esc(long)}</b>
-    <div class="seg wrap">${SHIFT_ORDER.filter(Boolean).map(c => `<button type="button" data-shift="${d}" data-code="${c}" class="${shiftOf(me, d) === c ? 'active' : ''}">${SHIFTS[c].icon} ${SHIFTS[c].label}</button>`).join('')}</div>
-    ${sd ? `<div class="tiny">Dienst ${sd.from}–${sd.to} · Essen ${sd.main || s.dinnerAt}${sd.snack ? ` · Pause ${sd.snack}` : ''}${sd.own ? ' <b>(nur an diesem Tag)</b>' : ''}</div>
-      <div class="tip-alts"><button type="button" class="chip" data-shift-day="${d}">⏰ Zeiten an diesem Tag ändern</button>${sd.own ? `<button type="button" class="chip" data-shift-day-reset="${d}">Zurück auf Standard</button>` : ''}</div>
-      ${adv?.tips.length ? `<ul class="tiny shift-tips">${adv.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}`
-    : `<div class="tiny muted">${shiftOf(me, d) === 'X' ? 'Frei: Essen wie gewohnt um ' + esc(s.dinnerAt) + ' Uhr.' : 'Keine Schicht eingetragen.'}</div>`}
-    ${others.map(o => { const od = shiftDay(o, d); return od ? `<div class="tiny muted">${esc(o)}: ${SHIFTS[od.code].icon} ${SHIFTS[od.code].label} ${od.from}–${od.to}, Essen ${od.main || s.dinnerAt}</div>` : ''; }).join('')}</div>`;
+// Liste unter dem Monat wie in der iPhone-App: Einträge des gewählten Tages
+function dayList(me, d, s) {
+  const rows = persons(me).map(p => ({ p, code: shiftOf(p, d), sd: shiftDay(p, d) })).filter(x => x.code);
+  const mine = shiftDay(me, d), adv = mine && s.shiftTips ? mealAdvice(mine, { noFridge: s.workNoFridge, noMicrowave: s.workNoMicrowave, dinnerAt: s.dinnerAt }) : null;
+  return `<div class="ical-day"><div class="ical-day-head"><b>${esc(longDate(d))}</b><button type="button" class="ical-add" data-sheet="${d}" aria-label="Schicht eintragen">＋</button></div>
+    ${rows.map(x => `<button type="button" class="ical-row" data-sheet="${d}" data-sheet-person="${esc(x.p)}"><span class="ical-bar ev-${x.code}"></span>
+      <span class="ical-row-main"><b>${SHIFTS[x.code].icon} ${SHIFTS[x.code].label}${x.code === 'X' ? '' : 'schicht'}</b>${x.p !== me ? ` <span class="muted">· ${esc(x.p)}</span>` : ''}
+      ${x.sd ? `<span class="tiny muted">Dienst ${x.sd.from}–${x.sd.to} · Essen ${x.sd.main || s.dinnerAt}${x.sd.snack ? ` · Pause ${x.sd.snack}` : ''}${x.sd.own ? ' · nur an diesem Tag geändert' : ''}</span>` : `<span class="tiny muted">Essen wie gewohnt um ${esc(s.dinnerAt)} Uhr</span>`}</span>
+      <span class="ical-chev">›</span></button>`).join('') || '<p class="tiny muted ical-empty">Keine Schicht. Tag antippen oder ＋ zum Eintragen.</p>'}
+    ${adv?.tips.length ? `<ul class="tiny shift-tips">${adv.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}</div>`;
 }
 function renderShifts(body) {
   const s = getSettings(), me = s.myName;
+  if (!s.shiftsOn) { body.innerHTML = `<div class="tip hint"><p>Im Kalender tragt ihr Früh-, Spät- und Nachtschichten ein. Der Essensplan richtet Gerichte und Essenszeiten danach.</p><button class="primary" data-shifts-on>Dienstplan einschalten</button></div>`; return; }
   if (!me) { body.innerHTML = `<div class="tip hint"><p>Damit der Plan weiß, wessen Schicht es ist, trag bitte deinen Namen ein.</p><button class="chip" data-shift-name>Namen eintragen</button></div>`; return; }
-  const others = Object.keys(JSON.parse(localStorage.getItem('speisekammer.shifts') ?? '{}')).filter(p => p !== me);
   const t = (code, f, v, allowEmpty) => `<label class="shift-t">${{ from: 'Beginn', to: 'Ende', main: 'Hauptmahlzeit', snack: 'Pause/Dose' }[f]}
     <input type="time" data-conf="${code}" data-f="${f}" value="${esc(v)}">${allowEmpty && v ? `<button type="button" class="ghost tiny" data-conf-clear="${code}" data-f="${f}" aria-label="Leeren">✕</button>` : ''}</label>`;
-  body.innerHTML = `<details class="shift-conf" ${localStorage.getItem('shiftConfOpen') ? 'open' : ''}><summary><b>⏰ Meine Zeiten</b> <span class="tiny muted">Dienst und Essen je Schicht</span></summary>
+  body.innerHTML = `${calendar(me, s)}
+    ${dayList(me, calSel, s)}
+    <details class="shift-conf" ${localStorage.getItem('shiftConfOpen') ? 'open' : ''}><summary><b>⏰ Meine Standardzeiten</b> <span class="tiny muted">Dienst und Essen je Schicht</span></summary>
       ${['F', 'S', 'N'].map(code => { const c = shiftConf(me, code); return `<div class="shift-conf-row"><div class="shift-day">${SHIFTS[code].icon} ${SHIFTS[code].label}</div>
         <div class="shift-times">${t(code, 'from', c.from)}${t(code, 'to', c.to)}${t(code, 'main', c.main, true)}${t(code, 'snack', c.snack, true)}</div>
         ${!c.main ? `<div class="tiny muted">Hauptmahlzeit leer = gemeinsames Abendessen um ${esc(s.dinnerAt)} Uhr.</div>` : ''}</div>`; }).join('')}
-      <p class="tiny muted">Gilt für dich und ist für den Haushalt sichtbar, damit der Plan passt. Einzelne Tage kannst du im Kalender abweichend einstellen.</p></details>
-    <details class="shift-cal" ${localStorage.getItem('shiftCalClosed') ? '' : 'open'}><summary><b>📅 Kalender</b> <span class="tiny muted">Tag antippen, Schicht und Essenszeit eintragen</span></summary>
-      ${calendar(me, s)}</details>
-    ${dayPanel(me, calSel, s, others)}
-    <p class="muted tiny">Der Plan berücksichtigt das: vor der Nachtschicht leichte Gerichte, am Vortag einer Spät- oder Nachtschicht eine Portion mehr für die Dose, die Erinnerung richtet sich nach deiner Essenszeit. ${s.shiftTips ? `Tipps nach ${SHIFT_SOURCES}; abschaltbar unter Einstellungen → Persönlich.` : 'Tipps sind ausgeschaltet (Einstellungen → Persönlich).'} Die vorgegebenen Zeiten sind übliche Pflegezeiten (Annahme). Keine medizinische Beratung.</p>`;
+      <p class="tiny muted">Gilt für dich und ist für den Haushalt sichtbar. Einzelne Tage änderst du im Kalender.</p></details>
+    <p class="muted tiny">Wischen wechselt den Monat. Der Plan berücksichtigt die Schichten: vor der Nachtschicht leichte Gerichte, am Vortag einer Spät- oder Nachtschicht eine Portion mehr für die Dose, die Erinnerung richtet sich nach deiner Essenszeit. ${s.shiftTips ? `Tipps nach ${SHIFT_SOURCES}; abschaltbar unter Einstellungen → Persönlich.` : 'Tipps sind ausgeschaltet (Einstellungen → Persönlich).'} Die vorgegebenen Zeiten sind übliche Pflegezeiten (Annahme). Keine medizinische Beratung.</p>`;
+  const g = $('#ical-grid'); let x0 = null, y0 = 0;
+  g.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  g.addEventListener('touchend', e => {
+    if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { calMonth = Math.max(MONTHS_BACK, Math.min(MONTHS_AHEAD, calMonth + (dx < 0 ? 1 : -1))); render(); }
+  });
+}
+
+// Eintragen-Fenster (Blatt von unten, wie „Neues Ereignis“)
+function sheetEl() {
+  let d = document.getElementById('shift-sheet'); if (d) return d;
+  d = Object.assign(document.createElement('dialog'), { id: 'shift-sheet', className: 'sheet' });
+  document.body.appendChild(d);
+  d.addEventListener('click', async e => {
+    if (e.target === d) return d.close();
+    const b = e.target.closest('button'); if (!b) return;
+    const date = d.dataset.date;
+    if (b.dataset.close != null) return d.close();
+    if (b.dataset.shPerson != null) { sheetPerson = b.dataset.shPerson; return fillSheet(); }
+    if (b.dataset.shAdd != null) { const n = (await ctx.askInput('Person hinzufügen', 'Name, z. B. Mama', ''))?.trim(); if (n) { sheetPerson = n; fillSheet(); } return; }
+    if (b.dataset.shCode) { const cur = shiftOf(sheetPerson, date); setShift(sheetPerson, date, cur === b.dataset.shCode ? '' : b.dataset.shCode); rebuildOpen(); fillSheet(); return render(); }
+    if (b.dataset.shReset != null) { setShiftDay(sheetPerson, date, { from: null, to: null, main: null, snack: null }); rebuildOpen(); fillSheet(); return render(); }
+    if (b.dataset.shDel != null) { setShift(sheetPerson, date, ''); rebuildOpen(); render(); return d.close(); }
+    if (b.dataset.shNext) { d.dataset.date = addDays(date, +b.dataset.shNext); calSel = d.dataset.date; fillSheet(); return render(); }
+  });
+  d.addEventListener('change', e => {
+    const i = e.target.closest('[data-sh-f]'); if (!i) return;
+    setShiftDay(sheetPerson, d.dataset.date, { [i.dataset.shF]: i.value }); rebuildOpen(); fillSheet(); render();
+  });
+  return d;
+}
+function fillSheet() {
+  const d = sheetEl(), date = d.dataset.date, s = getSettings(), me = s.myName, ps = persons(me);
+  if (!ps.includes(sheetPerson)) ps.push(sheetPerson);
+  const code = shiftOf(sheetPerson, date), sd = shiftDay(sheetPerson, date);
+  const f = (k, l, hint) => `<label class="sheet-f"><span>${l}</span><input type="time" data-sh-f="${k}" value="${esc(sd?.[k] ?? '')}">${hint ? `<small class="muted">${hint}</small>` : ''}</label>`;
+  d.innerHTML = `<div class="sheet-head"><button type="button" class="link" data-close>Fertig</button><b>${esc(new Date(date + 'T12:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' }))}</b>
+      <span><button type="button" class="link" data-sh-next="-1" aria-label="Vortag">‹</button><button type="button" class="link" data-sh-next="1" aria-label="Nächster Tag">›</button></span></div>
+    <p class="sheet-label">Wer?</p>
+    <div class="tip-alts">${ps.map(p => `<button type="button" class="chip ${p === sheetPerson ? 'accepted' : ''}" data-sh-person="${esc(p)}">${p === me ? 'Ich' : esc(p)}</button>`).join('')}<button type="button" class="chip" data-sh-add>＋ Person</button></div>
+    <p class="sheet-label">Schicht</p>
+    <div class="sheet-codes">${SHIFT_ORDER.filter(Boolean).map(c => `<button type="button" class="ev-${c} ${code === c ? 'on' : ''}" data-sh-code="${c}"><span>${SHIFTS[c].icon}</span>${SHIFTS[c].label}</button>`).join('')}</div>
+    ${sd ? `<p class="sheet-label">Zeiten an diesem Tag</p><div class="sheet-group">
+        ${f('from', 'Dienstbeginn')}${f('to', 'Dienstende')}${f('main', 'Hauptmahlzeit', sd.main ? '' : `leer = Abendessen ${esc(s.dinnerAt)}`)}${f('snack', 'Pause / Dose', sd.snack ? '' : 'leer = keine')}</div>
+      ${sd.own ? '<button type="button" class="link" data-sh-reset>Zeiten auf Standard zurücksetzen</button>' : '<p class="tiny muted">Standardzeiten der Schicht. Änderungen gelten nur für diesen Tag.</p>'}` : ''}
+    ${code ? '<button type="button" class="link danger" data-sh-del>Eintrag löschen</button>' : ''}`;
+}
+function openSheet(date, person) {
+  const d = sheetEl(); d.dataset.date = date; sheetPerson = person || getSettings().myName; fillSheet();
+  if (!d.open) d.showModal();
 }
 
 // ---------- Aktionen ----------
@@ -362,8 +421,11 @@ async function onClick(e) {
     const p = getPlan(), d = p.days.find(x => daysTo(x.date) === 0), r = recipe(b.dataset.recToday); if (!d || !r) return;
     Object.assign(d, { dinner: r.id, title: r.title, why: ['selbst ausgewählt'] }); savePlan(p); view = 'week'; toast(`🍳 Heute: ${r.title}`); return render();
   }
-  if (b.dataset.calDay) { calSel = b.dataset.calDay; await render(); return document.querySelector('.shift-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
-  if (b.dataset.calMove) { calMonth = Math.max(-1, Math.min(3, calMonth + +b.dataset.calMove)); return render(); }
+  if (b.dataset.calDay) { calSel = b.dataset.calDay; await render(); return openSheet(calSel); }
+  if (b.dataset.sheet) { return openSheet(b.dataset.sheet, b.dataset.sheetPerson); }
+  if (b.dataset.calMove) { calMonth = Math.max(MONTHS_BACK, Math.min(MONTHS_AHEAD, calMonth + +b.dataset.calMove)); return render(); }
+  if ('calToday' in b.dataset) { calMonth = 0; calSel = isoLocal(); return render(); }
+  if ('shiftsOn' in b.dataset) { ctx.setSetting('shiftsOn', true); return render(); }
   if ('shiftName' in b.dataset) { const n = await ctx.askInput('Dein Name', 'Name', ''); if (n) { ctx.setSetting('myName', n); } return render(); }
   if (b.dataset.confClear) { setShiftConf(getSettings().myName, b.dataset.confClear, b.dataset.f, ''); localStorage.setItem('shiftConfOpen', '1'); rebuildOpen(); return render(); }
   if (b.dataset.shiftDay) {

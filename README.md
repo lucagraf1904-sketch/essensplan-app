@@ -38,7 +38,8 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 - Dienstplan (shifts.js, Einstellungen → Persönlich): Früh/Spät/Nacht/Frei je Person; Nacht = leichte Gerichte, Vortag = Portion für die Dose,
   Spätschicht = Erinnerung 11:30 statt Abendessen. Quellen: DGE (DGEwissen 3/2024), gesundheit.gv.at (Stand 10.11.2020), AOK (Stand 28.05.2024).
   Schichtzeiten (6–14, 13:30–21:30, 21–6:30) und die Mittagszeit bei Spätschicht sind Annahmen.
-  Monatskalender im Plan → Dienstplan: Tag antippen, Schicht wählen, Zeiten nur für diesen Tag ändern. „Meine Zeiten“ = Standard je Schichtart
+  Kalender im Stil der iPhone-Kalender-App (Plan → 🗓️ Kalender, Luca 23.11.): Monat mit farbigen Schichten je Person, Wischen, Heute;
+  Tag antippen → Blatt von unten: Person (auch andere, z. B. Mama), Schicht, Zeiten nur für diesen Tag. „Meine Zeiten“ = Standard je Schichtart
   (Beginn, Ende, Hauptmahlzeit, Pause; speisekammer.shiftConf, Haushalt). Tipps nur passend zur Schicht und den eigenen Zeiten, Schalter settings.shiftTips.
 
 ## Gemeinsame Daten mit Supabase einrichten
