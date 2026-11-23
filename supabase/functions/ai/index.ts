@@ -38,6 +38,18 @@ function contextText(c: any, health: string[] | null): string {
   return parts.join('\n');
 }
 
+// Fehler des Anbieters verständlich weitergeben, inklusive der Original-Meldung (gekürzt, ohne Schlüssel), damit die Ursache sichtbar wird.
+// 429 heißt nicht automatisch „Tageskontingent leer“: es kann auch eine kurzfristige Bremse (zu viele Anfragen pro Sekunde/Minute) sein.
+async function providerFail(r: Response, who: string): Promise<Fail> {
+  const raw = (await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 240);
+  console.error(`${who}: HTTP ${r.status} ${raw}`); // nur Status und Fehlertext, keine Inhalte der Anfrage
+  const detail = raw ? ` Meldung des Anbieters: ${raw}` : '';
+  if (r.status === 429) return new Fail(429, `${who} bremst gerade (Status 429, Limit pro Sekunde/Minute oder Kontingent).${detail}`, 'provider-limit');
+  if (r.status === 401 || r.status === 403) return new Fail(502, `${who}: Zugang abgelehnt (Status ${r.status}), Schlüssel oder Rechte prüfen.${detail}`, 'provider-auth');
+  if (r.status === 400 || r.status === 422) return new Fail(502, `${who} lehnt die Anfrage ab (Status ${r.status}), z. B. Modell ohne Bildunterstützung.${detail}`, 'provider-request');
+  return new Fail(502, `${who} antwortet nicht (Status ${r.status}).${detail}`, 'provider');
+}
+
 async function cfChat(messages: { role: string; content: string }[], maxTokens: number): Promise<string> {
   const acc = Deno.env.get('CF_ACCOUNT_ID'), tok = Deno.env.get('CF_API_TOKEN');
   if (!acc || !tok) throw new Fail(503, 'Die KI ist noch nicht eingerichtet (Cloudflare-Zugang fehlt).', 'setup');
@@ -46,8 +58,7 @@ async function cfChat(messages: { role: string; content: string }[], maxTokens: 
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: CF_MODEL(), messages, max_tokens: maxTokens, temperature: 0.4 }),
   }).catch(() => { throw new Fail(502, 'Der KI-Dienst ist gerade nicht erreichbar.', 'provider'); });
-  if (r.status === 429) throw new Fail(429, 'Das Gratis-Kontingent des KI-Dienstes ist für heute aufgebraucht. Morgen geht es weiter.', 'provider-limit');
-  if (!r.ok) throw new Fail(502, `Der KI-Dienst antwortet nicht (${r.status}).`, 'provider');
+  if (!r.ok) throw await providerFail(r, 'KI-Dienst (Cloudflare)');
   const j = await r.json().catch(() => null);
   const t = j?.choices?.[0]?.message?.content ?? j?.result?.response ?? j?.result?.choices?.[0]?.message?.content;
   if (typeof t !== 'string' || !t.trim()) throw new Fail(502, 'Der KI-Dienst hat keine Antwort geliefert.', 'provider');
@@ -65,8 +76,7 @@ async function mistralVision(prompt: string, image: string): Promise<string> {
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: image }] }],
     }),
   }).catch(() => { throw new Fail(502, 'Der Foto-Dienst ist gerade nicht erreichbar.', 'provider'); });
-  if (r.status === 429) throw new Fail(429, 'Das Gratis-Kontingent des Foto-Dienstes ist gerade aufgebraucht. Bitte später noch einmal.', 'provider-limit');
-  if (!r.ok) throw new Fail(502, `Der Foto-Dienst antwortet nicht (${r.status}).`, 'provider');
+  if (!r.ok) throw await providerFail(r, 'Foto-Dienst (Mistral)');
   const j = await r.json().catch(() => null);
   const t = j?.choices?.[0]?.message?.content;
   if (typeof t !== 'string' || !t.trim()) throw new Fail(502, 'Der Foto-Dienst hat keine Antwort geliefert.', 'provider');
