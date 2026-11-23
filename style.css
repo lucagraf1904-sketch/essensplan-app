@@ -327,3 +327,8 @@ dialog input, dialog select, dialog textarea { max-width: 100%; box-sizing: bord
 dialog input[type=date], dialog input[type=time] { width: 100%; -webkit-appearance: none; appearance: none; min-height: 2.6em; }
 dialog:not(.onb):not(.sheet) { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; }
 dialog:not(.onb):not(.sheet) form > menu:last-child { position: sticky; bottom: -16px; background: var(--card); padding: 10px 0 calc(6px + env(safe-area-inset-bottom)); margin-bottom: -16px; }
+/* Lange Texte (z. B. Fehlermeldungen) umbrechen, nie breiter als der Bildschirm (23.11.) */
+dialog { max-width: min(92vw, 440px); overflow-x: hidden; }
+dialog.sheet { max-width: 560px; }
+dialog p, dialog small, dialog span, dialog div, dialog li, dialog label, #ask-text, #item-nutrition, #scan-status { overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.toast { overflow-wrap: anywhere; }

@@ -421,7 +421,7 @@ $('#scan-file').addEventListener('change', async e => {
     const text = await ocrImage(file, p => $('#scan-status').textContent = `Texterkennung läuft … ${p} %`);
     $('#scan-text').value = text;
     handleText(text);
-  } catch (err) { $('#scan-status').textContent = 'Fehler: ' + err.message; }
+  } catch (err) { $('#scan-status').textContent = 'Fehler: ' + shortErr(err.message); }
   e.target.value = '';
 });
 $('#scan-parse').addEventListener('click', () => handleText($('#scan-text').value));
@@ -1364,13 +1364,15 @@ $('#tab-kitchen').addEventListener('change', e => {
 });
 
 // ---------- KI (ai.js): Chat, Gericht anpassen, Fotos einlesen ----------
+// Fehlertexte kürzen: Server-Antworten können lang und ohne Leerzeichen sein (JSON), das sprengt sonst den Dialog
+function shortErr(m, n = 160) { const s = String(m ?? '').replace(/\s+/g, ' ').trim(); try { const j = JSON.parse(s.slice(s.indexOf('{'))); if (j?.error || j?.message) return String(j.error ?? j.message).slice(0, n); } catch { /* kein JSON */ } return s.length > n ? s.slice(0, n) + ' …' : s; }
 document.addEventListener('shared:error', e => toast(`Speichern beim Server fehlgeschlagen: ${String(e.detail.message).slice(0, 120)}`, 6000));
 document.addEventListener('shared:saved', e => { if (e.detail.key === 'speisekammer.settings') toast('Einstellung gespeichert ✓', 1500); });
 function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v44 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v45 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);
@@ -1416,7 +1418,7 @@ $('#scan-ai-file').addEventListener('change', async e => {
       ...d.deposit.map(x => ({ name: x.name, size: '', price: x.price, qty: 1, unit: 'Stk', category: 'Pfand', expiry: '', selected: false, deposit: true }))];
     $('#scan-status').textContent = scanned.length ? `${scanned.length} Positionen von der KI gelesen. Bitte Namen, Preise und Mengen prüfen, Haltbarkeit ist geschätzt.` : 'Keine Positionen erkannt. Versuche ein geraderes Foto.';
     renderScan();
-  } catch (err) { $('#scan-status').textContent = 'Fehler: ' + err.message; }
+  } catch (err) { $('#scan-status').textContent = 'Fehler: ' + shortErr(err.message); }
 });
 $('#pack-ai-file').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
@@ -1430,7 +1432,7 @@ $('#pack-ai-file').addEventListener('change', async e => {
     if (!editing) form.location.value = CATEGORIES[cat]?.location ?? form.location.value;
     if (d.bestBefore) form.expiry.value = d.bestBefore; else if (!editing && !form.expiry.value) form.expiry.value = defaultExpiry(cat);
     msg(`Von der KI gelesen${d.bestBefore ? '' : ', Mindesthaltbarkeit nicht erkannt (geschätzt)'}. Bitte prüfen.`);
-  } catch (err) { msg('Fehler: ' + err.message); }
+  } catch (err) { msg('Foto konnte nicht gelesen werden: ' + shortErr(err.message)); }
 });
 initAi({ store, ask, toast, context: aiContext });
 
