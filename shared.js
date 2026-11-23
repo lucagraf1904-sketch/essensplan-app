@@ -28,7 +28,9 @@ const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 const DIRTY = 'speisekammer.dirty.';
 // Dreiwege-Zusammenführung: base = zuletzt bekannter Stand, mine = meine neue Fassung, theirs = Stand auf dem Server.
 // Was ich nicht geändert habe, kommt vom Server; was ich geändert habe, von mir (bei Objekten bis in die Tiefe).
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// Schlüsselreihenfolge ignorieren: jsonb in der Datenbank sortiert die Schlüssel um, sonst wird das eigene Echo nicht erkannt
+const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(y => [y, x[y]])) : x);
+const same = (a, b) => canon(a) === canon(b);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
 export function merge3(base, mine, theirs) {
   if (!isObj(mine) || !isObj(theirs)) return same(mine, base) ? theirs : mine;
@@ -67,6 +69,12 @@ export async function initShared(store, onChange) {
       const loc = parse(rawGet(key)) ?? {}, diff = Object.keys({ ...loc, ...value }).filter(k => k !== 'health' && JSON.stringify(loc[k]) !== JSON.stringify(value[k]));
       raw('speisekammer.dbg', JSON.stringify({ at: new Date().toISOString(), diff: diff.map(k => `${k}: lokal ${JSON.stringify(loc[k])} → Server ${JSON.stringify(value[k])}`).slice(0, 6) }));
     }
+    if (key === 'speisekammer.plan' && parse(rawGet(key))?.days) { // Plan: lokal neuere Tage nicht durch älteren Serverstand ersetzen
+      const loc = parse(rawGet(key)), m = mergePlan(null, loc, value);
+      raw(key, JSON.stringify(m));
+      if (!same(m, value)) push(key, m, null).catch(e => console.warn('Abgleich', key, e));
+      continue;
+    }
     raw(key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key)))));
   }
   for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
@@ -86,7 +94,7 @@ export async function initShared(store, onChange) {
   // Eigene Schreibzugriffe: nacheinander senden (nur der neueste Wert zählt) und das Echo vom Server nicht zurückspielen,
   // sonst überschreibt ein verspätetes Echo eines älteren Wertes die aktuelle Einstellung (Uhrzeit sprang zurück, 23.11.)
   const mine = new Map(), busy = new Set(), pending = new Map(), bases = new Map();
-  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(json); mine.set(key, l.slice(-30)); };
+  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(canon(parse(json))); mine.set(key, l.slice(-30)); };
   async function send(key, value, fn) {
     pending.set(key, value);
     if (busy.has(key)) return;
@@ -152,8 +160,9 @@ export async function initShared(store, onChange) {
   store.onShared((scope, key, value) => {
     if (!kind(key)) return;
     if (!MERGE_KEYS.includes(key) && kind(key) === 'hh' && (busy.has(key) || rawGet(DIRTY + key))) return; // eigene Änderung noch unterwegs: wird beim Senden zusammengeführt
-    if (!MERGE_KEYS.includes(key) && (mine.get(key) ?? []).includes(JSON.stringify(kind(key) === 'me' ? strip(key, value) : value))) return; // eigenes Echo
-    const v = JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
+    if (!MERGE_KEYS.includes(key) && (mine.get(key) ?? []).includes(canon(kind(key) === 'me' ? strip(key, value) : value))) return; // eigenes Echo
+    const locPlan = key === 'speisekammer.plan' ? parse(rawGet(key)) : null;
+    const v = JSON.stringify(locPlan?.days && value?.days ? mergePlan(null, locPlan, value) : MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
     raw(key, v); onChange?.(key);
   });
