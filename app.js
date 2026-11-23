@@ -744,6 +744,7 @@ $('#gate-verify').addEventListener('click', () => guard(async () => {
   await store.verifyCode($('#gate-email').value.trim(), $('#gate-code').value.trim()); await start();
 }));
 $('#gate-create').addEventListener('click', () => guard(async () => { await store.createHousehold($('#gate-hh-name').value); await start(); }));
+// Fehler beim Start (z. B. Haushalt nicht lesbar) sichtbar machen statt wieder nach dem Haushalt zu fragen
 $('#gate-join').addEventListener('click', () => guard(async () => { await store.joinHousehold($('#gate-join-code').value); await start(); }));
 $('#btn-logout')?.addEventListener('click', async () => { await store.signOut(); location.reload(); });
 
@@ -1336,7 +1337,7 @@ $('#tab-kitchen').addEventListener('change', e => {
 renderSettings();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-start();
+start().catch(e => { showGate('email'); gateMsg('Fehler beim Start: ' + e.message); });
 // Ausschluss-Knopf in Einkaufs-Tipps (z. B. Grapefruit): wirkt nur durch eigenen Tipp
 document.addEventListener('click', e => {
   const ex = e.target.closest('#shop-list [data-excl]'); if (!ex) return;

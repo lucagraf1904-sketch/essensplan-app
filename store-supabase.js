@@ -25,9 +25,14 @@ export const supabaseStore = {
   async init() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return { needsLogin: true };
-    const { data } = await sb.from('members').select('household_id, households(*)').eq('user_id', session.user.id).maybeSingle();
-    if (!data) return { needsHousehold: true };
-    household = data.households;
+    // Zuerst nur die Mitgliedschaft, dann den Haushalt getrennt (der verschachtelte Abruf lieferte bei Luca 23.11. nichts)
+    const m = await sb.from('members').select('household_id').eq('user_id', session.user.id).maybeSingle();
+    if (m.error) throw new Error('Mitgliedschaft lesen: ' + m.error.message);
+    if (!m.data) return { needsHousehold: true };
+    const h = await sb.from('households').select('*').eq('id', m.data.household_id).maybeSingle();
+    if (h.error) throw new Error('Haushalt lesen: ' + h.error.message);
+    if (!h.data) throw new Error('Mitglied in Haushalt ' + m.data.household_id + ', aber der Haushalt ist nicht lesbar (Zugriffsregeln, schema.sql erneut ausführen).');
+    household = h.data;
     return { ready: true };
   },
 
