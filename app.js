@@ -878,22 +878,22 @@ const offerTag = (o, acc) => `<div class="offer-tag">🏷️ ${esc(chainName(o.c
   ${acc.has(o.id) ? `<button class="chip accepted" data-accept="${o.id}">✓ angenommen</button>` : `<button class="chip" data-accept="${o.id}">Annehmen</button>`}</div>`;
 
 // Automatische Angebote einmal am Tag holen (nur mit Supabase)
-let refreshing = false;
+let refreshing = false, offerErr = '';
 async function refreshOffers(force = false) {
   const st = getSettings();
   if (store.mode !== 'supabase' || refreshing || (!force && (!st.autoOffers || localStorage.getItem('lastOfferRefresh') === isoLocal(new Date())))) return;
-  refreshing = true; renderOfferAuto('Angebote werden gesucht …');
+  refreshing = true; offerErr = ''; renderOfferAuto('Angebote werden gesucht …');
   try {
     await store.refreshOffers(loadShop().filter(i => !i.done).map(i => i.name));
     localStorage.setItem('lastOfferRefresh', isoLocal(new Date()));
     renderOfferAuto();
-  } catch (err) { renderOfferAuto(`Suche fehlgeschlagen: ${err.message}`); }
+  } catch (err) { offerErr = `Suche fehlgeschlagen: ${err.message}`; renderOfferAuto(); }
   finally { refreshing = false; renderShop(); }
 }
 function renderOfferAuto(msg) {
   const st = getSettings(), last = localStorage.getItem('lastOfferRefresh');
   $('#offer-auto').innerHTML = store.mode === 'supabase'
-    ? `<p class="muted tiny">${msg ? esc(msg) : st.autoOffers ? `Automatisch über Marktguru (inoffiziell), täglich.${last ? ` Zuletzt: ${fmtDate(last)}.` : ''}` : 'Automatische Suche ist in den Einstellungen aus.'}</p>
+    ? `<p class="muted tiny">${offerErr ? `<b class="offer-err">${esc(offerErr)}</b>` : ''} ${msg ? esc(msg) : st.autoOffers ? `Automatisch über Marktguru (inoffiziell), täglich.${last ? ` Zuletzt: ${fmtDate(last)}.` : ''}` : 'Automatische Suche ist in den Einstellungen aus.'}</p>
        <button id="offer-refresh" ${refreshing ? 'disabled' : ''}>🔄 Angebote jetzt suchen</button>`
     : '<p class="muted tiny">Automatische Angebote (Marktguru) laufen erst, wenn Supabase eingerichtet ist. Bis dahin: Angebote selbst eintragen.</p>';
 }
@@ -1372,7 +1372,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v50 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v51 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

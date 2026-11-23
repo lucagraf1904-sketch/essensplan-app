@@ -357,3 +357,4 @@ details.more[open] { display: block; width: 100%; }
 details.more > summary.chip { padding: 8px 12px; font-size: .9rem; border-radius: 99px; border: 1px solid var(--line); background: var(--card); }
 .chip.main-act { background: var(--green); color: #fff; border-color: var(--green); }
 .plan-day .tip-alts { align-items: flex-start; }
+.offer-err { display: block; color: var(--red); user-select: text; margin-bottom: 4px; }
