@@ -241,3 +241,5 @@ nav button span { font-size: .68rem; }
 .shift-panel { margin: .6rem 0; padding: .6rem; border: 1px solid rgba(127,127,127,.25); border-radius: 10px; }
 .shift-tips { margin: .3rem 0 0 1rem; padding: 0; }
 .rec-list li[hidden] { display: none; }
+.tip-more summary { cursor: pointer; font-size: .85rem; margin-top: .3rem; }
+.good-note .tip-more { margin-top: .2rem; }

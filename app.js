@@ -6,11 +6,12 @@ import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnSho
 import { initShared } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
 import { initPlan } from './plan.js';
-import { CARDS, GROUPS, MEDS_SOURCE, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
+import { CARDS, GROUPS, SOURCES as MED_SOURCES, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
 import { shiftOf, shiftDay, SHIFTS } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
-import { tipFor, listHints, SOURCE } from './tips.js';
+import { tipFor, listHints, SOURCE, ARZT } from './tips.js';
+const moreHtml = t => t?.more?.length ? `<details class="tip-more"><summary>Mehr dazu</summary>${t.more.map(m => `<p class="tiny">${esc(m)}</p>`).join('')}${t.doc ? `<p class="tiny muted">${esc(ARZT)}</p>` : ''}</details>` : '';
 import { conditionLabel, searchConditions, conditionTags } from './conditions.js';
 import { initHealth } from './health.js';
 import { monthReport, productKey, pretty, ymOf, toCSV, parseSize } from './balance.js';
@@ -970,7 +971,7 @@ async function renderShop() {
       <div class="shop-row">
         <button class="shop-check" aria-label="Abhaken">${i.done ? '☑️' : '⬜'}</button>
         <div class="main"><div class="name">${esc(i.name)}${t?.good && st.showGoodNote ? ' <span class="good-tag">✓ gute Wahl</span>' : ''}</div>
-          ${t?.good && t.text && st.showGoodNote ? `<div class="good-note">${esc(t.text)}</div>` : ''}
+          ${t?.good && t.text && st.showGoodNote ? `<div class="good-note">${esc(t.text)}${moreHtml(t)}</div>` : ''}
           ${!i.done && st.showOfferTags ? offersFor(i.name, offers).slice(0, 3).map(o => offerTag(o, acc)).join('') : ''}</div>
         ${!i.done && byAisle ? `<button class="ghost" data-set-aisle="${i.id}" aria-label="Abteilung ändern" title="Abteilung ändern">🧭</button>` : ''}
         ${!i.done ? '<button class="ghost shop-offer" aria-label="Angebot eintragen" title="Angebot eintragen">🏷️</button>' : ''}
@@ -980,6 +981,8 @@ async function renderShop() {
         <b>💡 ${esc(t.title)}</b><p>${esc(t.text)}</p>
         ${t.alts ? `<p class="tiny muted">${t.add ? 'Dazu auf die Liste:' : 'Stattdessen:'}</p>${altButtons(t.alts, t.add ? 'data-add' : 'data-alt')}` : ''}
         ${t.details ? `<details><summary>Worauf beim Brot achten</summary><ul>${t.details.map(d => `<li>${esc(d)}</li>`).join('')}</ul></details>` : ''}
+        ${t.excl ? `<p class="tiny muted">${esc(EXCLUDE_NOTE)}</p><div class="tip-alts">${t.excl.map(([w, l]) => exclBtn(w, l, 'Tipp')).join('')}</div>` : ''}
+        ${moreHtml(t)}
         <button class="tip-keep">Behalten, Tipp ausblenden</button>
       </div>` : ''}
     </li>`;
@@ -990,7 +993,7 @@ async function renderShop() {
   const open = list.filter(i => !i.done).map(i => i.name);
   const hidden = hiddenHints();
   const hints = listHints(open, tipsOn).filter(h => !hidden.includes(h.key));
-  $('#shop-hints').innerHTML = hints.map(h => `<div class="tip hint"><b>💡 ${esc(h.title)}</b><p>${esc(h.text)}</p>${altButtons(h.alts, 'data-add')}
+  $('#shop-hints').innerHTML = hints.map(h => `<div class="tip hint"><b>💡 ${esc(h.title)}</b><p>${esc(h.text)}</p>${altButtons(h.alts, 'data-add')}${moreHtml(h)}
     <button class="tip-keep" data-hide-hint="${esc(h.key)}">Diese Woche ausblenden</button></div>`).join('');
   $('#shop-source').textContent = st.tips && (open.some(n => tipFor(n, tipsOn)) || hints.length) ? 'Tipps: ' + SOURCE : '';
 
@@ -1163,7 +1166,7 @@ function renderMeds() {
   const rest = CARDS.filter(c => !mine.includes(c));
   const card = c => `<div class="tip med-card"><b>${esc(c.title)}</b>${c.groups.length ? `<p class="tiny muted">Betrifft: ${c.groups.map(g => esc(GROUPS[g])).join('; ')}</p>` : ''}
     <p>${esc(c.text)}</p>${c.exclude ? `<div class="tip-alts">${c.exclude.map(([w, l]) => exclBtn(w, l, 'Info-Karte')).join('')}</div>` : ''}
-    <p class="tiny muted">Allgemeine Information, keine persönliche Beratung. Quelle: <a href="${MEDS_SOURCE.url}" target="_blank" rel="noopener">${esc(MEDS_SOURCE.label)}</a> (Stand ${MEDS_SOURCE.stand}, geprüft ${MEDS_SOURCE.checked})</p></div>`;
+    <p class="tiny muted">Allgemeine Information, keine persönliche Beratung. Quelle: ${(q => `<a href="${q.url}" target="_blank" rel="noopener">${esc(q.label)}</a> (Stand ${esc(q.stand)}, geprüft ${q.checked})`)(MED_SOURCES[c.src] ?? MED_SOURCES.vz)}</p></div>`;
   el.innerHTML = `<p class="tiny muted">Allgemeine Hinweise, welche Lebensmittel bestimmte Arzneimittelgruppen beeinflussen können. Die App ändert deinen Essensplan dadurch nicht. ${esc(EXCLUDE_NOTE)}</p>
     <ul class="list settings"><li class="switch-row"><label class="main"><span>Meine Wirkstoffgruppen zuerst zeigen<br><small class="muted">Freiwillig, nur auf diesem Handy gespeichert. Filtert nur die Karten.</small></span>
       <input type="checkbox" role="switch" class="switch" id="meds-filter" ${m.filter ? 'checked' : ''}></label></li></ul>
@@ -1334,3 +1337,8 @@ renderSettings();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 start();
+// Ausschluss-Knopf in Einkaufs-Tipps (z. B. Grapefruit): wirkt nur durch eigenen Tipp
+document.addEventListener('click', e => {
+  const ex = e.target.closest('#shop-list [data-excl]'); if (!ex) return;
+  toggleExclude(ex.dataset.excl, ex.dataset.exclLabel, ex.dataset.exclFrom); renderShop();
+});

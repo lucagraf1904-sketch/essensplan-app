@@ -32,6 +32,8 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 - Essen und Medikamente (meds.js, Einstellungen → 💊): allgemeine Info-Karten in eigenen Worten nach Verbraucherzentrale (Stand 25.07.2025),
   Hinweis beim ersten Öffnen, optionaler Filter nach Wirkstoffgruppen (nur auf dem Gerät). Grundregel (Luca 23.11.): Erkrankungen und Medikamente
   ändern den Plan nie automatisch; Lebensmittel werden nur per eigenem Tipp ausgeschlossen (settings.planExclude, Haushalt, ohne Grund gespeichert).
+  Abgleich 23.11. mit der Nachprüfung (Übermäßiger Verzehr, Abschnitt 7.2): Karten ohne Zeitangaben, Quelle je Karte (SOURCES), „nicht bestätigt“ entfernt
+  (Milch/Antibiotika, Koffein); nur von der VZ genannte Karten bleiben mit VZ-Quelle. Tipps: „Mehr dazu“ (more) mit Arztzeile, Gicht/Vitamin K/Grapefruit.
   Nicht gebaut: persönliche Warnungen, Dosis, Einnahme-Erinnerungen. Rechtliche Einordnung: recherche/reports/Medikamenten-Infos rechtlich absichern.md.
 - Dienstplan (shifts.js, Einstellungen → Persönlich): Früh/Spät/Nacht/Frei je Person; Nacht = leichte Gerichte, Vortag = Portion für die Dose,
   Spätschicht = Erinnerung 11:30 statt Abendessen. Quellen: DGE (DGEwissen 3/2024), gesundheit.gv.at (Stand 10.11.2020), AOK (Stand 28.05.2024).
