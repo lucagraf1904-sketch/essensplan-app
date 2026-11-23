@@ -142,3 +142,9 @@ Einrichtung Schritt für Schritt: [anleitung/ai-setup.md](anleitung/ai-setup.md)
 - Nachfragen zu eigenen Zeiten (persönlich, Standard 12:45 Frühstück, 18:30 Abendessen, einzeln abschaltbar unter Einstellungen → Vorrat). App offen: Dialog mit Zählern; App im Hintergrund: Mitteilung, falls erlaubt. Danach folgt wie bisher „Alles aufgegessen?“ (Reste).
 - Per Hand: Artikel antippen → „🍞 Teile entnehmen“. Im Plan fragt „Gekocht“ bei Packungen mit Teilen nach der Menge statt „aufgebraucht ja/nein“.
 - Nachfragen laufen nur, solange die App geöffnet ist oder die Mitteilung angetippt wird (kein Server-Push dafür).
+
+## Abgleich zwischen den Handys (23.11.)
+- Geteilt (Haushalt, `HOUSEHOLD_KEYS` in shared.js): Vorrat und Verlauf (Tabellen items/log, live), Einkaufsliste und Gerichte (eintragsweise), Wochenplan (tageweise, neuester Tag gewinnt), Dienstplan, Zeiten je Schichtart, Packungs-Teile, Mindestbestand, Haushalts-Einstellungen (Wochenziele, Ausschlüsse), Utensilien, Angebote, Ablaufwarn-Tage, ausgeblendete Vorschläge.
+- Pro Person (`MEMBER_KEYS`, member_data): persönliche Einstellungen (Anzeige, Erinnerungs- und Nachfragezeiten, Name), Gewicht.
+- Nur lokal: Gesundheitsangaben und Medikamenten-Filter (Art. 9 DSGVO), Trinkzähler, Barcode-Zwischenspeicher, kleine Merker (Hinweise ausgeblendet, „heute schon gefragt“).
+- Konflikte: vor jedem Schreiben holt die App den Serverstand und führt per Dreiwege-Vergleich zusammen (`merge3`); nur wirklich geänderte Felder überschreiben. Der Plan wird tageweise über die Änderungszeit `t` zusammengeführt. Eigenes Echo wird ignoriert, ungesendete Änderungen gehen beim Start vor.

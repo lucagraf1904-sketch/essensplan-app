@@ -33,7 +33,11 @@ const BREAKFASTS = [
 
 let ctx = null, view = 'week', items = [], offers = [];
 const loadPlan = () => { try { return JSON.parse(localStorage.getItem(PLAN_KEY)); } catch { return null; } };
+const stable = d => JSON.stringify(Object.fromEntries(Object.entries(d).filter(([k]) => k !== 't').sort(([a], [b]) => a.localeCompare(b))));
 function savePlan(p) {
+  // Änderungszeit je Tag (t): Beim Abgleich mit dem anderen Handy gewinnt der zuletzt geänderte Tag
+  const oldDays = loadPlan()?.days ?? [];
+  for (const d of p.days) { const o = oldDays.find(x => x.date === d.date); d.t = o && stable(o) === stable(d) ? (o.t ?? 0) : Date.now(); }
   localStorage.setItem(PLAN_KEY, JSON.stringify(p));
   // Für pünktliche Push-Erinnerungen (Edge Function „reminders“ liest meal_plan)
   ctx?.store?.savePlanRows?.(p.days.map(d => { const m = mealOf(d); return { date: d.date, title: m.title, method: m.method, minutes: m.min, status: d.status }; })).catch?.(e => console.warn('Plan-Abgleich', e));

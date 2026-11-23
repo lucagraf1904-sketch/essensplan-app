@@ -94,6 +94,7 @@ export const supabaseStore = {
 
   // Gemeinsame und persönliche Schlüssel-Werte (shared.js)
   async listShared() { return must(await sb.from('household_data').select('key, value')); },
+  async getShared(key) { const r = must(await sb.from('household_data').select('value').eq('key', key).maybeSingle()); return r?.value ?? null; },
   async setShared(key, value) { must(await sb.from('household_data').upsert({ household_id: household.id, key, value, updated_at: new Date().toISOString() })); },
   async mergeList(key, items) { return must(await sb.rpc('merge_list', { p_key: key, p_items: items })); },
   async listMine() { return must(await sb.from('member_data').select('key, value')); },

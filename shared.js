@@ -6,7 +6,7 @@
 // Haushaltsweit: alle sehen dasselbe
 export const HOUSEHOLD_KEYS = [
   'speisekammer.hhSettings',     // Einstellungen für alle (inkl. Anzeige-Standard)
-  'speisekammer.minStock', 'speisekammer.minPending', 'speisekammer.parts',
+  'speisekammer.minStock', 'speisekammer.minPending', 'speisekammer.parts', 'speisekammer.recHidden',
   'speisekammer.utensils', 'warnDays',
   'speisekammer.offers', 'speisekammer.acceptedOffers',
   'speisekammer.shopping',       // Einkaufsliste (eintragsweise zusammengeführt)
@@ -26,6 +26,32 @@ const kind = k => HOUSEHOLD_KEYS.includes(k) ? 'hh' : MEMBER_KEYS.includes(k) ? 
 const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 
 const DIRTY = 'speisekammer.dirty.';
+// Dreiwege-Zusammenführung: base = zuletzt bekannter Stand, mine = meine neue Fassung, theirs = Stand auf dem Server.
+// Was ich nicht geändert habe, kommt vom Server; was ich geändert habe, von mir (bei Objekten bis in die Tiefe).
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+export function merge3(base, mine, theirs) {
+  if (!isObj(mine) || !isObj(theirs)) return same(mine, base) ? theirs : mine;
+  const b = isObj(base) ? base : {}, out = {};
+  for (const k of new Set([...Object.keys(mine), ...Object.keys(theirs), ...Object.keys(b)])) {
+    const m = mine[k], t = theirs[k], o = b[k];
+    let v;
+    if (same(m, o)) v = t;                       // von mir unverändert: Stand des anderen Handys
+    else if (isObj(m) && isObj(t)) v = merge3(o, m, t);
+    else v = m;                                  // von mir geändert (oder gelöscht)
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+// Essensplan: Tage einzeln zusammenführen, der zuletzt geänderte Tag (t) gewinnt
+export function mergePlan(base, mine, theirs) {
+  if (!mine?.days || !theirs?.days) return mine ?? theirs;
+  const first = mine.days[0]?.date ?? '', by = new Map();
+  for (const d of theirs.days) if (d.date >= first) by.set(d.date, d);
+  for (const d of mine.days) { const o = by.get(d.date); if (!o || (d.t ?? 0) >= (o.t ?? 0)) by.set(d.date, d); }
+  return { ...mine, days: [...by.values()].sort((a, b) => a.date.localeCompare(b.date)) };
+}
+const MERGERS = { 'speisekammer.plan': mergePlan };
 export async function initShared(store, onChange) {
   if (!store.listShared) return;
   const raw = Storage.prototype.setItem.bind(localStorage);
@@ -52,14 +78,14 @@ export async function initShared(store, onChange) {
   // 2) Schreibzugriffe abfangen
   localStorage.setItem = (key, value) => {
     const k = kind(key);
-    const before = k && MERGE_KEYS.includes(key) ? parse(rawGet(key)) : null;
+    const before = k ? parse(rawGet(key)) : null;
     raw(key, value);
     if (k) push(key, parse(value), before).catch(e => console.warn('Abgleich', key, e));
   };
 
   // Eigene Schreibzugriffe: nacheinander senden (nur der neueste Wert zählt) und das Echo vom Server nicht zurückspielen,
   // sonst überschreibt ein verspätetes Echo eines älteren Wertes die aktuelle Einstellung (Uhrzeit sprang zurück, 23.11.)
-  const mine = new Map(), busy = new Set(), pending = new Map();
+  const mine = new Map(), busy = new Set(), pending = new Map(), bases = new Map();
   const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(json); mine.set(key, l.slice(-30)); };
   async function send(key, value, fn) {
     pending.set(key, value);
@@ -77,7 +103,19 @@ export async function initShared(store, onChange) {
   }
   async function push(key, value, before) {
     if (kind(key) === 'me') return send(key, strip(key, value), v => store.setMine(key, v));
-    if (!MERGE_KEYS.includes(key)) return send(key, value, v => store.setShared(key, v));
+    if (!MERGE_KEYS.includes(key)) {
+      // Haushaltsdaten: vor dem Schreiben den Stand des anderen Handys holen und beide Änderungen zusammenführen (nichts überschreiben)
+      if (!bases.has(key)) bases.set(key, before);
+      return send(key, value, async v => {
+        const theirs = await store.getShared(key);
+        const merged = theirs == null ? v : (MERGERS[key] ?? merge3)(bases.get(key), v, theirs);
+        const json = JSON.stringify(merged);
+        remember(key, json);
+        if (json !== JSON.stringify(v)) { raw(key, json); onChange?.(key); }
+        await store.setShared(key, merged);
+        bases.set(key, merged);
+      });
+    }
     // Liste: nur geänderte und gelöschte Einträge schicken
     const now = Date.now(), old = new Map((Array.isArray(before) ? before : []).map(x => [x.id, x]));
     const changed = [];
@@ -96,6 +134,7 @@ export async function initShared(store, onChange) {
   // 3) Änderungen vom anderen Handy
   store.onShared((scope, key, value) => {
     if (!kind(key)) return;
+    if (!MERGE_KEYS.includes(key) && kind(key) === 'hh' && (busy.has(key) || rawGet(DIRTY + key))) return; // eigene Änderung noch unterwegs: wird beim Senden zusammengeführt
     if (!MERGE_KEYS.includes(key) && (mine.get(key) ?? []).includes(JSON.stringify(kind(key) === 'me' ? strip(key, value) : value))) return; // eigenes Echo
     const v = JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
