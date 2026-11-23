@@ -3,7 +3,7 @@ import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
 import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
-import { initShared } from './shared.js';
+import { initShared, HOUSEHOLD_KEYS, MEMBER_KEYS, MERGE_KEYS, mergePlan } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
 import { initPlan } from './plan.js';
 import { CARDS, GROUPS, SOURCES as MED_SOURCES, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
@@ -1274,6 +1274,7 @@ function renderChoices(s) {
   }
   const info = { off: 'Getränke werden wie alles andere behandelt.', a: 'Haltbarkeit je Verpackung, Knopf „Geöffnet“, eigene Zeile in der Bilanz.',
     b: 'Wie A, dazu kcal beim Abhaken (nur mit Nährwerten aus dem Barcode-Scan).', c: 'Wie B, dazu ein Trinkzähler im Vorrat (pro Handy, also pro Person).' };
+  $('#settings-budget').insertAdjacentHTML('beforeend', '<li class="switch-row"><button type="button" class="primary" data-save-all>💾 Jetzt speichern und mit dem Server abgleichen</button></li>');
   $('#settings-drinks').insertAdjacentHTML('beforeend', `<li class="tiny muted">${esc(info[s.drinks] ?? info.a)} Beim Zurückschalten geht nichts verloren, es wird nur ausgeblendet.</li>`);
 }
 function renderSettings() {
@@ -1352,6 +1353,37 @@ $('#tab-kitchen').addEventListener('click', async e => {
   setSetting(b.dataset.choice, /^\d+$/.test(v) ? +v : v);
   renderSettings(); renderPantry();
 });
+// Erzwungenes Speichern: schreibt Haushalts- und persönliche Einstellungen direkt zum Server, liest zurück und zeigt, was dort steht
+async function saveAllNow(btn) {
+  if (store.mode !== 'supabase') return toast('Ohne Supabase liegt alles nur auf diesem Gerät, es ist gespeichert ✓');
+  const old = btn?.textContent; if (btn) { btn.disabled = true; btn.textContent = 'Speichere …'; }
+  const raw = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+  const bad = [], okKeys = [];
+  try {
+    for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
+      if (MERGE_KEYS.includes(key)) continue;          // Listen werden eintragsweise gesendet
+      const local = raw(key); if (local == null) continue;
+      try {
+        let send;
+        if (MEMBER_KEYS.includes(key)) { const { health, ...rest } = local; send = rest; await store.setMine(key, send); }
+        else {
+          const theirs = await store.getShared(key);
+          send = key === 'speisekammer.plan' ? mergePlan(null, local, theirs ?? local) : (theirs && typeof theirs === 'object' && !Array.isArray(theirs) && typeof local === 'object' && !Array.isArray(local) ? { ...theirs, ...local } : local);
+          await store.setShared(key, send);
+        }
+        const back = MEMBER_KEYS.includes(key) ? (await store.listMine()).find(r => r.key === key)?.value : await store.getShared(key);
+        const want = key === 'speisekammer.hhSettings' ? ['budget', 'budgetWarnPct'] : [];
+        const wrong = want.filter(f => JSON.stringify(back?.[f]) !== JSON.stringify(send?.[f]));
+        if (wrong.length || back == null) bad.push(`${key.replace('speisekammer.', '')}: Server hat ${wrong.length ? wrong.map(f => `${f} = ${JSON.stringify(back?.[f])}`).join(', ') : 'nichts'}`);
+        else okKeys.push(key);
+      } catch (e) { bad.push(`${key.replace('speisekammer.', '')}: ${String(e?.message ?? e).slice(0, 80)}`); }
+    }
+    const hh = await store.getShared('speisekammer.hhSettings');
+    if (bad.length) toast(`⚠️ Nicht alles gespeichert: ${bad.join(' | ')}`, 9000);
+    else toast(`✓ Gespeichert. Server: Budget ${hh?.budget > 0 ? hh.budget + ' €' : 'aus'}, Warnen ab ${hh?.budgetWarnPct ?? 80} %`, 5000);
+  } finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-save-all]'); if (b) saveAllNow(b); });
 $('#tab-kitchen').addEventListener('change', e => {
   if (e.target.id === 'meds-filter') { saveMeds({ ...loadMeds(), filter: e.target.checked }); return renderSettings(); }
   if (e.target.classList.contains('switch')) setSetting(e.target.dataset.k, e.target.checked);
@@ -1388,7 +1420,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v60 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v61 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

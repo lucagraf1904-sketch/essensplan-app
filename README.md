@@ -166,3 +166,6 @@ Jede Änderung an Haushaltsdaten (Plan, Rezepte, Einkaufsliste, Einstellungen f�
 
 ## v60: Persönliche Einstellungen beim Start
 Beim Start zählen Serverzeilen nur noch aus der richtigen Tabelle (Haushalt: `household_data`, persönlich: `member_data`). Eine alte Zeile `speisekammer.settings` in `household_data` hatte vorgetäuscht, die persönliche Zeile existiere, überschrieb lokale Werte (z. B. Erinnerungszeit) und verhinderte das erste Hochladen. Persönliche Einstellungen werden beim Start dreifach zusammengeführt (lokale Änderungen bleiben, Neues vom Server kommt dazu) und bei Abweichung hochgeladen.
+
+## v61: Speichern-Knopf
+Einstellungen → oben und unter „Budget": „💾 Jetzt speichern und mit dem Server abgleichen". Schreibt Haushalts- und persönliche Einstellungen (ohne Listen) direkt zum Server, liest zurück und zeigt, was dort steht (Budget, Warnschwelle) oder welcher Schlüssel nicht ankam. Ohne Supabase (Demo) liegt alles auf dem Gerät.
