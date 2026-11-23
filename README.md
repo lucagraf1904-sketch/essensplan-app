@@ -27,6 +27,10 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
 - Essensplan (plan.js, recipes.js): Wochenplan aus eigenen Gerichten (oder 14 Beispielgerichten), bald Ablaufendes, Vorrat,
   Angebote, Lieblingsgerichte, lange nicht Gegessenes, 2× Fisch / max. 2× Rind, Reste. „Gekocht“ fragt, was verbraucht wurde.
   Gerichte: eigene eintragen, Rezepttext einfügen, per Link (Edge Function `recipe-import`, liest schema.org-Rezeptdaten).
+- Essen und Medikamente (meds.js, Einstellungen → 💊): allgemeine Info-Karten in eigenen Worten nach Verbraucherzentrale (Stand 25.07.2025),
+  Hinweis beim ersten Öffnen, optionaler Filter nach Wirkstoffgruppen (nur auf dem Gerät). Grundregel (Luca 23.11.): Erkrankungen und Medikamente
+  ändern den Plan nie automatisch; Lebensmittel werden nur per eigenem Tipp ausgeschlossen (settings.planExclude, Haushalt, ohne Grund gespeichert).
+  Nicht gebaut: persönliche Warnungen, Dosis, Einnahme-Erinnerungen. Rechtliche Einordnung: recherche/reports/Medikamenten-Infos rechtlich absichern.md.
 - Dienstplan (shifts.js, Einstellungen → Persönlich): Früh/Spät/Nacht/Frei je Person; Nacht = leichte Gerichte, Vortag = Portion für die Dose,
   Spätschicht = Erinnerung 11:30 statt Abendessen. Quellen: DGE (DGEwissen 3/2024), gesundheit.gv.at (Stand 10.11.2020), AOK (Stand 28.05.2024).
   Schichtzeiten (6–14, 13:30–21:30, 21–6:30) und die Mittagszeit bei Spätschicht sind Annahmen.

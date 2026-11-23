@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS = {
   budget: 0,             // Monatsbudget in € (0 = aus), Haushalt
   budgetWarnPct: 80,     // Warnung ab diesem Anteil
   askLeftovers: true,     // Nach dem Abendessen fragen: alles aufgegessen? Was passiert mit dem Rest?
+  planExclude: [],       // Vom Nutzer selbst gewählte Ausschlüsse im Essensplan: [{ w: Suchwort, label, from }] (Haushalt)
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 

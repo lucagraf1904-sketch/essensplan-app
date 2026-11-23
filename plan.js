@@ -8,6 +8,7 @@ import { activeRecipes, loadRecipes, STARTERS, KINDS, TAGS, addStarters, upsertR
 import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setShift, mealAdvice } from './shifts.js';
 import { getSettings } from './settings.js';
 import { offersFor, chainName } from './offers.js';
+import { loadMeds } from './meds.js';
 
 const PLAN_KEY = 'speisekammer.plan', SHOP_KEY = 'speisekammer.shopping';
 const $ = s => document.querySelector(s);
@@ -42,11 +43,18 @@ function mealOf(d) {
 }
 
 // ---------- Planung ----------
+// Nur selbst gewählte Ausschlüsse (Einstellungen). Erkrankungen und Medikamente ändern den Plan nie automatisch (Luca 23.11.2026).
+function excludedBy(r) {
+  const ex = getSettings().planExclude ?? []; if (!ex.length) return null;
+  const hay = [r.title, ...(r.need ?? []).flat(), ...(r.ingredients ?? [])].join(' ').toLowerCase();
+  return ex.find(e => hay.includes(e.w)) ?? null;
+}
 function score(r, i, date, chosen, forgottenUsed) {
   const s = getSettings(), prefs = s.prefs ?? [], why = [];
   let p = 0;
   const meat = ['rind', 'schwein', 'gefluegel'];
   if (prefs.includes('vegetarisch') && (meat.includes(r.kind) || r.kind === 'fisch')) return null;
+  if (excludedBy(r)) return null;
   if (chosen.some(c => c.id === r.id)) p -= 10;
   // Vorrat und Ablauf
   let usedMain = false;
@@ -105,11 +113,13 @@ function score(r, i, date, chosen, forgottenUsed) {
 
 function breakfastFor(i, date, used) {
   const wd = new Date(date + 'T12:00').getDay();
-  const bf = BREAKFASTS.filter(b => !b.weekend || wd === 0 || wd === 6);
+  const bf = BREAKFASTS.filter(b => (!b.weekend || wd === 0 || wd === 6) && !excludedBy(b));
+  if (!bf.filter(b => !b.weekend).length) return 'Frühstück nach Wahl';
   const urgent = bf.find(b => b.need.some(([w]) => { const it = has(items, w); return it && !it.frozenAt && it.expiry && i <= daysTo(it.expiry) && daysTo(it.expiry) <= 1 && !used.has(w); }));
   if (urgent) urgent.need.forEach(([w]) => used.add(w));
   const weekend = bf.find(b => b.weekend);
-  return (urgent ?? (weekend && wd === 0 ? weekend : bf.filter(b => !b.weekend)[i % 4])).title;
+  const normal = bf.filter(b => !b.weekend);
+  return (urgent ?? (weekend && wd === 0 ? weekend : normal[i % normal.length])).title;
 }
 
 function rank(i, date, chosen, forgottenUsed, exclude = []) {
@@ -137,6 +147,8 @@ function getPlan() {
   if (!p || !p.days?.length || daysTo(p.days.at(-1).date) < 0) return build();
   // Vergangene Tage abschneiden, Woche nach hinten auffüllen
   if (daysTo(p.days[0].date) < 0) return rebuildFrom(p.days.filter(d => daysTo(d.date) >= 0));
+  // Selbst gewählter Ausschluss neu dazugekommen: betroffene offene Tage neu planen
+  if (p.days.some(d => d.status === 'geplant' && !d.leftover && recipe(d.dinner) && excludedBy(recipe(d.dinner)))) return build(isoLocal(), p.days);
   return p;
 }
 // Bestehende Tage behalten, nur fehlende Tage am Ende neu planen
@@ -204,7 +216,9 @@ function renderWeek(body, s) {
   const veg = Math.round(rs.reduce((a, r) => a + (r.veg ?? 0), 0) / Math.max(1, rs.length));
   const rests = items.filter(i => i.category === 'Reste' && !i.frozenAt && i.qty > 0 && !p.days.some(d => d.leftover?.id === i.id));
   const restDay = p.days.findIndex(d => d.status === 'geplant' && !d.leftover && daysTo(d.date) >= 0);
-  body.innerHTML = `<div class="plan-sum"><span>🐟 Fisch ${fish}×</span><span>🥩 Rind/Schwein ${meat}×</span>${veg ? `<span>🥦 ca. ${veg} g Gemüse/Abend</span>` : ''}</div>
+  const ex = s.planExclude ?? [], hasInfo = (s.health ?? []).length || loadMeds().groups.length || ex.length;
+  const info = hasInfo ? `<div class="tip hint tiny">ℹ️ Der Plan richtet sich nicht selbst nach Erkrankungen oder Medikamenten. Hinweise und Vorschläge stehen unter Einstellungen; Lebensmittel schließt du dort selbst aus.${ex.length ? ` Ausgeschlossen: ${ex.map(e => esc(e.label)).join(', ')}.` : ''}</div>` : '';
+  body.innerHTML = `${info}<div class="plan-sum"><span>🐟 Fisch ${fish}×</span><span>🥩 Rind/Schwein ${meat}×</span>${veg ? `<span>🥦 ca. ${veg} g Gemüse/Abend</span>` : ''}</div>
     <ul class="list plan-list">${p.days.map((d, i) => {
       const today = daysTo(d.date) === 0, r = recipe(d.dinner), m = mealOf(d);
       const head = `<div class="plan-date">${dayLabel(d.date)}</div>${shiftLine(d.date, s)}<div class="tiny muted">☀️ 11–12:30 Uhr · ${esc(d.breakfast)}</div>`;

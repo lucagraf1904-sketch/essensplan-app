@@ -218,3 +218,4 @@ nav button span { font-size: .68rem; }
 .shift-list li { display: block !important; } .shift-day { font-weight: 600; display: block; margin-bottom: 4px; }
 .shift-list .seg button { padding: 6px 8px; font-size: .82rem; }
 #ask-input:is(textarea) { width: 100%; font: inherit; }
+.med-card p { margin: 4px 0; }

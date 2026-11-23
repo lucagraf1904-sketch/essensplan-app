@@ -6,11 +6,12 @@ import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnSho
 import { initShared } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
 import { initPlan } from './plan.js';
+import { CARDS, GROUPS, MEDS_SOURCE, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
 import { shiftOf, SHIFTS, mealAdvice } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
-import { conditionLabel, searchConditions } from './conditions.js';
+import { conditionLabel, searchConditions, conditionTags } from './conditions.js';
 import { initHealth } from './health.js';
 import { monthReport, productKey, pretty, ymOf, toCSV, parseSize } from './balance.js';
 
@@ -1124,15 +1125,61 @@ const SWITCHES = {
 // Gesundheit (nur auf diesem Gerät) & Vorlieben (Haushalt). Erkrankungen über ein Suchfeld mit Vorschlägen,
 // Vorlieben als Knöpfe. Steuert Zusatzhinweise in den Tipps (tips.js extra) und später den Essensplan.
 const PREFS = [['wenigWeizen', 'Wenig Weizen'], ['keinSchwein', 'Kein Schweinefleisch'], ['wenigFleisch', 'Wenig Fleisch'], ['vegetarisch', 'Vegetarisch']];
+// ---------- Ausschlüsse im Essensplan (nur per eigenem Tipp) ----------
+// Grundregel (Luca 23.11.): Erkrankungen und Medikamente ändern den Plan nie automatisch. Die App zeigt Infos und Vorschläge,
+// die Person schließt Lebensmittel selbst per Knopf aus.
+const excludes = () => getSettings().planExclude ?? [];
+const isExcluded = w => excludes().some(e => e.w === w);
+function toggleExclude(w, label, from) {
+  setSetting('planExclude', isExcluded(w) ? excludes().filter(e => e.w !== w) : [...excludes(), { w, label, from }]);
+  document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key: 'speisekammer.plan' } }));
+}
+const exclBtn = (w, label, from) => `<button type="button" class="chip ${isExcluded(w) ? 'accepted' : ''}" data-excl="${esc(w)}" data-excl-label="${esc(label)}" data-excl-from="${esc(from)}">${isExcluded(w) ? `✓ ${esc(label)} ausgeschlossen · wieder erlauben` : `${esc(label)} im Essensplan ausschließen`}</button>`;
+// Vorschläge zu Erkrankungen: nur Knöpfe, nichts passiert automatisch
+const HEALTH_SUGGEST = {
+  gluten: { title: 'Zöliakie', text: 'Glutenhaltig sind z. B. Weizen, Dinkel, Roggen und Gerste. Wenn du möchtest, nimm sie hier selbst aus dem Plan; die Gerichte prüfst du bitte trotzdem selbst.',
+    ex: [['weizen', 'Weizen'], ['dinkel', 'Dinkel'], ['roggen', 'Roggen'], ['gerste', 'Gerste']] },
+  laktose: { title: 'Laktoseintoleranz', text: 'Wie viel Laktose vertragen wird, ist sehr verschieden. Wenn du möchtest, nimm einzelne Milchprodukte hier selbst aus dem Plan (das trifft auch laktosefreie Varianten mit gleichem Namen).',
+    ex: [['milch', 'Milch'], ['sahne', 'Sahne'], ['quark', 'Quark'], ['joghurt', 'Joghurt']] },
+};
+function renderExcludes() {
+  const ex = excludes();
+  return `<li class="set-sub">Ausschlüsse im Essensplan</li>
+    <li class="tiny muted">${esc(EXCLUDE_NOTE)}</li>
+    <li><div class="tip-alts">${ex.map(e => `<button type="button" class="chip accepted" data-excl="${esc(e.w)}">${esc(e.label)} ✕</button>`).join('') || '<span class="tiny muted">Nichts ausgeschlossen.</span>'}
+      <button type="button" class="chip" id="excl-add">＋ Lebensmittel ausschließen</button></div></li>`;
+}
+function renderMeds() {
+  const m = loadMeds(), el = $('#settings-meds'); if (!el) return;
+  if (!m.ack) {
+    el.innerHTML = `<div class="tip hint"><b>ℹ️ Nur zur Information</b><p>${esc(NOTICE)}</p><button type="button" class="primary" id="meds-ack">Verstanden</button></div>
+      <p class="tiny muted">${esc(PURPOSE)}</p>`;
+    return;
+  }
+  const mine = m.filter ? CARDS.filter(c => c.groups.some(g => m.groups.includes(g))) : [];
+  const rest = CARDS.filter(c => !mine.includes(c));
+  const card = c => `<div class="tip med-card"><b>${esc(c.title)}</b>${c.groups.length ? `<p class="tiny muted">Betrifft: ${c.groups.map(g => esc(GROUPS[g])).join('; ')}</p>` : ''}
+    <p>${esc(c.text)}</p>${c.exclude ? `<div class="tip-alts">${c.exclude.map(([w, l]) => exclBtn(w, l, 'Info-Karte')).join('')}</div>` : ''}
+    <p class="tiny muted">Allgemeine Information, keine persönliche Beratung. Quelle: <a href="${MEDS_SOURCE.url}" target="_blank" rel="noopener">${esc(MEDS_SOURCE.label)}</a> (Stand ${MEDS_SOURCE.stand}, geprüft ${MEDS_SOURCE.checked})</p></div>`;
+  el.innerHTML = `<p class="tiny muted">Allgemeine Hinweise, welche Lebensmittel bestimmte Arzneimittelgruppen beeinflussen können. Die App ändert deinen Essensplan dadurch nicht. ${esc(EXCLUDE_NOTE)}</p>
+    <ul class="list settings"><li class="switch-row"><label class="main"><span>Meine Wirkstoffgruppen zuerst zeigen<br><small class="muted">Freiwillig, nur auf diesem Handy gespeichert. Filtert nur die Karten.</small></span>
+      <input type="checkbox" role="switch" class="switch" id="meds-filter" ${m.filter ? 'checked' : ''}></label></li></ul>
+    ${m.filter ? `<div class="tip-alts">${Object.entries(GROUPS).map(([g, l]) => `<button type="button" class="chip ${m.groups.includes(g) ? 'accepted' : ''}" data-med-group="${g}">${m.groups.includes(g) ? '✓ ' : ''}${esc(l)}</button>`).join('')}</div>` : ''}
+    ${mine.length ? `<p class="set-sub">Zu deinen Gruppen</p>${mine.map(card).join('')}<p class="set-sub">Weitere Hinweise</p>` : ''}
+    ${rest.map(card).join('')}
+    <p class="tiny"><b>${esc(EMERGENCY)}</b></p>
+    <p class="tiny muted">Nimmst du mehrere Medikamente, frag in der Apotheke nach einer Medikationsanalyse. ${esc(PURPOSE)}</p>`;
+}
 function renderProfile(s) {
   const health = s.health ?? [], prefs = s.prefs ?? [];
   $('#settings-profile').innerHTML = `<p class="tiny muted">Erkrankungen und Unverträglichkeiten</p>
     <div class="tip-alts">${health.map(id => `<button type="button" class="chip accepted" data-health-del="${esc(id)}">${esc(conditionLabel(id))} ✕</button>`).join('') || '<span class="tiny muted">Keine Angabe</span>'}</div>
     <div class="cond-search"><input id="cond-q" type="search" placeholder="Suchen, z. B. „M“ für Morbus Crohn, Migräne …" autocomplete="off" enterkeyhint="search">
     <ul id="cond-sugg" class="cond-sugg"></ul></div>
+    ${(() => { const tags = [...new Set(conditionTags(health))].filter(t => HEALTH_SUGGEST[t]); return tags.length ? `<p class="tiny muted">Vorschläge zu deinen Angaben (die App ändert den Plan nicht selbst):</p>${tags.map(t => `<div class="tip"><b>${esc(HEALTH_SUGGEST[t].title)}</b><p>${esc(HEALTH_SUGGEST[t].text)}</p><div class="tip-alts">${HEALTH_SUGGEST[t].ex.map(([w, l]) => exclBtn(w, l, 'Vorschlag')).join('')}</div></div>`).join('')}` : ''; })()}
     <p class="tiny muted">Vorlieben (antippen, mehrere möglich)</p>
     <div class="tip-alts">${PREFS.map(([v, t]) => `<button type="button" class="chip ${prefs.includes(v) ? 'accepted' : ''}" data-profile="prefs" data-v="${v}">${prefs.includes(v) ? '✓ ' : ''}${esc(t)}</button>`).join('')}</div>
-    <p class="tiny muted">Freiwillig, alles kann leer bleiben. Erkrankungen werden nur auf diesem Gerät gespeichert und nie hochgeladen; Vorlieben gelten für den ganzen Haushalt. Ohne Angabe sind alle Tipps allgemein; mit Angabe kommen passende Zusatzhinweise, später richtet sich auch der Essensplan danach. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>`;
+    <p class="tiny muted">Freiwillig, alles kann leer bleiben. Erkrankungen werden nur auf diesem Gerät gespeichert und nie hochgeladen; Vorlieben gelten für den ganzen Haushalt. Ohne Angabe sind alle Tipps allgemein; mit Angabe kommen passende Zusatzhinweise. Den Essensplan ändern Erkrankungen nicht: Du passt ihn selbst an, z. B. mit den Knöpfen oben oder unter Essensplan → Ausschlüsse. Ersetzt keine ärztliche Beratung; bei Erkrankungen die Ernährung mit Arzt oder Ernährungsfachkraft absprechen.</p>`;
 }
 function renderCondSugg() {
   const q = $('#cond-q')?.value ?? '', health = getSettings().health ?? [];
@@ -1155,7 +1202,8 @@ function renderSummaries(s) {
     tips: s.tips ? 'An' : 'Aus',
     show: { minimal: 'Minimal: nur das Nötigste', normal: 'Normal', alles: 'Alles anzeigen', eigene: 'Eigene Auswahl' }[showPreset(s)],
     drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
-    plan: s.planHealthRules ? 'Wochenregeln an' : 'Wochenregeln aus',
+    plan: join([s.planHealthRules ? 'Wochenregeln an' : 'Wochenregeln aus', (s.planExclude ?? []).length ? `${s.planExclude.length} ausgeschlossen` : null]),
+    meds: loadMeds().ack ? (loadMeds().filter && loadMeds().groups.length ? `${loadMeds().groups.length} Gruppen gewählt (nur dieses Handy)` : 'Info-Karten') : 'Nur zur Information',
     me: join([s.myName || null, on(s.weightOn, 'Gewicht'), on(s.shiftsOn, 'Dienstplan')]) || 'Nichts aktiv',
     budget: s.budget > 0 ? `${eur(s.budget)} im Monat, Warnung ab ${s.budgetWarnPct} %` : 'Aus',
     offers: join([`Stammladen ${chainName(s.homeStore)}`, s.maxStores >= 2 ? `2. Laden ab ${eur(s.minSaving)}` : 'nur ein Laden', on(s.autoOffers, 'automatisch')]),
@@ -1222,6 +1270,8 @@ function renderSettings() {
   $('#settings-me').insertAdjacentHTML('afterbegin', `<li class="switch-row"><span class="main">Dein Name<br><small class="muted">Für den Dienstplan, z. B. „Luca“</small></span>
     <button type="button" class="chip" id="me-name">${s.myName ? esc(s.myName) + ' ✎' : 'Eintragen'}</button></li>`);
   renderWeight($('#weight-box'), s.weightOn);
+  $('#settings-plan').insertAdjacentHTML('beforeend', renderExcludes());
+  renderMeds();
   const pre = showPreset(s);
   $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
     `<button type="button" data-preset="${v}" class="${pre === v ? 'active' : ''}">${t}</button>`).join('') + (pre === 'eigene' ? '<button type="button" class="active" disabled>Eigene</button>' : '');
@@ -1232,6 +1282,15 @@ function renderSettings() {
   renderSummaries(s);
 }
 $('#tab-kitchen').addEventListener('click', async e => {
+  const ex = e.target.closest('[data-excl]');
+  if (ex) { const cur = excludes().find(x => x.w === ex.dataset.excl); toggleExclude(ex.dataset.excl, ex.dataset.exclLabel || cur?.label || ex.dataset.excl, ex.dataset.exclFrom || cur?.from || ''); renderSettings(); return; }
+  if (e.target.closest('#excl-add')) {
+    const t = await askInput('Lebensmittel ausschließen', 'z. B. „Pilze“ oder „Grapefruit“', ''); if (!t) return;
+    const w = t.toLowerCase().trim(); if (!isExcluded(w)) toggleExclude(w, t.trim(), 'selbst eingetragen'); renderSettings(); return;
+  }
+  if (e.target.closest('#meds-ack')) { saveMeds({ ...loadMeds(), ack: true }); renderSettings(); return; }
+  const mg = e.target.closest('[data-med-group]');
+  if (mg) { const m = loadMeds(), g = mg.dataset.medGroup; m.groups = m.groups.includes(g) ? m.groups.filter(x => x !== g) : [...m.groups, g]; saveMeds(m); renderSettings(); return; }
   if (e.target.closest('#me-name')) { const n = await askInput('Dein Name', 'Name', getSettings().myName); if (n != null) { setSetting('myName', n); renderSettings(); } return; }
   const sc = e.target.closest('[data-show-scope]');
   if (sc) { sc.dataset.showScope === 'hh' ? showToHousehold() : showReset(); renderSettings(); renderPantry(); return; }
@@ -1257,6 +1316,7 @@ $('#tab-kitchen').addEventListener('click', async e => {
   renderSettings(); renderPantry();
 });
 $('#tab-kitchen').addEventListener('change', e => {
+  if (e.target.id === 'meds-filter') { saveMeds({ ...loadMeds(), filter: e.target.checked }); return renderSettings(); }
   if (e.target.classList.contains('switch')) setSetting(e.target.dataset.k, e.target.checked);
   else if (e.target.classList.contains('time-set') && e.target.value) {
     setSetting(e.target.dataset.k, e.target.value);
