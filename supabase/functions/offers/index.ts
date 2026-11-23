@@ -21,18 +21,18 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function search(term: string, zip: string) {
   const u = `${URL_BASE}?as=web&limit=24&offset=0&q=${encodeURIComponent(term)}&zipCode=${zip}`;
-  const r = await fetch(u, { headers: { 'x-apikey': Deno.env.get('MARKTGURU_API_KEY')!, 'x-clientkey': Deno.env.get('MARKTGURU_CLIENT_KEY')! } });
-  if (!r.ok) throw new Error(`Marktguru ${r.status}`);
+  const r = await fetch(u, { headers: { 'x-apikey': Deno.env.get('MARKTGURU_API_KEY') ?? '', 'x-clientkey': Deno.env.get('MARKTGURU_CLIENT_KEY') ?? '' } });
+  if (!r.ok) throw new Error(`Marktguru ${r.status} (${r.status === 401 || r.status === 403 ? 'Schlüssel ungültig oder gesperrt' : 'Schnittstelle antwortet nicht wie erwartet'})`);
   return (await r.json()).results ?? [];
 }
 
 async function collect(householdId: string, terms: string[]) {
   const now = Date.now(), rows = new Map<string, Record<string, unknown>>();
-  let errors = 0;
+  let errors = 0, firstErr = '';
   for (const term of terms.slice(0, 30)) {
     for (const zip of ZIPS) {
       let results = [];
-      try { results = await search(term, zip); } catch { errors++; continue; }
+      try { results = await search(term, zip); } catch (e) { errors++; firstErr ||= String((e as Error).message ?? e); continue; }
       for (const o of results) {
         const adv = (o.advertisers ?? []).map((a: { name: string }) => a.name).join(' ');
         const chain = CHAINS.find(([, re]) => re.test(adv))?.[0];
@@ -52,9 +52,11 @@ async function collect(householdId: string, terms: string[]) {
       await sleep(300); // schonend abfragen
     }
   }
+  // Wenn jede Abfrage scheitert (z. B. Schlüssel ungültig), alte Angebote behalten und den Fehler melden
+  if (!rows.size && errors > 0) return { found: 0, errors, error: firstErr };
   await admin.from('offers').delete().eq('household_id', householdId).eq('source', 'marktguru');
   if (rows.size) await admin.from('offers').insert([...rows.values()]);
-  return { found: rows.size, errors };
+  return { found: rows.size, errors, error: errors ? firstErr : undefined };
 }
 
 // Häufig gekaufte Produkte (mind. 2× in 90 Tagen) als Suchbegriffe

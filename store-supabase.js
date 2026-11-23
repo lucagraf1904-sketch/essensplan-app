@@ -157,7 +157,12 @@ export const supabaseStore = {
   },
   async refreshOffers(terms) {
     const { data, error } = await sb.functions.invoke('offers', { body: { terms } });
-    if (error) throw new Error(error.message);
+    if (error) {
+      let msg = error.message; const r = error.context, st = r?.status ? ` (Status ${r.status})` : '';
+      try { const t = await r.clone().text(); msg = t || msg; } catch { /* Antwort nicht lesbar */ }
+      throw new Error(`${String(msg).slice(0, 200)}${st}`);
+    }
+    if (data?.error) throw new Error(`${data.error} (${data.errors} Abfragen fehlgeschlagen)`);
     return data;
   },
 
