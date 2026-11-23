@@ -246,6 +246,10 @@ function renderWeek(body, s) {
           ${r ? `<div class="tiny muted">${esc(r.title)} ist auf den nächsten Tag verschoben.</div>` : ''}</div>
         ${d.status === 'gekocht' ? '<div class="good-tag">✓ Gegessen</div>' : `<div class="tip-alts"><button class="chip" data-act="done">✓ Gegessen</button><button class="chip" data-act="unleft">Doch frisch kochen</button></div>`}
       </li>`;
+      if (d.free) return `<li class="plan-day ${d.status}" data-i="${i}">${head}
+        <div class="plan-dinner"><b>🍴 ${esc(d.title)}</b><div class="tiny muted">Selbst eingetragen${d.free.items?.length ? ' · ' + d.free.items.map(esc).join(', ') : ''}</div></div>
+        <div class="good-tag">✓ Gegessen</div>
+        <div class="tip-alts"><button class="chip" data-act="eat">✏️ Ändern</button><button class="chip" data-act="savefree">📚 Als Gericht speichern</button><button class="chip" data-act="unfree">Rückgängig</button></div></li>`;
       if (!r) return `<li class="plan-day" data-i="${i}">${restBox}${head}<div class="plan-dinner muted">Kein passendes Gericht. <button class="chip" data-act="swap">🔄 Vorschlag</button></div></li>`;
       const missing = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
@@ -269,6 +273,7 @@ function renderWeek(body, s) {
           <button class="chip" data-act="swap">🔄 Anderes Gericht</button>
           <button class="chip" data-act="done">✓ Gekocht</button>
           <button class="chip" data-act="needs">✏️ Zutaten anpassen</button>
+          <button class="chip" data-act="eat">🍴 Anders gegessen</button>
           <button class="chip" data-act="skip">Überspringen</button>
           ${toBuy.length ? `<button class="chip" data-act="shop">＋ Fehlendes auf die Liste</button>` : ''}</div>`}
         ${d.status !== 'geplant' ? '<button class="chip" data-act="undo">Rückgängig</button>' : ''}
@@ -528,6 +533,80 @@ function fillNeeds() {
 }
 function openNeeds(date) { const d = needsEl(); d.dataset.date = date; fillNeeds(); if (!d.open) d.showModal(); }
 
+// ---------- Anders gegessen / selbst eintragen ----------
+// Pro Tag: wie geplant abhaken, Zutaten anpassen, ein anderes Gericht aus der Liste wählen oder frei eintippen und aus dem Vorrat abbuchen.
+let eatSel = new Set(), eatName = '';
+function eatEl() {
+  let d = document.getElementById('eat-sheet'); if (d) return d;
+  d = Object.assign(document.createElement('dialog'), { id: 'eat-sheet', className: 'sheet' });
+  document.body.appendChild(d);
+  d.addEventListener('input', e => {
+    if (e.target.id === 'es-name') eatName = e.target.value;
+    const f = (inp, sel, attr) => { const q = inp.value.trim().toLowerCase(); d.querySelectorAll(sel).forEach(el => { el.hidden = !!q && !el.dataset[attr].includes(q); }); };
+    if (e.target.id === 'es-q') f(e.target, '[data-e-item]', 'q');
+    if (e.target.id === 'es-r') f(e.target, '[data-e-pick]', 'q');
+  });
+  d.addEventListener('click', async e => {
+    if (e.target === d) return d.close();
+    const b = e.target.closest('button'); if (!b) return;
+    const date = d.dataset.date, p = loadPlan(), day = p?.days?.find(x => x.date === date); if (!day) return d.close();
+    if (b.dataset.close != null) return d.close();
+    if (b.dataset.eItem) { eatSel.has(b.dataset.eItem) ? eatSel.delete(b.dataset.eItem) : eatSel.add(b.dataset.eItem); return fillEat(); }
+    const r = recipe(day.dinner);
+    if (b.dataset.e === 'asplanned' && r) {
+      d.close(); day.status = 'gekocht'; savePlan(p); markCooked(r.id, date); render();
+      await askUsed(needOf(day, r));
+      document.dispatchEvent(new CustomEvent('plan:cooked', { detail: { title: r.title, date } })); return;
+    }
+    if (b.dataset.e === 'needs') { d.close(); return openNeeds(date); }
+    if (b.dataset.ePick) {
+      const pr = recipe(b.dataset.ePick); if (!pr) return;
+      if (pr.store) updateRecipe(pr.id, x => { x.store = false; });
+      if (day.dinner && !day.free) day.plannedDinner = day.plannedDinner ?? day.dinner;
+      Object.assign(day, { dinner: pr.id, title: pr.title, why: ['Von dir gewählt'], status: 'geplant' }); delete day.need; delete day.free;
+      savePlan(p); d.close(); toast(`„${pr.title}“ eingeplant`); return render();
+    }
+    if (b.dataset.e === 'free') {
+      const chosen = items.filter(i => eatSel.has(i.id)), name = (eatName || '').trim() || chosen.map(i => i.name).join(', ');
+      if (!name) return toast('Bitte eintippen oder Zutaten antippen, was gegessen wurde.');
+      d.close();
+      // Abbuchen: Packungen mit Teilen per Zähler, sonst „alles / nichts“
+      const withParts = chosen.filter(i => ctx.partsOf?.(i)), rest = chosen.filter(i => !ctx.partsOf?.(i));
+      if (withParts.length) await ctx.openEaten('cook', withParts, 'Wie viel davon wurde gegessen?');
+      for (const it of rest) {
+        const v = await ctx.ask(`${it.name}: wie viel?`, 'Gegessene Menge vom Vorrat abbuchen.', [
+          { value: 'all', label: `Alles aufgebraucht (${+(+it.qty).toFixed(2)} ${it.unit})`, cls: 'primary' }, { value: 'parts', label: 'Nur einen Teil (Scheiben/Stück/Gramm)' }, { value: 'none', label: 'Nichts abbuchen' }]);
+        if (v === 'all') await ctx.store.consume(it.id, it.qty, 'eaten');
+        else if (v === 'parts' && await ctx.configureParts(it)) await ctx.openEaten('cook', [it], `${it.name}: wie viel gegessen?`);
+      }
+      await ctx.renderPantry();
+      const p2 = loadPlan(), day2 = p2.days.find(x => x.date === date);
+      if (day2.dinner && !day2.free) day2.plannedDinner = day2.plannedDinner ?? day2.dinner;
+      Object.assign(day2, { dinner: null, title: name, why: [], status: 'gekocht', free: { items: chosen.map(i => i.name) } }); delete day2.need;
+      savePlan(p2); eatSel = new Set(); eatName = '';
+      document.dispatchEvent(new CustomEvent('plan:cooked', { detail: { title: name, date } })); toast('Eingetragen'); return render();
+    }
+  });
+  return d;
+}
+function fillEat() {
+  const d = eatEl(), day = loadPlan()?.days?.find(x => x.date === d.dataset.date); if (!day) return;
+  const r = recipe(day.dinner), pantry = items.filter(i => i.qty > 0 && i.category !== 'Reste').sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  const recs = loadRecipes().filter(x => x.id !== day.dinner).sort((a, b) => a.title.localeCompare(b.title, 'de'));
+  d.innerHTML = `<div class="sheet-head"><button type="button" class="link" data-close>Fertig</button><b>${esc(dayLabel(day.date))}: Was wurde gegessen?</b><span></span></div>
+    ${r && !day.free ? `<p class="sheet-label">Geplant: ${esc(r.title)}</p><div class="tip-alts"><button type="button" class="chip" data-e="asplanned">✓ Wie geplant gegessen</button><button type="button" class="chip" data-e="needs">✏️ Zutaten anpassen</button></div>` : ''}
+    <p class="sheet-label">Etwas anderes gegessen?</p>
+    <label class="sheet-f"><span>Was? (freier Text)</span><input id="es-name" placeholder="z. B. Spiegelei mit Brot" value="${esc(eatName)}"></label>
+    <p class="tiny muted">Aus dem Vorrat abbuchen: Zutaten antippen (mehrere möglich).</p>
+    <input id="es-q" type="search" placeholder="Vorrat suchen …" autocomplete="off">
+    <div class="tip-alts es-items">${pantry.map(i => `<button type="button" class="chip ${eatSel.has(i.id) ? 'accepted' : ''}" data-e-item="${i.id}" data-q="${esc(i.name.toLowerCase())}">${eatSel.has(i.id) ? '✓ ' : ''}${esc(i.name)}</button>`).join('') || '<span class="tiny muted">Der Vorrat ist leer, ihr könnt trotzdem etwas eintippen.</span>'}</div>
+    <button type="button" class="primary" data-e="free">✅ Eintragen${eatSel.size ? ` und ${eatSel.size} aus dem Vorrat abbuchen` : ''}</button>
+    <p class="sheet-label">Oder ein anderes Gericht aus eurer Liste</p>
+    <input id="es-r" type="search" placeholder="Gericht suchen …" autocomplete="off">
+    <div class="tip-alts es-rec">${recs.slice(0, 60).map(x => `<button type="button" class="chip" data-e-pick="${x.id}" data-q="${esc(recText(x))}">${esc(x.title)}</button>`).join('') || '<span class="tiny muted">Noch keine weiteren Gerichte.</span>'}</div>`;
+}
+async function openEat(date) { const d = eatEl(); d.dataset.date = date; eatSel = new Set(); eatName = ''; [items] = await Promise.all([ctx.store.listItems()]); fillEat(); if (!d.open) d.showModal(); }
+
 // ---------- Aktionen ----------
 async function onClick(e) {
   const b = e.target.closest('button'); if (!b) return;
@@ -594,6 +673,15 @@ async function onClick(e) {
     Object.assign(d, { dinner: next.r.id, title: next.r.title, why: next.sc.why.slice(0, 3), swapped: seen.length >= activeRecipes().length - 1 ? [] : seen });
   } else if (act === 'needs') {
     return openNeeds(d.date);
+  } else if (act === 'eat') {
+    return openEat(d.date);
+  } else if (act === 'unfree') {
+    d.dinner = d.plannedDinner ?? null; d.title = recipe(d.dinner)?.title; delete d.free; delete d.plannedDinner; d.status = 'geplant'; d.why = [];
+    savePlan(p); render(); toast('Zurückgesetzt. Abgebuchte Vorräte bleiben abgebucht.'); return;
+  } else if (act === 'savefree') {
+    const items = d.free?.items ?? [], need = items.map(needFromLine).filter(Boolean);
+    upsertRecipe({ title: d.title, kind: 'sonst', method: '', min: 30, need, ingredients: items, steps: [], tags: [], store: true });
+    toast('Im Rezeptspeicher abgelegt'); return;
   } else if (act === 'useleft') {
     const it = items.find(x => x.id === b.dataset.rest); if (!it) return;
     const last = p.days.at(-1), dropped = { dinner: last.dinner, title: last.title, why: last.why, need: last.need };

@@ -148,3 +148,6 @@ Einrichtung Schritt für Schritt: [anleitung/ai-setup.md](anleitung/ai-setup.md)
 - Pro Person (`MEMBER_KEYS`, member_data): persönliche Einstellungen (Anzeige, Erinnerungs- und Nachfragezeiten, Name), Gewicht.
 - Nur lokal: Gesundheitsangaben und Medikamenten-Filter (Art. 9 DSGVO), Trinkzähler, Barcode-Zwischenspeicher, kleine Merker (Hinweise ausgeblendet, „heute schon gefragt“).
 - Konflikte: vor jedem Schreiben holt die App den Serverstand und führt per Dreiwege-Vergleich zusammen (`merge3`); nur wirklich geänderte Felder überschreiben. Der Plan wird tageweise über die Änderungszeit `t` zusammengeführt. Eigenes Echo wird ignoriert, ungesendete Änderungen gehen beim Start vor.
+
+## Essen im Plan frei ändern (23.11.)
+Am Tag: „🍴 Anders gegessen“ öffnet ein Blatt: wie geplant abhaken, Zutaten anpassen, frei eintippen und Zutaten aus dem Vorrat antippen (Packungen mit Teilen per Zähler, sonst „alles/Teil/nichts“) oder ein anderes Gericht aus der Liste wählen. Freie Tage (`d.free`) können als Gericht in den Rezeptspeicher übernommen oder zurückgesetzt werden (abgebuchter Vorrat bleibt abgebucht).
