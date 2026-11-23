@@ -68,7 +68,12 @@ export const supabaseStore = {
   // Rezept per Link (Edge Function „recipe-import“ liest die Seite und deren Rezept-Daten nach schema.org)
   async importRecipe(url) {
     const { data, error } = await sb.functions.invoke('recipe-import', { body: { url } });
-    if (error) throw new Error(error.context?.error ?? error.message);
+    if (error) {
+      // Bei Statusfehlern steckt die eigentliche Meldung der Funktion im Response-Objekt
+      let msg = error.message;
+      try { const r = error.context; if (r?.json) { const b = await r.json(); msg = b?.error ?? b?.message ?? msg; } if (r?.status) msg = `${msg} (Status ${r.status})`; } catch { /* Antwort nicht lesbar */ }
+      throw new Error(msg);
+    }
     if (data?.error) throw new Error(data.error);
     return data;
   },
