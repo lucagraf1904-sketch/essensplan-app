@@ -1396,7 +1396,7 @@ function pickPhoto() {
     i.click();
   });
 }
-const aiFail = (e, what) => ask(`${what} hat nicht geklappt`, esc(e.message), [{ value: 'ok', label: 'OK' }]);
+const aiFail = (e, what) => ask(`${what} hat nicht geklappt`, esc(e.message) + (e.detail ? `<details class="tiny muted"><summary>Technische Details</summary>${esc(e.detail)}</details>` : ''), [{ value: 'ok', label: 'OK' }]);
 async function aiRecipePhoto() {
   const f = await pickPhoto(); if (!f) return null;
   toast('🤖 Rezept wird gelesen …', 8000);

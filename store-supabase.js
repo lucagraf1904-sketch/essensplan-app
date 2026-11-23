@@ -84,10 +84,11 @@ export const supabaseStore = {
     const { data, error } = await sb.functions.invoke('ai', { body });
     if (error) {
       let msg = error.message;
-      try { const t = await error.context.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; } catch { msg = t || msg; } } catch { /* Antwort nicht lesbar */ }
-      throw new Error(String(msg).slice(0, 300));
+      let detail = '';
+      try { const t = await error.context.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; detail = j.detail ?? ''; } catch { msg = t || msg; } } catch { /* Antwort nicht lesbar */ }
+      throw Object.assign(new Error(String(msg).slice(0, 300)), { detail: String(detail).slice(0, 500) });
     }
-    if (data?.error) throw new Error(data.error);
+    if (data?.error) throw Object.assign(new Error(data.error), { detail: data.detail ?? '' });
     return data;
   },
 

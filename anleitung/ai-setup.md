@@ -5,7 +5,7 @@ Die App nutzt zwei Gratis-Dienste. Die Schlüssel kommen **nur** in Supabase (Se
 | Aufgabe | Dienst | Kosten |
 |---|---|---|
 | Chat, Gericht anpassen (Text) | Cloudflare Workers AI | 0 €, 10.000 „Neurons“ pro Tag gratis, danach Fehlermeldung statt Kosten |
-| Fotos einlesen (Rezept, Bon, Verpackung) | Mistral (Gratis-Modus) | 0 €, keine Karte |
+| Fotos einlesen (Rezept, Bon, Verpackung) | Cloudflare (Gemma 4, Apache-2.0-Lizenz), Ersatz: Mistral | 0 € |
 
 ## 1. Cloudflare
 1. Konto auf cloudflare.com anlegen (kostenlos, keine Karte nötig).
@@ -35,3 +35,7 @@ Die App nutzt zwei Gratis-Dienste. Die Schlüssel kommen **nur** in Supabase (Se
 - Cloudflare: kein Training mit Kundendaten, keine Aufbewahrung (Doku „Workers AI – Data usage“, Stand Okt. 2026). Verarbeitungsort nicht angegeben.
 - Mistral: im Gratis-Modus Training standardmäßig an, daher Schritt 2.2. Verarbeitungsort nicht belegt.
 - Gratis-Tarife können sich ändern. Fällt einer weg, zeigt die App eine Fehlermeldung, der Rest läuft weiter. Der Anbieter ist nur in `supabase/functions/ai/index.ts` verdrahtet und dort austauschbar.
+
+
+## Stand 23.11.2026: Mistral-Fotos
+Mistral antwortet im Gratis-Modus bei Luca auf jede Foto-Anfrage mit Status 429, Code 1300 (kein Zugang für das Konto, laut einer Drittquelle seit Nov. 2026 nur mit Pay-as-you-go, von Mistral nicht bestätigt). Deshalb versucht die Function Fotos zuerst über Cloudflare (`CF_VISION_MODEL`, Standard `@cf/google/gemma-4-26b-a4b-it`) und nimmt Mistral nur als Ersatz, wenn `MISTRAL_API_KEY` gesetzt ist. Reihenfolge per Secret `VISION_ORDER` änderbar. Bildeingabe von Gemma 4 über den OpenAI-kompatiblen Cloudflare-Endpunkt ist in der Cloudflare-Doku nicht ausdrücklich belegt und muss mit echten Schlüsseln getestet werden.

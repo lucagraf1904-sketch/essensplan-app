@@ -46,7 +46,7 @@ export async function adaptRecipe(recipe) {
   try {
     const r = await ctx.store.askAi({ action: 'adapt', recipe, goal, context: await ctx.context(), ...(withHealth ? { health: hl } : {}) });
     return r.recipe;
-  } catch (e) { await ctx.ask('Anpassen hat nicht geklappt', esc(e.message), [{ value: 'ok', label: 'OK' }]); return null; }
+  } catch (e) { await ctx.ask('Anpassen hat nicht geklappt', esc(e.message) + (e.detail ? `<details class="tiny muted"><summary>Technische Details</summary>${esc(e.detail)}</details>` : ''), [{ value: 'ok', label: 'OK' }]); return null; }
 }
 
 // ---------- Chat ----------

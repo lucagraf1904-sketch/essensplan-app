@@ -1,21 +1,24 @@
 // Supabase Edge Function „ai“: KI-Funktionen der App über kostenlose Anbieter. Die API-Schlüssel liegen nur hier (Secrets), nie in der App.
 //   Text (Chat, Gericht anpassen)  → Cloudflare Workers AI (kein Training mit Kundendaten, keine Speicherung laut Cloudflare-Doku)
-//   Fotos (Rezept, Kassenbon, Verpackung) → Mistral (Gratis-Modus; Training im Mistral-Admin-Bereich abschalten!)
+//   Fotos (Rezept, Kassenbon, Verpackung) → Cloudflare (Gemma 4), als Ersatz Mistral (Gratis-Modus; Training im Mistral-Admin-Bereich abschalten!)
 // Aufruf (angemeldet): POST { action: 'chat' | 'adapt' | 'parse', ... } → { text } | { recipe } | { data }
 //   chat:  { messages: [{ role, content }], context?: { pantry[], utensils[], prefs[] }, health?: string[] }
 //   adapt: { recipe: { title, ingredients[], steps[], min, servings }, goal, context?, health? }
 //   parse: { kind: 'recipe' | 'receipt' | 'package', image: 'data:image/jpeg;base64,…' }   (nie zusammen mit health)
 // Gesundheitsangaben (health) kommen nur mit, wenn die Person es für genau diese Anfrage angetippt hat (Lucas Vorgabe, Option B).
 // Es werden keine Inhalte gespeichert oder protokolliert, nur Zähler pro Haushalt (Tabelle ai_usage, Funktion ai_use).
-// Secrets: CF_ACCOUNT_ID, CF_API_TOKEN, MISTRAL_API_KEY. Optional: CF_TEXT_MODEL, MISTRAL_VISION_MODEL.
+// Secrets: CF_ACCOUNT_ID, CF_API_TOKEN. Optional: MISTRAL_API_KEY (Ersatz für Fotos), CF_TEXT_MODEL, CF_VISION_MODEL, MISTRAL_VISION_MODEL, VISION_ORDER (z. B. „mistral,cloudflare“).
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 const json = (b: unknown, status = 200) => Response.json(b, { status, headers: cors });
-class Fail extends Error { constructor(public status: number, msg: string, public code?: string) { super(msg); } }
+class Fail extends Error { constructor(public status: number, msg: string, public code?: string, public detail?: string) { super(msg); } }
 
 const CF_MODEL = () => Deno.env.get('CF_TEXT_MODEL') || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const MISTRAL_MODEL = () => Deno.env.get('MISTRAL_VISION_MODEL') || 'mistral-small-latest';
+// Fotos: erst Cloudflare (Gemma 4, Apache-2.0-Lizenz, kein Training, keine Speicherung), dann Mistral als Ersatz, falls MISTRAL_API_KEY gesetzt ist.
+const CF_VISION_MODEL = () => Deno.env.get('CF_VISION_MODEL') || '@cf/google/gemma-4-26b-a4b-it';
+const VISION_ORDER = () => (Deno.env.get('VISION_ORDER') || 'cloudflare,mistral').split(',').map(x => x.trim()).filter(Boolean);
 
 const SYSTEM = `Du bist der Küchen-Assistent der App „Speisekammer“ für einen Haushalt in Deutschland. Antworte immer auf Deutsch, kurz, konkret und ohne Floskeln.
 Regeln:
@@ -38,25 +41,25 @@ function contextText(c: any, health: string[] | null): string {
   return parts.join('\n');
 }
 
-// Fehler des Anbieters verständlich weitergeben, inklusive der Original-Meldung (gekürzt, ohne Schlüssel), damit die Ursache sichtbar wird.
-// 429 heißt nicht automatisch „Tageskontingent leer“: es kann auch eine kurzfristige Bremse (zu viele Anfragen pro Sekunde/Minute) sein.
+// Fehler des Anbieters verständlich weitergeben. Kurze Meldung für die Anzeige, Original-Text (gekürzt, ohne Schlüssel) separat in „detail“.
+// 429 heißt nicht automatisch „Tageskontingent leer“: Mistral meldet z. B. mit Code 1300 auch „kein API-Zugang für dieses Konto“.
 async function providerFail(r: Response, who: string): Promise<Fail> {
   const raw = (await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 240);
   console.error(`${who}: HTTP ${r.status} ${raw}`); // nur Status und Fehlertext, keine Inhalte der Anfrage
-  const detail = raw ? ` Meldung des Anbieters: ${raw}` : '';
-  if (r.status === 429) return new Fail(429, `${who} bremst gerade (Status 429, Limit pro Sekunde/Minute oder Kontingent).${detail}`, 'provider-limit');
-  if (r.status === 401 || r.status === 403) return new Fail(502, `${who}: Zugang abgelehnt (Status ${r.status}), Schlüssel oder Rechte prüfen.${detail}`, 'provider-auth');
-  if (r.status === 400 || r.status === 422) return new Fail(502, `${who} lehnt die Anfrage ab (Status ${r.status}), z. B. Modell ohne Bildunterstützung.${detail}`, 'provider-request');
-  return new Fail(502, `${who} antwortet nicht (Status ${r.status}).${detail}`, 'provider');
+  if (r.status === 429 && /"code"\s*:\s*"?1300/.test(raw)) return new Fail(502, `${who} gibt diesem Konto gerade keine Anfragen frei (Status 429, Code 1300).`, 'provider-access', raw);
+  if (r.status === 429) return new Fail(429, `${who} bremst gerade (Status 429). Bitte gleich noch einmal versuchen.`, 'provider-limit', raw);
+  if (r.status === 401 || r.status === 403) return new Fail(502, `${who}: Zugang abgelehnt (Status ${r.status}), Schlüssel oder Rechte prüfen.`, 'provider-auth', raw);
+  if (r.status === 400 || r.status === 422) return new Fail(502, `${who} lehnt die Anfrage ab (Status ${r.status}), z. B. Modell ohne Bildunterstützung.`, 'provider-request', raw);
+  return new Fail(502, `${who} antwortet nicht (Status ${r.status}).`, 'provider', raw);
 }
 
-async function cfChat(messages: { role: string; content: string }[], maxTokens: number): Promise<string> {
+async function cfChat(messages: { role: string; content: unknown }[], maxTokens: number, model = CF_MODEL()): Promise<string> {
   const acc = Deno.env.get('CF_ACCOUNT_ID'), tok = Deno.env.get('CF_API_TOKEN');
   if (!acc || !tok) throw new Fail(503, 'Die KI ist noch nicht eingerichtet (Cloudflare-Zugang fehlt).', 'setup');
   const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc}/ai/v1/chat/completions`, {
     method: 'POST', signal: AbortSignal.timeout(60000),
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: CF_MODEL(), messages, max_tokens: maxTokens, temperature: 0.4 }),
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: model === CF_MODEL() ? 0.4 : 0 }),
   }).catch(() => { throw new Fail(502, 'Der KI-Dienst ist gerade nicht erreichbar.', 'provider'); });
   if (!r.ok) throw await providerFail(r, 'KI-Dienst (Cloudflare)');
   const j = await r.json().catch(() => null);
@@ -81,6 +84,24 @@ async function mistralVision(prompt: string, image: string): Promise<string> {
   const t = j?.choices?.[0]?.message?.content;
   if (typeof t !== 'string' || !t.trim()) throw new Fail(502, 'Der Foto-Dienst hat keine Antwort geliefert.', 'provider');
   return t;
+}
+
+async function cfVision(prompt: string, image: string): Promise<string> {
+  return await cfChat([{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], 2500, CF_VISION_MODEL());
+}
+// Foto-Dienste der Reihe nach versuchen. Fehlt ein Schlüssel oder schlägt ein Dienst fehl, kommt der nächste dran.
+async function vision(prompt: string, image: string): Promise<string> {
+  const errors: Fail[] = [];
+  for (const p of VISION_ORDER()) {
+    try {
+      if (p === 'cloudflare') return await cfVision(prompt, image);
+      if (p === 'mistral') { if (!Deno.env.get('MISTRAL_API_KEY') && errors.length) continue; return await mistralVision(prompt, image); }
+    } catch (e) { if (e instanceof Fail) errors.push(e); else throw e; }
+  }
+  const first = errors[0];
+  if (!first) throw new Fail(503, 'Foto-Einlesen ist nicht eingerichtet.', 'setup');
+  const more = errors.slice(1).map(e => e.message).join(' ');
+  throw new Fail(first.status, first.message + (more ? ' Ersatzdienst: ' + more : ''), first.code, [first.detail, ...errors.slice(1).map(e => e.detail)].filter(Boolean).join(' | ').slice(0, 480));
 }
 
 // Erstes JSON-Objekt aus einer Modellantwort holen (auch wenn Text oder ```json drumherum steht)
@@ -166,12 +187,12 @@ Deno.serve(async req => {
       const d = parseJson(await cfChat([{ role: 'system', content: SYSTEM + (ctx ? '\n\n' + ctx : '') }, { role: 'user', content: prompt }], 1400));
       out = { recipe: { ...cleanParsed('recipe', d), note: str(d?.note, 400) } };
     } else {
-      out = { data: cleanParsed(body.kind, parseJson(await mistralVision(PARSE_PROMPTS[body.kind], image))) };
+      out = { data: cleanParsed(body.kind, parseJson(await vision(PARSE_PROMPTS[body.kind], image))) };
     }
     return json(out);
   } catch (e) {
     await sb.rpc('ai_use', { p_kind: kind, p_delta: -1 }); // fehlgeschlagene Anfrage zählt nicht
-    if (e instanceof Fail) return json({ error: e.message, code: e.code }, e.status);
+    if (e instanceof Fail) return json({ error: e.message, code: e.code, detail: e.detail }, e.status);
     return json({ error: 'Unerwarteter Fehler in der KI-Funktion.' }, 500);
   }
 });
