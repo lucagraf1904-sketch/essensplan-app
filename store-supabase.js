@@ -70,8 +70,9 @@ export const supabaseStore = {
     const { data, error } = await sb.functions.invoke('recipe-import', { body: { url } });
     if (error) {
       // Bei Statusfehlern steckt die eigentliche Meldung der Funktion im Response-Objekt
-      let msg = error.message;
-      try { const r = error.context; if (r?.json) { const b = await r.json(); msg = b?.error ?? b?.message ?? msg; } if (r?.status) msg = `${msg} (Status ${r.status})`; } catch { /* Antwort nicht lesbar */ }
+      let msg = error.message; const r = error.context, st = r?.status ? ` (Status ${r.status})` : '';
+      try { const t = await r.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; } catch { msg = t || msg; } } catch { /* Antwort nicht lesbar */ }
+      msg = `${String(msg).slice(0, 300)}${st} [v35]`;
       throw new Error(msg);
     }
     if (data?.error) throw new Error(data.error);
