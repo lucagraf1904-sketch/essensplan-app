@@ -15,3 +15,5 @@ rep('<link rel="stylesheet" href="style.css">', '<link rel="stylesheet" href="st
 rep('<title>Speisekammer</title>', '<title>Speisekammer (Demo)</title>')
 open(sys.argv[2], 'w').write(s)
 PY
+# Demo bleibt rein lokal: keine Verbindung zur echten Haushalts-Datenbank
+sed -i "s|^export const SUPABASE_URL = .*|export const SUPABASE_URL = '';|; s|^export const SUPABASE_ANON_KEY = .*|export const SUPABASE_ANON_KEY = '';|" "$OUT/config.js"

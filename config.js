@@ -1,7 +1,7 @@
 // Supabase-Zugang. Beide Werte sind für den Browser gedacht und dürfen öffentlich sein.
 // Leer lassen = App läuft nur lokal auf diesem Gerät.
-export const SUPABASE_URL = '';
-export const SUPABASE_ANON_KEY = '';
+export const SUPABASE_URL = 'https://ixynvpdkgzukqrqzdtwo.supabase.co';
+export const SUPABASE_ANON_KEY = 'sb_publishable_WudPbBqhAU-WS1lB0JuQqQ_uCfn77PK'; // Publishable key (öffentlich, Luca 23.11.)
 
 // Öffentlicher VAPID-Schlüssel für Push-Nachrichten (siehe README „Push-Erinnerungen“).
 // Leer = Erinnerungen nur, solange die App offen ist bzw. beim Öffnen.
