@@ -54,7 +54,11 @@ export const DEFAULT_SETTINGS = {
 const read = k => { try { return JSON.parse(localStorage.getItem(k)) ?? {}; } catch { return {}; } };
 const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
-export function getSettings() { return { ...DEFAULT_SETTINGS, ...read(HH_KEY), ...read(KEY) }; }
+// Haushaltswerte gewinnen vor Altlasten im persönlichen Speicher: dort zählen nur die persönlichen Schlüssel
+export function getSettings() {
+  const me = read(KEY), own = Object.fromEntries(Object.entries(me).filter(([k]) => PERSONAL_KEYS.includes(k)));
+  return { ...DEFAULT_SETTINGS, ...read(HH_KEY), ...own };
+}
 export const isPersonal = k => PERSONAL_KEYS.includes(k);
 export function setSetting(k, v) {
   if (isPersonal(k)) write(KEY, { ...read(KEY), [k]: v });
