@@ -5,7 +5,7 @@
 // Noch nicht drin: Nährstoffkonto (BLS-Daten), Kalorien je Zubereitungsart. Der Plan liegt unter 'speisekammer.plan' (Haushalt).
 import { isoLocal } from './categories.js';
 import { activeRecipes, loadRecipes, STARTERS, KINDS, TAGS, addStarters, upsertRecipe, updateRecipe, deleteRecipe, markCooked, recipeFromParts, parseRecipeText, needFromLine } from './recipes.js';
-import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setShift, mealAdvice } from './shifts.js';
+import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setShift, mealAdvice, shiftDay, shiftConf, setShiftConf, setShiftDay } from './shifts.js';
 import { getSettings } from './settings.js';
 import { offersFor, chainName } from './offers.js';
 import { loadMeds } from './meds.js';
@@ -107,7 +107,7 @@ function score(r, i, date, chosen, forgottenUsed) {
   }
   if (sh.some(x => x.code === 'S') && r.min > 45) p -= 1.5; // Spätschicht: wer zu Hause ist, kocht eher kurz
   const tomorrow = shiftsOn(addDays(date, 1));
-  if (tomorrow.some(x => x.code === 'S' || x.code === 'N') && r.tags?.includes('mitnehmen')) { p += 1; why.push('1 Portion mehr für die Dose morgen'); }
+  if (tomorrow.some(x => (x.code === 'S' || x.code === 'N') && shiftDay(x.person, addDays(date, 1))?.snack) && r.tags?.includes('mitnehmen')) { p += 1; why.push('1 Portion mehr für die Dose morgen'); }
   return { p, why };
 }
 
@@ -196,10 +196,12 @@ export async function render() {
 }
 
 function shiftLine(date, s) {
-  return shiftsOn(date).map(({ person, code }) => {
-    const a = mealAdvice(code, person === s.myName ? { noFridge: s.workNoFridge, noMicrowave: s.workNoMicrowave, dinnerAt: s.dinnerAt } : { dinnerAt: s.dinnerAt });
-    return `<details class="plan-shift"><summary>${SHIFTS[code].icon} <b>${esc(person)}</b>: ${esc(a.short)} ${SHIFTS[code].from}–${SHIFTS[code].to}</summary>
-      <ul class="tiny">${[...a.tips, ...a.box.map(b => 'Dose ' + b)].map(t => `<li>${esc(t)}</li>`).join('')}</ul></details>`;
+  return shiftsOn(date).map(({ person }) => {
+    const sd = shiftDay(person, date); if (!sd) return '';
+    const a = mealAdvice(sd, person === s.myName ? { noFridge: s.workNoFridge, noMicrowave: s.workNoMicrowave, dinnerAt: s.dinnerAt } : { dinnerAt: s.dinnerAt });
+    const times = `${SHIFTS[sd.code].icon} <b>${esc(person)}</b>: ${esc(a.short)} ${sd.from}–${sd.to} · Essen ${sd.main || s.dinnerAt}${sd.snack ? ` · Pause ${sd.snack}` : ''}`;
+    if (!s.shiftTips || !a.tips.length) return `<div class="plan-shift tiny">${times}</div>`;
+    return `<details class="plan-shift"><summary>${times}</summary><ul class="tiny">${a.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul></details>`;
   }).join('');
 }
 
@@ -234,7 +236,7 @@ function renderWeek(body, s) {
       const missing = (r.need ?? []).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
       const thaw = (r.need ?? []).map(([w]) => has(items, w)).find(x => x?.frozenAt);
-      const tomorrowAway = shiftsOn(addDays(d.date, 1)).filter(x => x.code === 'S' || x.code === 'N');
+      const tomorrowAway = shiftsOn(addDays(d.date, 1)).filter(x => (x.code === 'S' || x.code === 'N') && shiftDay(x.person, addDays(d.date, 1))?.snack);
       return `<li class="plan-day ${d.status}" data-i="${i}">${restBox}${head}
         <div class="plan-dinner"><b>🍽️ ${esc(m.title)}</b>${r.fav ? ' <span title="Lieblingsgericht">★</span>' : ''}
           <div class="tiny">${esc(KINDS[r.kind] ?? '')}${r.method ? ' · ' + esc(r.method) : ''} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}</div>
@@ -260,30 +262,84 @@ function renderWeek(body, s) {
     <p class="muted tiny">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. Nährstoffe pro Woche kommen später.</p>`;
 }
 
+let recTab = 'plan';
 function renderRecipes(body) {
-  const l = loadRecipes(), missingStarters = STARTERS.filter(s => !l.some(r => r.id === s.id)).length;
-  body.innerHTML = `<div class="tip-alts">
-      <button class="chip" data-rec="new">＋ Eigenes Gericht</button>
+  const all = loadRecipes(), missingStarters = STARTERS.filter(x => !all.some(r => r.id === x.id)).length;
+  const inPlan = all.filter(r => !r.store), stored = all.filter(r => r.store);
+  const l = (recTab === 'store' ? stored : inPlan).sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || a.title.localeCompare(b.title, 'de'));
+  const today = loadPlan()?.days?.find(d => daysTo(d.date) === 0);
+  body.innerHTML = `<div class="seg wrap rec-tabs">
+      <button type="button" data-rectab="plan" class="${recTab === 'plan' ? 'active' : ''}">🍽️ Im Plan (${inPlan.length})</button>
+      <button type="button" data-rectab="store" class="${recTab === 'store' ? 'active' : ''}">📚 Rezeptspeicher (${stored.length})</button></div>
+    <p class="tiny muted">${recTab === 'store' ? 'Hier liegen Rezepte zum Nachschlagen. Der Plan nimmt sie nicht von selbst; ihr könnt sie jederzeit kochen oder in den Plan aufnehmen.' : 'Aus diesen Gerichten stellt die App den Wochenplan zusammen.'}</p>
+    <div class="tip-alts">
+      <button class="chip" data-rec="new">＋ Neues Rezept</button>
       <button class="chip" data-rec="link">🔗 Per Link</button>
       <button class="chip" data-rec="paste">📋 Rezepttext einfügen</button>
       ${missingStarters ? `<button class="chip" data-rec="starters">Beispielgerichte (${missingStarters})</button>` : ''}</div>
-    <ul class="list rec-list">${l.sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || a.title.localeCompare(b.title, 'de')).map(r => `<li data-rec-id="${r.id}" class="${r.paused ? 'paused' : ''}">
-      <div class="main"><div class="name">${r.fav ? '★ ' : ''}${esc(r.title)}${r.paused ? ' <span class="muted tiny">(pausiert)</span>' : ''}</div>
-        <div class="meta">${esc(KINDS[r.kind] ?? '')} · ${fmtMin(r.min)}${(r.tags ?? []).map(t => ' · ' + esc(TAGS[t] ?? t)).join('')}${r.last ? ` · zuletzt ${new Date(r.last + 'T12:00').toLocaleDateString('de-DE')}` : ''}${r.url ? ' · 🔗' : ''}</div></div>
-      <button class="ghost" data-rec-edit="${r.id}" aria-label="Bearbeiten">✎</button></li>`).join('') || '<li class="muted">Noch keine Gerichte.</li>'}</ul>
-    <p class="muted tiny">★ = Lieblingsgericht (kommt öfter). Pausierte Gerichte plant die App nicht ein. Gilt für den ganzen Haushalt. Importierte Rezepte nur für den privaten Gebrauch; der Link zum Original bleibt gespeichert.</p>`;
+    <input id="rec-q" type="search" placeholder="Rezept suchen …" autocomplete="off" value="${esc(recQ)}">
+    <ul class="list rec-list">${l.map(r => `<li data-rec-id="${r.id}" data-q="${esc(recText(r))}" class="${r.paused ? 'paused' : ''}"${recQ && !recText(r).includes(recQ.toLowerCase()) ? ' hidden' : ''}>
+      <details><summary><div class="name">${r.fav ? '★ ' : ''}${esc(r.title)}${r.paused ? ' <span class="muted tiny">(pausiert)</span>' : ''}</div>
+        <div class="meta">${esc(KINDS[r.kind] ?? '')} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}${(r.tags ?? []).map(t => ' · ' + esc(TAGS[t] ?? t)).join('')}${r.last ? ` · zuletzt ${new Date(r.last + 'T12:00').toLocaleDateString('de-DE')}` : ''}</div></summary>
+        ${r.method ? `<p class="tiny">🍳 ${esc(r.method)}${r.servings ? ` · ${esc(r.servings)}` : ''}</p>` : ''}
+        ${(r.ingredients?.length ? r.ingredients : (r.need ?? []).map(n => n[1])).length ? `<p class="tiny"><b>Zutaten</b></p><ul class="tiny">${(r.ingredients?.length ? r.ingredients : (r.need ?? []).map(n => n[1])).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${r.steps?.length ? `<p class="tiny"><b>Zubereitung</b></p><ol class="tiny">${r.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
+        ${r.url ? `<p class="tiny"><a href="${esc(r.url)}" target="_blank" rel="noopener">Originalrezept öffnen ↗</a></p>` : ''}
+        <div class="tip-alts">
+          <button class="chip" data-rec-edit="${r.id}">✎ Bearbeiten</button>
+          ${today && today.status === 'geplant' ? `<button class="chip" data-rec-today="${r.id}">🍳 Heute kochen</button>` : ''}
+          <button class="chip" data-rec-move="${r.id}">${r.store ? '🍽️ In den Plan aufnehmen' : '📚 In den Rezeptspeicher'}</button>
+          <button class="chip" data-rec-fav="${r.id}">${r.fav ? '☆ Kein Liebling' : '★ Lieblingsgericht'}</button>
+          ${r.store ? '' : `<button class="chip" data-rec-pause="${r.id}">${r.paused ? '▶️ Wieder einplanen' : '⏸️ Gerade nicht'}</button>`}
+          <button class="chip" data-rec-del="${r.id}">🗑️ Löschen</button></div>
+      </details></li>`).join('') || `<li class="muted">${recTab === 'store' ? 'Der Rezeptspeicher ist leer. Neue Rezepte oder importierte könnt ihr hier ablegen.' : 'Noch keine Gerichte.'}</li>`}</ul>
+    <p class="muted tiny">★ = Lieblingsgericht (kommt öfter). Gilt für den ganzen Haushalt. Importierte Rezepte nur für den privaten Gebrauch; der Link zum Original bleibt gespeichert.</p>`;
 }
+let recQ = '';
+const recText = r => [r.title, ...(r.ingredients ?? []), ...(r.need ?? []).map(n => n[1]), ...(r.tags ?? []).map(t => TAGS[t] ?? t)].join(' ').toLowerCase();
 
+let calMonth = 0, calSel = isoLocal();
+function calendar(me, s) {
+  const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() + calMonth, 1);
+  const lead = (first.getDay() + 6) % 7, n = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate(), today = isoLocal();
+  const cells = Array(lead).fill('<span></span>');
+  for (let i = 1; i <= n; i++) {
+    const d = isoLocal(new Date(first.getFullYear(), first.getMonth(), i)), code = shiftOf(me, d), sd = shiftDay(me, d);
+    cells.push(`<button type="button" data-cal-day="${d}" class="cal-d${d === today ? ' today' : ''}${d === calSel ? ' sel' : ''}${d < today ? ' past' : ''}${code ? ' has' : ''}">
+      <span class="cal-n">${i}</span><span class="cal-i">${code ? SHIFTS[code].icon : ''}</span><span class="cal-t">${sd ? esc(sd.main || s.dinnerAt) : ''}${sd?.own ? '*' : ''}</span></button>`);
+  }
+  return `<div class="cal-head"><button type="button" class="ghost" data-cal-move="-1" ${calMonth <= -1 ? 'disabled' : ''} aria-label="Voriger Monat">‹</button>
+      <b>${first.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })}</b>
+      <button type="button" class="ghost" data-cal-move="1" ${calMonth >= 3 ? 'disabled' : ''} aria-label="Nächster Monat">›</button></div>
+    <div class="cal-grid">${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(w => `<span class="cal-w">${w}</span>`).join('')}${cells.join('')}</div>
+    <p class="tiny muted">${Object.entries(SHIFTS).map(([, v]) => `${v.icon} ${v.label}`).join(' · ')} · Uhrzeit = Hauptmahlzeit · * = nur an dem Tag geändert</p>`;
+}
+function dayPanel(me, d, s, others) {
+  const sd = shiftDay(me, d), long = new Date(d + 'T12:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
+  const adv = sd && s.shiftTips ? mealAdvice(sd, { noFridge: s.workNoFridge, noMicrowave: s.workNoMicrowave, dinnerAt: s.dinnerAt }) : null;
+  return `<div class="card shift-panel"><b>${esc(long)}</b>
+    <div class="seg wrap">${SHIFT_ORDER.filter(Boolean).map(c => `<button type="button" data-shift="${d}" data-code="${c}" class="${shiftOf(me, d) === c ? 'active' : ''}">${SHIFTS[c].icon} ${SHIFTS[c].label}</button>`).join('')}</div>
+    ${sd ? `<div class="tiny">Dienst ${sd.from}–${sd.to} · Essen ${sd.main || s.dinnerAt}${sd.snack ? ` · Pause ${sd.snack}` : ''}${sd.own ? ' <b>(nur an diesem Tag)</b>' : ''}</div>
+      <div class="tip-alts"><button type="button" class="chip" data-shift-day="${d}">⏰ Zeiten an diesem Tag ändern</button>${sd.own ? `<button type="button" class="chip" data-shift-day-reset="${d}">Zurück auf Standard</button>` : ''}</div>
+      ${adv?.tips.length ? `<ul class="tiny shift-tips">${adv.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}`
+    : `<div class="tiny muted">${shiftOf(me, d) === 'X' ? 'Frei: Essen wie gewohnt um ' + esc(s.dinnerAt) + ' Uhr.' : 'Keine Schicht eingetragen.'}</div>`}
+    ${others.map(o => { const od = shiftDay(o, d); return od ? `<div class="tiny muted">${esc(o)}: ${SHIFTS[od.code].icon} ${SHIFTS[od.code].label} ${od.from}–${od.to}, Essen ${od.main || s.dinnerAt}</div>` : ''; }).join('')}</div>`;
+}
 function renderShifts(body) {
   const s = getSettings(), me = s.myName;
   if (!me) { body.innerHTML = `<div class="tip hint"><p>Damit der Plan weiß, wessen Schicht es ist, trag bitte deinen Namen ein.</p><button class="chip" data-shift-name>Namen eintragen</button></div>`; return; }
-  const dates = Array.from({ length: 14 }, (_, i) => addDays(isoLocal(), i));
   const others = Object.keys(JSON.parse(localStorage.getItem('speisekammer.shifts') ?? '{}')).filter(p => p !== me);
-  body.innerHTML = `<p class="tiny muted">Deine Schichten für die nächsten 14 Tage antippen. ${Object.entries(SHIFTS).filter(([k]) => k !== 'X').map(([, v]) => `${v.icon} ${v.label} ${v.from}–${v.to}`).join(' · ')} (übliche Zeiten, Annahme).</p>
-    <ul class="list shift-list">${dates.map(d => `<li><span class="shift-day">${dayLabel(d)}</span>
-      <div class="seg wrap">${SHIFT_ORDER.filter(Boolean).map(c => `<button type="button" data-shift="${d}" data-code="${c}" class="${shiftOf(me, d) === c ? 'active' : ''}">${SHIFTS[c].icon} ${SHIFTS[c].label}</button>`).join('')}</div>
-      ${others.map(o => shiftOf(o, d) ? `<div class="tiny muted">${esc(o)}: ${SHIFTS[shiftOf(o, d)].icon} ${SHIFTS[shiftOf(o, d)].label}</div>` : '').join('')}</li>`).join('')}</ul>
-    <p class="muted tiny">Der Plan berücksichtigt das: vor der Nachtschicht leichte Gerichte, für Spät- und Nachtschicht am Vortag eine Portion mehr für die Dose, die Erinnerung passt sich an. Hinweise nach ${SHIFT_SOURCES}. Keine medizinische Beratung.</p>`;
+  const t = (code, f, v, allowEmpty) => `<label class="shift-t">${{ from: 'Beginn', to: 'Ende', main: 'Hauptmahlzeit', snack: 'Pause/Dose' }[f]}
+    <input type="time" data-conf="${code}" data-f="${f}" value="${esc(v)}">${allowEmpty && v ? `<button type="button" class="ghost tiny" data-conf-clear="${code}" data-f="${f}" aria-label="Leeren">✕</button>` : ''}</label>`;
+  body.innerHTML = `<details class="shift-conf" ${localStorage.getItem('shiftConfOpen') ? 'open' : ''}><summary><b>⏰ Meine Zeiten</b> <span class="tiny muted">Dienst und Essen je Schicht</span></summary>
+      ${['F', 'S', 'N'].map(code => { const c = shiftConf(me, code); return `<div class="shift-conf-row"><div class="shift-day">${SHIFTS[code].icon} ${SHIFTS[code].label}</div>
+        <div class="shift-times">${t(code, 'from', c.from)}${t(code, 'to', c.to)}${t(code, 'main', c.main, true)}${t(code, 'snack', c.snack, true)}</div>
+        ${!c.main ? `<div class="tiny muted">Hauptmahlzeit leer = gemeinsames Abendessen um ${esc(s.dinnerAt)} Uhr.</div>` : ''}</div>`; }).join('')}
+      <p class="tiny muted">Gilt für dich und ist für den Haushalt sichtbar, damit der Plan passt. Einzelne Tage kannst du im Kalender abweichend einstellen.</p></details>
+    <details class="shift-cal" ${localStorage.getItem('shiftCalClosed') ? '' : 'open'}><summary><b>📅 Kalender</b> <span class="tiny muted">Tag antippen, Schicht und Essenszeit eintragen</span></summary>
+      ${calendar(me, s)}</details>
+    ${dayPanel(me, calSel, s, others)}
+    <p class="muted tiny">Der Plan berücksichtigt das: vor der Nachtschicht leichte Gerichte, am Vortag einer Spät- oder Nachtschicht eine Portion mehr für die Dose, die Erinnerung richtet sich nach deiner Essenszeit. ${s.shiftTips ? `Tipps nach ${SHIFT_SOURCES}; abschaltbar unter Einstellungen → Persönlich.` : 'Tipps sind ausgeschaltet (Einstellungen → Persönlich).'} Die vorgegebenen Zeiten sind übliche Pflegezeiten (Annahme). Keine medizinische Beratung.</p>`;
 }
 
 // ---------- Aktionen ----------
@@ -293,7 +349,33 @@ async function onClick(e) {
   if (b.id === 'plan-new') { build(isoLocal(), (loadPlan()?.days ?? []).filter(d => daysTo(d.date) >= 0)); return render(); }
   if (b.dataset.rec) return recipeAction(b.dataset.rec);
   if (b.dataset.recEdit) return editRecipe(b.dataset.recEdit);
+  if (b.dataset.rectab) { recTab = b.dataset.rectab; return render(); }
+  if (b.dataset.recFav) { updateRecipe(b.dataset.recFav, x => x.fav = !x.fav); return render(); }
+  if (b.dataset.recPause) { updateRecipe(b.dataset.recPause, x => x.paused = !x.paused); rebuildOpen(); return render(); }
+  if (b.dataset.recMove) { updateRecipe(b.dataset.recMove, x => x.store = !x.store); rebuildOpen(); toast('Verschoben'); return render(); }
+  if (b.dataset.recDel) {
+    const r = loadRecipes().find(x => x.id === b.dataset.recDel);
+    if (await ctx.ask(`„${r?.title}“ löschen?`, 'Für alle im Haushalt.', [{ value: 'yes', label: 'Löschen', cls: 'danger' }, { value: '', label: 'Abbrechen' }])) { deleteRecipe(b.dataset.recDel); rebuildOpen(); }
+    return render();
+  }
+  if (b.dataset.recToday) {
+    const p = getPlan(), d = p.days.find(x => daysTo(x.date) === 0), r = recipe(b.dataset.recToday); if (!d || !r) return;
+    Object.assign(d, { dinner: r.id, title: r.title, why: ['selbst ausgewählt'] }); savePlan(p); view = 'week'; toast(`🍳 Heute: ${r.title}`); return render();
+  }
+  if (b.dataset.calDay) { calSel = b.dataset.calDay; await render(); return document.querySelector('.shift-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  if (b.dataset.calMove) { calMonth = Math.max(-1, Math.min(3, calMonth + +b.dataset.calMove)); return render(); }
   if ('shiftName' in b.dataset) { const n = await ctx.askInput('Dein Name', 'Name', ''); if (n) { ctx.setSetting('myName', n); } return render(); }
+  if (b.dataset.confClear) { setShiftConf(getSettings().myName, b.dataset.confClear, b.dataset.f, ''); localStorage.setItem('shiftConfOpen', '1'); rebuildOpen(); return render(); }
+  if (b.dataset.shiftDay) {
+    const me = getSettings().myName, d = b.dataset.shiftDay, sd = shiftDay(me, d); if (!sd) return;
+    const patch = {};
+    for (const [f, l] of [['from', 'Dienstbeginn'], ['to', 'Dienstende'], ['main', 'Hauptmahlzeit (leer = gemeinsames Abendessen)'], ['snack', 'Pause/Dose (leer = keine)']]) {
+      const v = await ctx.askInput(`${dayLabel(d)}: ${SHIFTS[sd.code].label}`, l, sd[f] ?? '', 'time'); if (v == null) return;
+      patch[f] = v;
+    }
+    setShiftDay(me, d, patch); rebuildOpen(); return render();
+  }
+  if (b.dataset.shiftDayReset) { setShiftDay(getSettings().myName, b.dataset.shiftDayReset, { from: null, to: null, main: null, snack: null }); rebuildOpen(); return render(); }
   if (b.dataset.shift) {
     const me = getSettings().myName, cur = shiftOf(me, b.dataset.shift);
     setShift(me, b.dataset.shift, cur === b.dataset.code ? '' : b.dataset.code);
@@ -358,15 +440,7 @@ async function askUsed(r) {
 // ---------- Gerichte bearbeiten ----------
 async function recipeAction(kind) {
   if (kind === 'starters') { addStarters(); build(); toast('Beispielgerichte übernommen'); return render(); }
-  if (kind === 'new') {
-    const title = await ctx.askInput('Neues Gericht', 'Name, z. B. „Kartoffelsuppe“', ''); if (!title) return;
-    const k = await ctx.ask('Was für ein Gericht?', esc(title), Object.entries(KINDS).map(([v, l]) => ({ value: v, label: l }))); if (!k) return;
-    const min = await ctx.ask('Wie lange dauert es insgesamt?', 'Vorbereiten und Garen', [15, 30, 45, 60, 90].map(m => ({ value: String(m), label: fmtMin(m) }))); if (!min) return;
-    const ing = await ctx.askInput('Hauptzutaten', 'Mit Komma trennen, z. B. „Kartoffeln, Möhren, Lauch“', '');
-    const need = (ing ?? '').split(',').map(x => needFromLine(x.trim())).filter(Boolean);
-    const r = upsertRecipe({ title, kind: k, min: +min, need, method: '', tags: [], fav: false });
-    toast('Gericht gespeichert'); view = 'recipes'; render(); return;
-  }
+  if (kind === 'new') return openEditor(null);
   if (kind === 'link') {
     if (!ctx.store.importRecipe) {
       await ctx.ask('Import per Link', 'Der Import per Link braucht die gemeinsame Datenbank (Supabase), weil das Handy fremde Webseiten nicht direkt lesen darf. Bis dahin: auf der Rezeptseite Titel, Zutaten und Zubereitung markieren, kopieren und unter „Rezepttext einfügen“ einfügen.', [{ value: 'ok', label: 'OK', cls: 'primary' }]);
@@ -384,38 +458,71 @@ async function recipeAction(kind) {
 }
 async function confirmImport(r) {
   const v = await ctx.ask(`„${r.title}“ übernehmen?`, `${esc(KINDS[r.kind])} · ${fmtMin(r.min)} · ${r.need.length} Zutaten erkannt: ${r.need.map(n => esc(n[1])).join(', ') || 'keine'}${r.steps?.length ? ` · ${r.steps.length} Schritte` : ''}`,
-    [{ value: 'ok', label: 'Übernehmen', cls: 'primary' }, { value: 'kind', label: 'Art ändern' }, { value: '', label: 'Abbrechen' }]);
-  if (v === 'kind') { const k = await ctx.ask('Was für ein Gericht?', esc(r.title), Object.entries(KINDS).map(([x, l]) => ({ value: x, label: l }))); if (k) r.kind = k; return confirmImport(r); }
-  if (v !== 'ok') return;
-  upsertRecipe({ ...r, src: r.url ? 'link' : 'own' }); toast('Gericht gespeichert'); view = 'recipes'; render();
+    [{ value: 'plan', label: '🍽️ In den Plan', cls: 'primary' }, { value: 'store', label: '📚 In den Rezeptspeicher' }, { value: 'edit', label: '✎ Vorher bearbeiten' }, { value: '', label: 'Abbrechen' }]);
+  if (v === 'edit') return openEditor({ ...r, store: recTab === 'store' });
+  if (!v) return;
+  upsertRecipe({ ...r, store: v === 'store', src: r.url ? 'link' : 'own' }); toast(v === 'store' ? 'Im Rezeptspeicher abgelegt' : 'Gericht gespeichert');
+  view = 'recipes'; recTab = v; render();
 }
-async function editRecipe(id) {
-  const r = loadRecipes().find(x => x.id === id); if (!r) return;
-  const v = await ctx.ask(r.title, `${esc(KINDS[r.kind] ?? '')} · ${fmtMin(r.min)} · Zutaten: ${(r.need ?? []).map(n => esc(n[1])).join(', ') || 'keine'}`, [
-    { value: 'fav', label: r.fav ? '☆ Kein Lieblingsgericht mehr' : '★ Lieblingsgericht', cls: 'primary' },
-    { value: 'tags', label: '🏷️ Eigenschaften (leicht, kalt, Dose)' },
-    { value: 'min', label: '⏱️ Dauer ändern' },
-    { value: 'need', label: '🥕 Hauptzutaten ändern' },
-    { value: 'pause', label: r.paused ? '▶️ Wieder einplanen' : '⏸️ Gerade nicht (pausieren)' },
-    { value: 'del', label: '🗑️ Löschen', cls: 'danger' }, { value: '', label: 'Schließen' }]);
-  if (v === 'fav') updateRecipe(id, x => x.fav = !x.fav);
-  else if (v === 'pause') updateRecipe(id, x => x.paused = !x.paused);
-  else if (v === 'min') { const m = await ctx.ask('Wie lange dauert es?', esc(r.title), [15, 30, 45, 60, 75, 90, 120].map(m => ({ value: String(m), label: fmtMin(m), cls: m === r.min ? 'primary' : '' }))); if (m) updateRecipe(id, x => x.min = +m); }
-  else if (v === 'need') { const t = await ctx.askInput('Hauptzutaten', 'Mit Komma trennen', (r.need ?? []).map(n => n[1]).join(', ')); if (t != null) updateRecipe(id, x => x.need = t.split(',').map(y => needFromLine(y.trim())).filter(Boolean)); }
-  else if (v === 'tags') {
-    for (;;) {
-      const cur = loadRecipes().find(x => x.id === id).tags ?? [];
-      const t = await ctx.ask('Eigenschaften', 'Antippen zum An- und Ausschalten', [...Object.entries(TAGS).map(([k, l]) => ({ value: k, label: `${cur.includes(k) ? '✓ ' : ''}${l}` })), { value: '', label: 'Fertig', cls: 'primary' }]);
-      if (!t) break;
-      updateRecipe(id, x => x.tags = cur.includes(t) ? cur.filter(y => y !== t) : [...cur, t]);
-    }
-  } else if (v === 'del') { const ok = await ctx.ask(`„${r.title}“ löschen?`, 'Für alle im Haushalt.', [{ value: 'yes', label: 'Löschen', cls: 'danger' }, { value: '', label: 'Abbrechen' }]); if (ok) deleteRecipe(id); }
-  else return;
-  render();
+
+// Rezept-Editor (alle Felder). r = null → neues Rezept
+let editing = null;
+function openEditor(r) {
+  editing = r?.id ? loadRecipes().find(x => x.id === r.id) ?? r : (r ?? { title: '', kind: 'veggie', min: 30, tags: [], store: recTab === 'store' });
+  const f = $('#rec-form'), e = editing;
+  f.reset();
+  $('#rec-head').textContent = e.id ? 'Rezept bearbeiten' : 'Neues Rezept';
+  f.title.value = e.title ?? ''; f.min.value = e.min ?? ''; f.kcal.value = e.kcal ?? ''; f.method.value = e.method ?? ''; f.servings.value = e.servings ?? '';
+  f.ingredients.value = (e.ingredients?.length ? e.ingredients : (e.need ?? []).map(n => n[1])).join('\n');
+  f.steps.value = (e.steps ?? []).join('\n'); f.url.value = e.url ?? '';
+  const st = { kind: e.kind ?? 'veggie', tags: [...(e.tags ?? [])], fav: !!e.fav, store: !!e.store };
+  const draw = () => {
+    $('#rec-kind').innerHTML = Object.entries(KINDS).map(([k, l]) => `<button type="button" data-k="${k}" class="${st.kind === k ? 'active' : ''}">${esc(l)}</button>`).join('');
+    $('#rec-min').innerHTML = [15, 20, 30, 45, 60, 90].map(m => `<button type="button" data-m="${m}" class="${+f.min.value === m ? 'active' : ''}">${fmtMin(m)}</button>`).join('');
+    $('#rec-tags').innerHTML = [...Object.entries(TAGS), ['fav', '★ Lieblingsgericht']].map(([k, l]) => { const on = k === 'fav' ? st.fav : st.tags.includes(k); return `<button type="button" class="chip ${on ? 'accepted' : ''}" data-t="${k}">${on ? '✓ ' : ''}${esc(l)}</button>`; }).join('');
+    $('#rec-place').innerHTML = `<button type="button" data-p="plan" class="${!st.store ? 'active' : ''}">🍽️ Im Plan</button><button type="button" data-p="store" class="${st.store ? 'active' : ''}">📚 Rezeptspeicher</button>`;
+  };
+  draw();
+  f.onclick = ev => {
+    const b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.k) st.kind = b.dataset.k;
+    else if (b.dataset.m) f.min.value = b.dataset.m;
+    else if (b.dataset.t === 'fav') st.fav = !st.fav;
+    else if (b.dataset.t) st.tags = st.tags.includes(b.dataset.t) ? st.tags.filter(x => x !== b.dataset.t) : [...st.tags, b.dataset.t];
+    else if (b.dataset.p) st.store = b.dataset.p === 'store';
+    else return;
+    draw();
+  };
+  f.min.oninput = draw;
+  const d = $('#rec-dialog');
+  d.onclose = () => {
+    if (d.returnValue !== 'save' || !f.title.value.trim()) return;
+    const lines = t => t.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const ingredients = lines(f.ingredients.value);
+    const oldNames = (e.need ?? []).map(n => n[1]).join('\n');
+    const need = ingredients.join('\n') === oldNames && e.need?.length ? e.need : ingredients.map(needFromLine).filter(Boolean).filter(([w]) => !/^(salz|pfeffer|wasser|öl|zucker)$/.test(w));
+    upsertRecipe({ ...(e.id ? { id: e.id } : {}), title: f.title.value.trim(), kind: st.kind, min: parseInt(f.min.value) || 30, kcal: parseInt(f.kcal.value) || null,
+      method: f.method.value.trim(), servings: f.servings.value.trim() || null, ingredients, steps: lines(f.steps.value), url: f.url.value.trim() || null,
+      need, tags: st.tags, fav: st.fav, store: st.store, src: e.src ?? (e.url ? 'link' : 'own') });
+    toast('Rezept gespeichert'); view = 'recipes'; recTab = st.store ? 'store' : 'plan'; rebuildOpen(); render();
+  };
+  d.returnValue = ''; d.showModal();
 }
+async function editRecipe(id) { openEditor({ id }); }
 
 export function initPlan(c) {
   ctx = c;
+  document.addEventListener('change', e => {
+    const i = e.target.closest?.('[data-conf]'); if (!i) return;
+    setShiftConf(getSettings().myName, i.dataset.conf, i.dataset.f, i.value); localStorage.setItem('shiftConfOpen', '1'); rebuildOpen(); render();
+  });
+  document.addEventListener('input', e => {
+    if (e.target.id !== 'rec-q') return;
+    recQ = e.target.value; const q = recQ.trim().toLowerCase();
+    document.querySelectorAll('.rec-list li[data-q]').forEach(li => li.hidden = !!q && !li.dataset.q.includes(q));
+  });
+  document.addEventListener('toggle', e => { if (e.target.classList?.contains('shift-cal')) e.target.open ? localStorage.removeItem('shiftCalClosed') : localStorage.setItem('shiftCalClosed', '1'); }, true);
+  document.addEventListener('toggle', e => { if (e.target.classList?.contains('shift-conf')) e.target.open ? localStorage.setItem('shiftConfOpen', '1') : localStorage.removeItem('shiftConfOpen'); }, true);
   // Demo: Beispielgerichte einmal übernehmen, mit Beispiel-Lieblingsgericht und lange nicht Gegessenem
   if (localStorage.getItem('speisekammer.seedStarters')) {
     addStarters(); localStorage.removeItem('speisekammer.seedStarters');

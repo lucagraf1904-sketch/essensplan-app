@@ -11,7 +11,7 @@ export const HOUSEHOLD_KEYS = [
   'speisekammer.offers', 'speisekammer.acceptedOffers',
   'speisekammer.shopping',       // Einkaufsliste (eintragsweise zusammengeführt)
   'speisekammer.recipes',        // eigene Gerichte (eintragsweise zusammengeführt)
-  'speisekammer.plan', 'speisekammer.shifts', 'speisekammer.layout',
+  'speisekammer.plan', 'speisekammer.shifts', 'speisekammer.shiftConf', 'speisekammer.layout',
 ];
 // Listen, die eintragsweise zusammengeführt werden (gleichzeitiges Abhaken)
 export const MERGE_KEYS = ['speisekammer.shopping', 'speisekammer.recipes'];

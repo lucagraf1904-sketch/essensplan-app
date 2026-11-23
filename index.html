@@ -295,6 +295,37 @@
     </form>
   </dialog>
 
+  <!-- Rezept bearbeiten -->
+  <dialog id="rec-dialog">
+    <form method="dialog" id="rec-form">
+      <h2 id="rec-head" tabindex="-1">Rezept</h2>
+      <label>Name<input name="title" required></label>
+      <p class="muted tiny">Art</p>
+      <div id="rec-kind" class="seg wrap"></div>
+      <p class="muted tiny">Dauer insgesamt</p>
+      <div id="rec-min" class="seg wrap"></div>
+      <div class="row">
+        <label>Minuten<input name="min" inputmode="numeric" pattern="[0-9]*"></label>
+        <label>kcal/Portion<input name="kcal" inputmode="numeric" pattern="[0-9]*" placeholder="optional"></label>
+      </div>
+      <div class="row">
+        <label>Gerät / Zubereitung<input name="method" placeholder="z. B. Ninja Druckgaren"></label>
+        <label>Portionen<input name="servings" placeholder="optional"></label>
+      </div>
+      <label>Zutaten (eine pro Zeile)<textarea name="ingredients" rows="6" placeholder="500 g Rinderhack&#10;2 Paprika&#10;200 g Reis"></textarea></label>
+      <label>Zubereitung (ein Schritt pro Zeile)<textarea name="steps" rows="6"></textarea></label>
+      <label>Link zum Original<input name="url" type="url" placeholder="optional"></label>
+      <p class="muted tiny">Eigenschaften</p>
+      <div id="rec-tags" class="tip-alts"></div>
+      <p class="muted tiny">Wo?</p>
+      <div id="rec-place" class="seg wrap"></div>
+      <menu>
+        <button value="cancel" formnovalidate>Abbrechen</button>
+        <button value="save" class="primary">Speichern</button>
+      </menu>
+    </form>
+  </dialog>
+
   <!-- Barcode-Scanner -->
   <dialog id="barcode-box" class="barcode-box">
     <h2>Barcode scannen</h2>

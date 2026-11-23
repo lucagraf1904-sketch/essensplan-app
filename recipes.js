@@ -1,5 +1,5 @@
 // Gerichte (Rezeptstamm) für den Essensplan. Gespeichert unter 'speisekammer.recipes' (Haushalt, eintragsweise abgeglichen).
-// Eintrag: { id, title, kind, method, min, kcal, veg, need: [[Suchwort, Anzeigename]], ingredients, steps, url, tags, fav, paused, last, count, src }
+// Eintrag: { id, store (nur Rezeptspeicher, nicht im Plan), title, kind, method, min, kcal, veg, need: [[Suchwort, Anzeigename]], ingredients, steps, url, tags, fav, paused, last, count, src }
 // kind: rind | gefluegel | fisch | veggie | schwein | sonst. tags: leicht (z. B. vor der Nachtschicht), kalt (schmeckt kalt), mitnehmen (taugt für die Dose)
 import { isoLocal, CATEGORIES } from './categories.js';
 
@@ -42,7 +42,8 @@ export const STARTERS = [
 const uid = () => crypto.randomUUID?.() ?? String(Date.now() + Math.random());
 export function loadRecipes() { try { return JSON.parse(localStorage.getItem(KEY)) ?? []; } catch { return []; } }
 export function saveRecipes(l) { localStorage.setItem(KEY, JSON.stringify(l)); }
-export const activeRecipes = () => loadRecipes().filter(r => !r.paused);
+// Im Plan = nicht pausiert und nicht nur im Rezeptspeicher (store: true)
+export const activeRecipes = () => loadRecipes().filter(r => !r.paused && !r.store);
 export function addStarters() {
   const l = loadRecipes(), have = new Set(l.map(r => r.id));
   saveRecipes([...l, ...STARTERS.filter(s => !have.has(s.id)).map(s => ({ ...s, src: 'start' }))]);

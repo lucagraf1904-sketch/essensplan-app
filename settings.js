@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS = {
   myName: '',            // Name dieser Person (für Dienstplan)
   weightOn: false,       // Gewichtstracker (Luca 22.11.: Schalter, standardmäßig aus)
   shiftsOn: false,       // Dienstplan für diese Person
+  shiftTips: true,       // Tipps zur Schicht anzeigen (Luca 23.11.: abschaltbar)
   workNoFridge: false,   // Kein Kühlschrank am Arbeitsplatz
   workNoMicrowave: false,// Keine Mikrowelle am Arbeitsplatz
   budget: 0,             // Monatsbudget in € (0 = aus), Haushalt
@@ -68,7 +69,7 @@ export const SHOW_KEYS = ['showQty','showCategory','showLocation','showPack','sh
 // Persönlich (pro Person): Anzeige, Tipps, Gesundheit, Erinnerungszeiten, Trinkzähler, Gewicht, Dienstplan-Rahmen
 export const PERSONAL_KEYS = [...SHOW_KEYS, 'tipsBread', 'tipsProduce', 'tipsProcessed', 'tipsMeat', 'health',
   'remindExpiry', 'expiryTime', 'remindDinner', 'dinnerTime', 'dinnerAuto', 'glassMl', 'drinkGoalMl',
-  'weightOn', 'myName', 'shiftsOn', 'workNoFridge', 'workNoMicrowave'];
+  'weightOn', 'myName', 'shiftsOn', 'shiftTips', 'workNoFridge', 'workNoMicrowave'];
 const MINIMAL_ON = ['showQty', 'showExpiryBadge', 'showWarnBox'];
 export const SHOW_PRESETS = {
   minimal: Object.fromEntries(SHOW_KEYS.map(k => [k, MINIMAL_ON.includes(k)])),

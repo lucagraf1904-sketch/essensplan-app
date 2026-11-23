@@ -7,7 +7,7 @@ import { initShared } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
 import { initPlan } from './plan.js';
 import { CARDS, GROUPS, MEDS_SOURCE, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
-import { shiftOf, SHIFTS, mealAdvice } from './shifts.js';
+import { shiftOf, shiftDay, SHIFTS } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE } from './tips.js';
@@ -584,8 +584,10 @@ const fmtDur = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) 
 // Wann soll heute ans Abendessen erinnert werden? { time, meal } oder null (übersprungen)
 export async function dinnerReminder(date = isoLocal(), s = getSettings()) {
   // Eigener Dienstplan: Spätschicht = warm vor Dienstbeginn (Annahme 12 Uhr), sonst normal
-  const shift = s.shiftsOn && s.myName ? shiftOf(s.myName, date) : '';
-  if (shift === 'S') return { time: '11:30', meal: null, shift };
+  const sd = s.shiftsOn && s.myName ? shiftDay(s.myName, date) : null, shift = sd?.code ?? '';
+  // Spätschicht mit eigener Mahlzeit vor Dienstbeginn: 30 min vorher erinnern
+  if (shift === 'S' && sd.main && sd.main < sd.from) return { time: minToHM(Math.max(0, hmToMin(sd.main) - 30)), meal: null, shift, sd };
+  if (sd?.main) s = { ...s, dinnerAt: sd.main }; // eigene Essenszeit an diesem Tag
   const meal = await plannedDinner(date);
   if (meal?.status === 'uebersprungen') return null;
   if (s.dinnerAuto && meal?.totalMinutes > 0) return { time: minToHM(Math.max(0, hmToMin(s.dinnerAt) - meal.totalMinutes)), meal };
@@ -604,7 +606,7 @@ async function checkReminders(force = false) {
   if (dr && now >= dr.time && localStorage.getItem('lastDinnerNotify') !== today) {
     localStorage.setItem('lastDinnerNotify', today);
     const m = dr.meal;
-    if (dr.shift === 'S') await showNote('Vor der Spätschicht', 'Warme Mahlzeit vor Dienstbeginn (z. B. die Portion von gestern) und eine Dose für die Pause einpacken.', 'abendessen');
+    if (dr.shift === 'S') await showNote('Vor der Spätschicht', `Um ${dr.sd.main} warm essen (z. B. die Portion von gestern)${dr.sd.snack ? ' und eine Dose für die Pause einpacken' : ''}.`, 'abendessen');
     else if (s.shiftsOn && s.myName && shiftOf(s.myName, today) === 'N' && m?.title) await showNote(`Vor der Nachtschicht: ${m.title}`, `Leicht essen und eine kleine Dose für die Nacht vorbereiten. Dauert ${fmtDur(m.totalMinutes)}.`, 'abendessen');
     else if (m?.title && m.totalMinutes) await showNote(`Jetzt anfangen: ${m.title}`, `Dauert ${fmtDur(m.totalMinutes)}, dann ist es um ${s.dinnerAt} Uhr fertig.`, 'abendessen');
     else if (leftovers(await store.listItems()).length) await showNote('Zeit fürs Abendessen', `Reste im Kühlschrank: ${leftovers(await store.listItems()).map(i => i.name.replace(/^Rest: /, '')).join(', ')}. Gut durcherhitzen.`, 'abendessen');
@@ -1111,6 +1113,7 @@ const SWITCHES = {
   '#settings-me': [
     ['weightOn', 'Gewicht eintragen (einmal pro Woche)', 'Kurve unter „Verlauf“, ohne Bewertung. Nur für dich sichtbar.'],
     ['shiftsOn', 'Dienstplan nutzen', 'Früh, Spät, Nacht, Frei: Essenszeiten und Erinnerungen passen sich an'],
+    ['shiftTips', 'Tipps zur Schicht anzeigen', 'Kurze Hinweise passend zu Schicht und euren Zeiten', 'shiftsOn'],
     ['workNoFridge', 'Kein Kühlschrank auf der Arbeit', 'Mitnehm-Essen, das ungekühlt hält', 'shiftsOn'],
     ['workNoMicrowave', 'Keine Mikrowelle auf der Arbeit', 'Mitnehm-Essen, das kalt schmeckt', 'shiftsOn'],
   ],

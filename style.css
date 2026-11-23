@@ -219,3 +219,25 @@ nav button span { font-size: .68rem; }
 .shift-list .seg button { padding: 6px 8px; font-size: .82rem; }
 #ask-input:is(textarea) { width: 100%; font: inherit; }
 .med-card p { margin: 4px 0; }
+.shift-conf { margin: 6px 0 10px; } .shift-conf summary { cursor: pointer; padding: 6px 0; }
+.shift-conf-row { margin: 8px 0; } .shift-times { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.shift-t { display: flex; flex-direction: column; font-size: .8rem; } .shift-t input { width: 100%; }
+.shift-t .ghost { align-self: flex-start; padding: 2px 6px; }
+
+/* Schicht-Kalender */
+.shift-cal summary, .shift-conf summary { cursor: pointer; padding: .4rem 0; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin: .3rem 0; }
+.cal-head button { font-size: 1.4rem; padding: .1rem .8rem; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-w { text-align: center; font-size: .75rem; opacity: .6; }
+.cal-d { display: flex; flex-direction: column; align-items: center; min-height: 3.2rem; padding: 2px 0; border: 1px solid rgba(127,127,127,.25); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+.cal-d.has { background: rgba(80,140,255,.10); }
+.cal-d.today { border-color: currentColor; }
+.cal-d.sel { outline: 2px solid #3b82f6; }
+.cal-d.past { opacity: .5; }
+.cal-n { font-size: .8rem; }
+.cal-i { font-size: 1rem; line-height: 1.2; min-height: 1.2rem; }
+.cal-t { font-size: .65rem; opacity: .8; }
+.shift-panel { margin: .6rem 0; padding: .6rem; border: 1px solid rgba(127,127,127,.25); border-radius: 10px; }
+.shift-tips { margin: .3rem 0 0 1rem; padding: 0; }
+.rec-list li[hidden] { display: none; }
