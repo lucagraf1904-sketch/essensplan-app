@@ -315,3 +315,9 @@ body.no-ai .ai-only, body.no-ai #btn-ai { display: none; }
 .ai-health input { width: auto; margin-top: 3px; }
 #ai-form input { flex: 1; }
 .ai-health.hidden { display: none !important; }
+/* Was wurde gegessen? */
+.eat-list { list-style: none; padding: 0; margin: 8px 0; }
+.eat-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,.25); }
+.eat-name { display: flex; flex-direction: column; }
+.eat-ctl { display: flex; align-items: center; gap: 6px; }
+.eat-ctl b { min-width: 3.5em; text-align: center; }
