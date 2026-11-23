@@ -12,6 +12,7 @@ import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE, ARZT } from './tips.js';
 import { initOnboarding } from './onboarding.js';
+import { initAi, aiOn, parsePhoto, adaptRecipe } from './ai.js';
 const moreHtml = t => t?.more?.length ? `<details class="tip-more"><summary>Mehr dazu</summary>${t.more.map(m => `<p class="tiny">${esc(m)}</p>`).join('')}${t.doc ? `<p class="tiny muted">${esc(ARZT)}</p>` : ''}</details>` : '';
 import { conditionLabel, searchConditions, conditionTags } from './conditions.js';
 import { initHealth } from './health.js';
@@ -779,7 +780,7 @@ async function start() {
       },
       refresh: () => { renderPantry(); renderSettings(); renderUtensils(); document.dispatchEvent(new CustomEvent('pantry:changed')); } });
   }
-  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
+  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, aiRecipePhoto, aiAdapt: adaptRecipe, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
   initHealth(store, $);
   checkReminders();
   pushStatus();
@@ -1134,6 +1135,9 @@ const SWITCHES = {
   '#settings-plan': [
     ['planHealthRules', 'Wochenregeln im Plan', 'Die Zahlen stellst du im Wochenplan unter „Wochenziele“ ein (Standard: 2× Fisch, höchstens 1× Rind)'],
   ],
+  '#settings-ai': [
+    ['aiOn', 'KI-Assistent nutzen', 'Chat (🤖 oben), Gericht anpassen, Fotos einlesen. Braucht Konto und Internet.'],
+  ],
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
@@ -1217,6 +1221,7 @@ function renderSummaries(s) {
     remind: join([on(s.remindExpiry, `Ablauf ${s.expiryTime}`), on(s.remindDinner, s.dinnerAuto ? `Abendessen automatisch (Essen ${s.dinnerAt})` : `Abendessen ${s.dinnerTime}`)]) || 'Aus',
     pantry: join([`Warnung ${WARN_DAYS} ${WARN_DAYS === 1 ? 'Tag' : 'Tage'} vorher`, on(s.askFreeze, 'Einfrier-Frage'), on(s.shopSuggestions, 'Wieder kaufen')]),
     tips: s.tips ? 'An' : 'Aus',
+    ai: s.aiOn !== false ? 'An' : 'Aus',
     show: { minimal: 'Minimal: nur das Nötigste', normal: 'Normal', alles: 'Alles anzeigen', eigene: 'Eigene Auswahl' }[showPreset(s)],
     drinks: { off: 'Aus', a: 'A: Vorrat + Bilanz', b: 'B: + kcal', c: 'C: + Trinkzähler' }[s.drinks] ?? 'A: Vorrat + Bilanz',
     plan: join([s.planHealthRules ? 'Wochenregeln an' : 'Wochenregeln aus', (s.planExclude ?? []).length ? `${s.planExclude.length} ausgeschlossen` : null]),
@@ -1282,6 +1287,7 @@ function renderSettings() {
       </li>`;
     }).join('');
   }
+  document.body.classList.toggle('no-ai', !aiOn());
   renderChoices(s);
   renderProfile(s);
   $('#settings-me').insertAdjacentHTML('afterbegin', `<li class="switch-row"><span class="main">Dein Name<br><small class="muted">Für den Dienstplan, z. B. „Luca“</small></span>
@@ -1344,6 +1350,68 @@ $('#tab-kitchen').addEventListener('change', e => {
   renderPantry();
   syncPush();
 });
+
+// ---------- KI (ai.js): Chat, Gericht anpassen, Fotos einlesen ----------
+function toast(msg, ms = 2500) {
+  let t = document.getElementById('plan-toast');
+  if (!t) { t = Object.assign(document.createElement('div'), { id: 'plan-toast' }); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
+}
+// Kontext für die KI: Vorrat (bald Ablaufendes zuerst), Geräte, Vorlieben. Keine Gesundheitsangaben (die gehen nur pro Anfrage mit).
+async function aiContext() {
+  const items = (await store.listItems()).filter(i => i.qty > 0).sort((a, b) => (a.expiry || '9999').localeCompare(b.expiry || '9999')).slice(0, 60);
+  return {
+    pantry: items.map(i => `${i.name} (${i.qty} ${i.unit}${i.expiry ? ', MHD ' + i.expiry : ''}${i.location === 'Gefrierschrank' ? ', TK' : ''})`),
+    utensils: loadUt().filter(u => u.has).map(u => u.name),
+    prefs: (getSettings().prefs ?? []).map(p => PREFS.find(x => x[0] === p)?.[1] ?? p),
+  };
+}
+// Foto-Auswahl per Knopfdruck (iPhone: Kamera oder Mediathek)
+function pickPhoto() {
+  return new Promise(resolve => {
+    const i = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
+    i.addEventListener('change', () => resolve(i.files[0] ?? null)); i.addEventListener('cancel', () => resolve(null));
+    i.click();
+  });
+}
+const aiFail = (e, what) => ask(`${what} hat nicht geklappt`, esc(e.message), [{ value: 'ok', label: 'OK' }]);
+async function aiRecipePhoto() {
+  const f = await pickPhoto(); if (!f) return null;
+  toast('🤖 Rezept wird gelesen …', 8000);
+  try {
+    const d = await parsePhoto('recipe', f);
+    if (!d.title && !d.ingredients.length) { await ask('Kein Rezept erkannt', 'Auf dem Foto war kein lesbares Rezept. Tipp: gerade, gut beleuchtet, nur das Rezept im Bild.', [{ value: 'ok', label: 'OK' }]); return null; }
+    return d;
+  } catch (e) { await aiFail(e, 'Foto-Einlesen'); return null; }
+}
+$('#scan-ai-file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  $('#scan-status').textContent = '🤖 Bon wird gelesen …';
+  try {
+    const d = await parsePhoto('receipt', f), date = new Date();
+    scanned = [...d.items.map(x => { const category = guessCategory(x.name);
+      return { name: x.name, size: x.size || parseSize(x.name)?.label || '', price: x.price, qty: x.qty, unit: x.unit, category, expiry: defaultExpiry(category, date), selected: category !== 'Haushalt' }; }),
+      ...d.deposit.map(x => ({ name: x.name, size: '', price: x.price, qty: 1, unit: 'Stk', category: 'Pfand', expiry: '', selected: false, deposit: true }))];
+    $('#scan-status').textContent = scanned.length ? `${scanned.length} Positionen von der KI gelesen. Bitte Namen, Preise und Mengen prüfen, Haltbarkeit ist geschätzt.` : 'Keine Positionen erkannt. Versuche ein geraderes Foto.';
+    renderScan();
+  } catch (err) { $('#scan-status').textContent = 'Fehler: ' + err.message; }
+});
+$('#pack-ai-file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const msg = t => $('#item-nutrition').textContent = t;
+  msg('🤖 Verpackung wird gelesen …');
+  try {
+    const d = await parsePhoto('package', f);
+    if (!d.name) return msg('Auf dem Foto war nichts Lesbares. Bitte Namen eintragen.');
+    form.name.value = d.name; if (d.size) form.size.value = d.size;
+    const cat = guessCategory(d.name); form.category.value = cat;
+    if (!editing) form.location.value = CATEGORIES[cat]?.location ?? form.location.value;
+    if (d.bestBefore) form.expiry.value = d.bestBefore; else if (!editing && !form.expiry.value) form.expiry.value = defaultExpiry(cat);
+    msg(`Von der KI gelesen${d.bestBefore ? '' : ', Mindesthaltbarkeit nicht erkannt (geschätzt)'}. Bitte prüfen.`);
+  } catch (err) { msg('Fehler: ' + err.message); }
+});
+initAi({ store, ask, toast, context: aiContext });
+
 renderSettings();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

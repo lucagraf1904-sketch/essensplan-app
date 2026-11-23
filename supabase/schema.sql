@@ -341,6 +341,39 @@ do $$ begin
     alter publication supabase_realtime add table member_data; end if;
 end $$;
 
+-- KI-Funktion (Edge Function „ai“): Zähler pro Haushalt und Tag, damit ein Haushalt das Gratis-Kontingent nicht allein aufbraucht.
+-- Gespeichert werden nur Zähler, nie Fragen, Antworten oder Fotos. Schreiben nur über ai_use() (Rechte der Funktion), Lesen im eigenen Haushalt.
+create table if not exists ai_usage (
+  household_id uuid not null references households(id) on delete cascade,
+  day date not null,
+  kind text not null check (kind in ('text', 'image')),
+  n int not null default 0,
+  primary key (household_id, day, kind)
+);
+alter table ai_usage enable row level security;
+drop policy if exists ai_usage_read on ai_usage;
+create policy ai_usage_read on ai_usage for select using (household_id = my_household());
+
+-- Zählt eine Anfrage (p_delta = 1) oder gibt sie zurück (p_delta = -1, wenn der KI-Anbieter fehlgeschlagen ist).
+-- Liefert { ok, used, limit }. ok = false, wenn das Tageslimit des Haushalts erreicht ist (dann wird nicht gezählt).
+create or replace function ai_use(p_kind text, p_delta int default 1) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  hh uuid := my_household();
+  d date := (now() at time zone 'Europe/Berlin')::date;
+  lim int := case when p_kind = 'image' then 10 else 40 end;
+  cur int;
+begin
+  if hh is null then raise exception 'Kein Haushalt'; end if;
+  if p_kind not in ('text', 'image') then raise exception 'Unbekannte Art'; end if;
+  insert into ai_usage(household_id, day, kind, n) values (hh, d, p_kind, 0) on conflict do nothing;
+  select n into cur from ai_usage where household_id = hh and day = d and kind = p_kind for update;
+  if p_delta > 0 and cur >= lim then return jsonb_build_object('ok', false, 'used', cur, 'limit', lim); end if;
+  update ai_usage set n = greatest(0, n + p_delta) where household_id = hh and day = d and kind = p_kind returning n into cur;
+  return jsonb_build_object('ok', true, 'used', cur, 'limit', lim);
+end $$;
+-- Tageslimits (Luca 23.11.2026): 40 Text-Anfragen und 10 Foto-Anfragen pro Haushalt. Zum Ändern die Zahl in „lim“ anpassen und die Datei erneut ausführen.
+
 -- Zugriffsrechte für angemeldete Nutzer (neuere Supabase-Projekte vergeben sie nicht mehr automatisch; Luca 23.11.: „permission denied for table members“).
 -- Die Zeilen schützen weiterhin die Row-Level-Security-Regeln oben.
 grant usage on schema public to authenticated, service_role;
