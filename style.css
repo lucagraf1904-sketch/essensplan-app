@@ -41,6 +41,9 @@ nav button { flex: 1; border: none; border-radius: 0; background: none; display:
 nav button span { font-size: .75rem; }
 nav button.active { color: var(--green); }
 dialog { border: none; border-radius: 16px; width: min(92vw, 440px); background: var(--card); color: var(--text); padding: 16px; }
+/* Hohe Dialoge (z. B. Artikel mit Foto-Meldung) scrollen, statt unten abgeschnitten zu werden; unten bleibt Platz für die Knöpfe */
+dialog { max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+dialog form { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 dialog::backdrop { background: rgba(0,0,0,.4); }
 dialog label { display: block; font-size: .85rem; color: var(--muted); margin: 8px 0; }
 dialog label input, dialog label select { margin-top: 4px; color: var(--text); }

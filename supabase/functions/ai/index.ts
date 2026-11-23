@@ -1,13 +1,13 @@
 // Supabase Edge Function „ai“: KI-Funktionen der App über kostenlose Anbieter. Die API-Schlüssel liegen nur hier (Secrets), nie in der App.
 //   Text (Chat, Gericht anpassen)  → Cloudflare Workers AI (kein Training mit Kundendaten, keine Speicherung laut Cloudflare-Doku)
-//   Fotos (Rezept, Kassenbon, Verpackung) → Cloudflare (Gemma 4), als Ersatz Mistral (Gratis-Modus; Training im Mistral-Admin-Bereich abschalten!)
+//   Fotos (Rezept, Kassenbon, Verpackung) → Cloudflare (Mistral Small 3.1, dann Gemma 4), zuletzt Mistral direkt (Gratis-Modus; Training im Mistral-Admin-Bereich abschalten!)
 // Aufruf (angemeldet): POST { action: 'chat' | 'adapt' | 'parse', ... } → { text } | { recipe } | { data }
 //   chat:  { messages: [{ role, content }], context?: { pantry[], utensils[], prefs[] }, health?: string[] }
 //   adapt: { recipe: { title, ingredients[], steps[], min, servings }, goal, context?, health? }
 //   parse: { kind: 'recipe' | 'receipt' | 'package', image: 'data:image/jpeg;base64,…' }   (nie zusammen mit health)
 // Gesundheitsangaben (health) kommen nur mit, wenn die Person es für genau diese Anfrage angetippt hat (Lucas Vorgabe, Option B).
 // Es werden keine Inhalte gespeichert oder protokolliert, nur Zähler pro Haushalt (Tabelle ai_usage, Funktion ai_use).
-// Secrets: CF_ACCOUNT_ID, CF_API_TOKEN. Optional: MISTRAL_API_KEY (Ersatz für Fotos), CF_TEXT_MODEL, CF_VISION_MODEL, MISTRAL_VISION_MODEL, VISION_ORDER (z. B. „mistral,cloudflare“).
+// Secrets: CF_ACCOUNT_ID, CF_API_TOKEN. Optional: MISTRAL_API_KEY (Ersatz für Fotos), CF_TEXT_MODEL, MISTRAL_VISION_MODEL, VISION_ORDER (z. B. „cf:@cf/google/gemma-4-26b-a4b-it,mistral“).
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
@@ -17,8 +17,9 @@ class Fail extends Error { constructor(public status: number, msg: string, publi
 const CF_MODEL = () => Deno.env.get('CF_TEXT_MODEL') || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const MISTRAL_MODEL = () => Deno.env.get('MISTRAL_VISION_MODEL') || 'mistral-small-latest';
 // Fotos: erst Cloudflare (Gemma 4, Apache-2.0-Lizenz, kein Training, keine Speicherung), dann Mistral als Ersatz, falls MISTRAL_API_KEY gesetzt ist.
-const CF_VISION_MODEL = () => Deno.env.get('CF_VISION_MODEL') || '@cf/google/gemma-4-26b-a4b-it';
-const VISION_ORDER = () => (Deno.env.get('VISION_ORDER') || 'cloudflare,mistral').split(',').map(x => x.trim()).filter(Boolean);
+// Reihenfolge der Foto-Dienste (Secret VISION_ORDER überschreibt): 'cf:<Modell>' = Cloudflare Workers AI, 'mistral' = Mistral direkt.
+// Mistral Small 3.1 zuerst (kein „Denkmodell“, daher schnell), Gemma 4 als zweite Wahl (denkt vor der Antwort und ist langsamer).
+const VISION_ORDER = () => (Deno.env.get('VISION_ORDER') || 'cf:@cf/mistralai/mistral-small-3.1-24b-instruct,cf:@cf/google/gemma-4-26b-a4b-it,mistral').split(',').map(x => x.trim()).filter(Boolean);
 
 const SYSTEM = `Du bist der Küchen-Assistent der App „Speisekammer“ für einen Haushalt in Deutschland. Antworte immer auf Deutsch, kurz, konkret und ohne Floskeln.
 Regeln:
@@ -53,18 +54,25 @@ async function providerFail(r: Response, who: string): Promise<Fail> {
   return new Fail(502, `${who} antwortet nicht (Status ${r.status}).`, 'provider', raw);
 }
 
-async function cfChat(messages: { role: string; content: unknown }[], maxTokens: number, model = CF_MODEL()): Promise<string> {
+async function cfChat(messages: { role: string; content: unknown }[], maxTokens: number, model = CF_MODEL(), timeoutMs = 60000): Promise<string> {
   const acc = Deno.env.get('CF_ACCOUNT_ID'), tok = Deno.env.get('CF_API_TOKEN');
   if (!acc || !tok) throw new Fail(503, 'Die KI ist noch nicht eingerichtet (Cloudflare-Zugang fehlt).', 'setup');
   const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc}/ai/v1/chat/completions`, {
-    method: 'POST', signal: AbortSignal.timeout(60000),
+    method: 'POST', signal: AbortSignal.timeout(timeoutMs),
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: model === CF_MODEL() ? 0.4 : 0 }),
-  }).catch(() => { throw new Fail(502, 'Der KI-Dienst ist gerade nicht erreichbar.', 'provider'); });
-  if (!r.ok) throw await providerFail(r, 'KI-Dienst (Cloudflare)');
+  }).catch((e) => { throw new Fail(502, e?.name === 'TimeoutError' ? `Der KI-Dienst (${model.split('/').pop()}) hat nicht rechtzeitig geantwortet (über ${Math.round(timeoutMs / 1000)} s).` : 'Der KI-Dienst ist gerade nicht erreichbar.', 'provider', String(e?.message ?? '').slice(0, 120)); });
+  if (!r.ok) throw await providerFail(r, `KI-Dienst (${model.split('/').pop()})`);
   const j = await r.json().catch(() => null);
-  const t = j?.choices?.[0]?.message?.content ?? j?.result?.response ?? j?.result?.choices?.[0]?.message?.content;
-  if (typeof t !== 'string' || !t.trim()) throw new Fail(502, 'Der KI-Dienst hat keine Antwort geliefert.', 'provider');
+  const c = j?.choices?.[0]?.message?.content ?? j?.result?.response ?? j?.result?.choices?.[0]?.message?.content;
+  const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => x?.text ?? '').join('') : '';
+  if (!t.trim()) {
+    // Leere Antwort: Ursache sichtbar machen (z. B. Denkmodell hat das Token-Limit verbraucht). Nur Struktur, nie Inhalte.
+    const fin = j?.choices?.[0]?.finish_reason, u = j?.usage ? JSON.stringify(j.usage).slice(0, 160) : '';
+    const keys = j?.choices?.[0]?.message ? Object.keys(j.choices[0].message).join(',') : Object.keys(j ?? {}).join(',');
+    console.error(`${model}: leere Antwort, finish_reason=${fin}, Felder=${keys}, usage=${u}`);
+    throw new Fail(502, fin === 'length' ? `Das Modell (${model.split('/').pop()}) hat sein Längenlimit verbraucht, ohne zu antworten.` : `Der KI-Dienst (${model.split('/').pop()}) hat keine Antwort geliefert.`, 'empty', `finish_reason=${fin ?? '?'}, Felder=${keys}, ${u}`.slice(0, 300));
+  }
   return t.trim();
 }
 
@@ -87,24 +95,29 @@ async function mistralVision(prompt: string, image: string): Promise<string> {
 }
 
 // Maximale Antwortlänge je Foto-Art: kurze Antworten (Verpackung) kommen deutlich schneller
-const MAX_OUT: Record<string, number> = { package: 400, recipe: 2000, receipt: 3000 };
-async function cfVision(prompt: string, image: string, kind: string): Promise<string> {
-  return await cfChat([{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], MAX_OUT[kind] ?? 2000, CF_VISION_MODEL());
+const MAX_OUT: Record<string, number> = { package: 500, recipe: 2000, receipt: 3000 };
+// Denkmodelle brauchen für ihr „Nachdenken“ zusätzliche Tokens, sonst ist die Antwort leer
+const THINKS = /gemma-4|qwen3|deepseek|kimi|glm|gpt-oss|qwq/;
+async function cfVision(prompt: string, image: string, kind: string, model: string): Promise<string> {
+  const max = (MAX_OUT[kind] ?? 2000) * (THINKS.test(model) ? 4 : 1);
+  return await cfChat([{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], max, model, THINKS.test(model) ? 70000 : 45000);
 }
 // Foto-Dienste der Reihe nach versuchen. Fehlt ein Schlüssel oder schlägt ein Dienst fehl, kommt der nächste dran.
 async function vision(prompt: string, image: string, kind: string): Promise<string> {
-  const errors: Fail[] = [];
+  const errors: Fail[] = [], t00 = Date.now();
   for (const p of VISION_ORDER()) {
+    if (Date.now() - t00 > 80000) break; // die Function darf höchstens 150 s laufen
     try {
       const t0 = Date.now();
-      if (p === 'cloudflare') { const out = await cfVision(prompt, image, kind); console.log(`Foto ${kind} über Cloudflare: ${Date.now() - t0} ms`); return out; }
+      if (p.startsWith('cf:')) { const out = await cfVision(prompt, image, kind, p.slice(3)); console.log(`Foto ${kind} über ${p}: ${Date.now() - t0} ms`); return out; }
       if (p === 'mistral') { if (!Deno.env.get('MISTRAL_API_KEY') && errors.length) continue; const out = await mistralVision(prompt, image); console.log(`Foto ${kind} über Mistral: ${Date.now() - t0} ms`); return out; }
     } catch (e) { if (e instanceof Fail) errors.push(e); else throw e; }
   }
   const first = errors[0];
   if (!first) throw new Fail(503, 'Foto-Einlesen ist nicht eingerichtet.', 'setup');
-  const more = errors.slice(1).map(e => e.message).join(' ');
-  throw new Fail(first.status, first.message + (more ? ' Ersatzdienst: ' + more : ''), first.code, [first.detail, ...errors.slice(1).map(e => e.detail)].filter(Boolean).join(' | ').slice(0, 480));
+  // Kurze Meldung (erster Fehler), alle Einzelheiten nur im Feld „detail“ (in der App eingeklappt)
+  const all = errors.map(e => e.message + (e.detail ? ` [${e.detail}]` : '')).join(' | ').slice(0, 700);
+  throw new Fail(first.status, errors.length > 1 ? `${first.message} Auch ${errors.length - 1} weitere(r) Dienst(e) schlugen fehl.` : first.message, first.code, all);
 }
 
 // Erstes JSON-Objekt aus einer Modellantwort holen (auch wenn Text oder ```json drumherum steht)

@@ -5,7 +5,7 @@ Die App nutzt zwei Gratis-Dienste. Die Schlüssel kommen **nur** in Supabase (Se
 | Aufgabe | Dienst | Kosten |
 |---|---|---|
 | Chat, Gericht anpassen (Text) | Cloudflare Workers AI | 0 €, 10.000 „Neurons“ pro Tag gratis, danach Fehlermeldung statt Kosten |
-| Fotos einlesen (Rezept, Bon, Verpackung) | Cloudflare (Gemma 4, Apache-2.0-Lizenz), Ersatz: Mistral | 0 € |
+| Fotos einlesen (Rezept, Bon, Verpackung) | Cloudflare (Mistral Small 3.1, dann Gemma 4), zuletzt Mistral direkt | 0 € |
 
 ## 1. Cloudflare
 1. Konto auf cloudflare.com anlegen (kostenlos, keine Karte nötig).
@@ -37,5 +37,6 @@ Die App nutzt zwei Gratis-Dienste. Die Schlüssel kommen **nur** in Supabase (Se
 - Gratis-Tarife können sich ändern. Fällt einer weg, zeigt die App eine Fehlermeldung, der Rest läuft weiter. Der Anbieter ist nur in `supabase/functions/ai/index.ts` verdrahtet und dort austauschbar.
 
 
-## Stand 23.11.2026: Mistral-Fotos
-Mistral antwortet im Gratis-Modus bei Luca auf jede Foto-Anfrage mit Status 429, Code 1300 (kein Zugang für das Konto, laut einer Drittquelle seit Nov. 2026 nur mit Pay-as-you-go, von Mistral nicht bestätigt). Deshalb versucht die Function Fotos zuerst über Cloudflare (`CF_VISION_MODEL`, Standard `@cf/google/gemma-4-26b-a4b-it`) und nimmt Mistral nur als Ersatz, wenn `MISTRAL_API_KEY` gesetzt ist. Reihenfolge per Secret `VISION_ORDER` änderbar. Bildeingabe von Gemma 4 über den OpenAI-kompatiblen Cloudflare-Endpunkt ist in der Cloudflare-Doku nicht ausdrücklich belegt und muss mit echten Schlüsseln getestet werden.
+## Stand 23.11.2026: Fotos
+Mistral direkt antwortet im Gratis-Modus bei Luca auf jede Foto-Anfrage mit Status 429, Code 1300 (kein Zugang für das Konto, laut einer Drittquelle seit Nov. 2026 nur mit Pay-as-you-go, von Mistral nicht bestätigt). Deshalb versucht die Function Fotos der Reihe nach über Cloudflare (Standard: `@cf/mistralai/mistral-small-3.1-24b-instruct`, dann `@cf/google/gemma-4-26b-a4b-it`) und nimmt Mistral direkt nur als letzten Ersatz, wenn `MISTRAL_API_KEY` gesetzt ist. Reihenfolge per Secret `VISION_ORDER` änderbar (Einträge `cf:<Modell>` oder `mistral`, durch Komma getrennt).
+Gemma 4 ist ein Denkmodell: langsam, und mit zu kleinem Längenlimit kommt eine leere Antwort. Die Function gibt dafür mehr Tokens frei. Dauer und genutzter Dienst stehen im Function-Log. Ob die Modelle Bilder über den OpenAI-kompatiblen Cloudflare-Endpunkt annehmen, ist in der Cloudflare-Doku nicht ausdrücklich belegt (Gemma 4 funktionierte bei Luca).
