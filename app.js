@@ -1364,6 +1364,8 @@ $('#tab-kitchen').addEventListener('change', e => {
 });
 
 // ---------- KI (ai.js): Chat, Gericht anpassen, Fotos einlesen ----------
+document.addEventListener('shared:error', e => toast(`Speichern beim Server fehlgeschlagen: ${String(e.detail.message).slice(0, 120)}`, 6000));
+document.addEventListener('shared:saved', e => { if (e.detail.key === 'speisekammer.settings') toast('Einstellung gespeichert ✓', 1500); });
 function toast(msg, ms = 2500) {
   let t = document.getElementById('plan-toast');
   if (!t) { t = Object.assign(document.createElement('div'), { id: 'plan-toast' }); document.body.appendChild(t); }

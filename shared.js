@@ -65,8 +65,8 @@ export async function initShared(store, onChange) {
       while (pending.has(key)) {
         const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v));
         raw(DIRTY + key, '1'); // noch nicht beim Server angekommen (App kann vorher geschlossen werden)
-        await fn(v);
-        if (!pending.has(key)) localStorage.removeItem(DIRTY + key);
+        try { await fn(v); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
+        if (!pending.has(key)) { localStorage.removeItem(DIRTY + key); document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } })); }
       }
     } finally { busy.delete(key); }
   }
