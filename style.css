@@ -321,3 +321,9 @@ body.no-ai .ai-only, body.no-ai #btn-ai { display: none; }
 .eat-name { display: flex; flex-direction: column; }
 .eat-ctl { display: flex; align-items: center; gap: 6px; }
 .eat-ctl b { min-width: 3.5em; text-align: center; }
+/* Dialoge am iPhone: nichts läuft über den Rand, Knöpfe bleiben erreichbar (23.11.) */
+.row > * { min-width: 0; }
+dialog input, dialog select, dialog textarea { max-width: 100%; box-sizing: border-box; min-width: 0; }
+dialog input[type=date], dialog input[type=time] { width: 100%; -webkit-appearance: none; appearance: none; min-height: 2.6em; }
+dialog:not(.onb):not(.sheet) { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; }
+dialog:not(.onb):not(.sheet) form > menu:last-child { position: sticky; bottom: -16px; background: var(--card); padding: 10px 0 calc(6px + env(safe-area-inset-bottom)); margin-bottom: -16px; }
