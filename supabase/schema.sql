@@ -340,3 +340,15 @@ do $$ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'member_data') then
     alter publication supabase_realtime add table member_data; end if;
 end $$;
+
+-- Zugriffsrechte für angemeldete Nutzer (neuere Supabase-Projekte vergeben sie nicht mehr automatisch; Luca 23.11.: „permission denied for table members“).
+-- Die Zeilen schützen weiterhin die Row-Level-Security-Regeln oben.
+grant usage on schema public to authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant all on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to authenticated, service_role;
+grant execute on all functions in schema public to authenticated, service_role;
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant usage, select on sequences to authenticated, service_role;
+alter default privileges in schema public grant execute on functions to authenticated, service_role;
