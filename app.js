@@ -11,6 +11,7 @@ import { shiftOf, shiftDay, SHIFTS } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE, ARZT } from './tips.js';
+import { initEaten, openEaten, partsOf, partsLabel, partsLeft, configureParts, eatenPending } from './eaten.js';
 import { initOnboarding } from './onboarding.js';
 import { initAi, aiOn, parsePhoto, adaptRecipe } from './ai.js';
 const moreHtml = t => t?.more?.length ? `<details class="tip-more"><summary>Mehr dazu</summary>${t.more.map(m => `<p class="tiny">${esc(m)}</p>`).join('')}${t.doc ? `<p class="tiny muted">${esc(ARZT)}</p>` : ''}</details>` : '';
@@ -81,7 +82,7 @@ async function renderPantry() {
 
   const sh = getSettings();
   const metaFor = i => [
-    sh.showQty && `${esc(i.qty)} ${esc(i.unit === 'Portion' && i.qty != 1 ? 'Portionen' : i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`,
+    sh.showQty && (partsLabel(i) ? esc(partsLabel(i)) : `${esc(+(+i.qty).toFixed(2))} ${esc(i.unit === 'Portion' && i.qty != 1 ? 'Portionen' : i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`),
     sh.showCategory && esc(i.category), sh.showLocation && esc(i.location),
     sh.showPack && drinksOn() && i.pack && PACKS[i.pack] && esc(PACKS[i.pack].label),
     sh.showPrice && i.price != null && eur(i.price),
@@ -141,6 +142,9 @@ $('#use-dialog').addEventListener('close', async () => {
   if (!current) return;
   if (v === 'eaten' || v === 'wasted') {
     await store.consume(current.id, parseFloat($('#use-qty').value) || current.qty, v);
+    renderPantry();
+  } else if (v === 'parts') {
+    const it = current; if (partsOf(it) || await configureParts(it)) await openEaten('manual', [it], `${it.name}: Teile entnehmen`);
     renderPantry();
   } else if (v === 'freeze') {
     await freezeItem(current, parseFloat($('#use-qty').value) || current.qty);
@@ -679,7 +683,7 @@ document.addEventListener('plan:leftoverEaten', async e => {
 // Abends einmal fragen, falls nicht schon über den Plan geschehen
 async function checkLeftoverPrompt() {
   const s = getSettings(), today = isoLocal();
-  if (!s.askLeftovers || localStorage.getItem('leftoverAsked') === today || $('dialog[open]')) return;
+  if (!s.askLeftovers || localStorage.getItem('leftoverAsked') === today || $('dialog[open]') || eatenPending()) return;
   if (nowHM() < minToHM(hmToMin(s.dinnerAt) + 90)) return;
   let meal = null;
   try { const m = await import('./plan.js'); meal = await m.getPlannedMeal?.(today, 'dinner'); } catch {}
@@ -780,7 +784,8 @@ async function start() {
       },
       refresh: () => { renderPantry(); renderSettings(); renderUtensils(); document.dispatchEvent(new CustomEvent('pantry:changed')); } });
   }
-  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, aiRecipePhoto, aiAdapt: adaptRecipe, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
+  initEaten({ store, ask, askInput, renderPantry, getSettings, nowHM, canNotify, showNote, afterDinnerAsk: () => checkLeftoverPrompt() });
+  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, partsOf, partsLeft, openEaten, configureParts, aiRecipePhoto, aiAdapt: adaptRecipe, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
   initHealth(store, $);
   checkReminders();
   pushStatus();
@@ -1141,6 +1146,8 @@ const SWITCHES = {
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
+    ['askEatenBf', 'Nachfragen: Was hast du gefrühstückt?', null, null, 'eatenBfTime'],
+    ['askEatenDin', 'Nachfragen: Was wurde zum Abendessen gegessen?', null, null, 'eatenDinTime'],
   ],
 };
 // Gesundheit (nur auf diesem Gerät) & Vorlieben (Haushalt). Erkrankungen über ein Suchfeld mit Vorschlägen,

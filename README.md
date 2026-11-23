@@ -136,3 +136,9 @@ Einrichtung Schritt für Schritt: [anleitung/ai-setup.md](anleitung/ai-setup.md)
 - Rezept bearbeiten → „🤖 Mit KI anpassen“ (Knopf-Wünsche), Vorschlag füllt das Formular, gespeichert wird erst nach deiner Prüfung.
 - Gerichte → „📷 Per Foto (KI)“, Bon → „🤖 Foto mit KI einlesen“, Artikel → „🤖 Verpackung fotografieren“.
 - Gesundheitsangaben nur mit Haken pro Anfrage, Fotos nie damit. Tageslimit pro Haushalt: 40 Text, 10 Foto. Schalter: Einstellungen → 🤖 KI-Assistent.
+
+## „Was wurde gegessen?“ mit Teilmengen (23.11.)
+- `eaten.js`: Teile je Packung pro Artikelname (Haushalt, `speisekammer.parts`), z. B. Toast 20 Scheiben, Eier 10 Stück (Vorbelegung = Annahme, änderbar), Reis 500 g. Gegessene Teile verringern `qty` (in Packungen, auch als Bruchteil); Preisanteil und Bilanz laufen wie beim normalen Verbrauchen.
+- Nachfragen zu eigenen Zeiten (persönlich, Standard 12:45 Frühstück, 18:30 Abendessen, einzeln abschaltbar unter Einstellungen → Vorrat). App offen: Dialog mit Zählern; App im Hintergrund: Mitteilung, falls erlaubt. Danach folgt wie bisher „Alles aufgegessen?“ (Reste).
+- Per Hand: Artikel antippen → „🍞 Teile entnehmen“. Im Plan fragt „Gekocht“ bei Packungen mit Teilen nach der Menge statt „aufgebraucht ja/nein“.
+- Nachfragen laufen nur, solange die App geöffnet ist oder die Mitteilung angetippt wird (kein Server-Push dafür).

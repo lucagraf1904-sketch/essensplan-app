@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS = {
   workNoMicrowave: false,// Keine Mikrowelle am Arbeitsplatz
   budget: 0,             // Monatsbudget in € (0 = aus), Haushalt
   budgetWarnPct: 80,     // Warnung ab diesem Anteil
+  askEatenBf: true, eatenBfTime: '12:45', askEatenDin: true, eatenDinTime: '18:30', // Nachfragen, was gegessen wurde (Luca 23.11.)
   askLeftovers: true,     // Nach dem Abendessen fragen: alles aufgegessen? Was passiert mit dem Rest?
   planExclude: [],       // Vom Nutzer selbst gewählte Ausschlüsse im Essensplan: [{ w: Suchwort, label, from }] (Haushalt)
   weekFish: 2, weekBeef: 1, weekVeg: 0, weekVegG: 0, // Wochenziele (Luca 23.11.): Fisch pro Woche, Rind höchstens, vegetarische Abende, Gemüse-g pro Abend
@@ -72,7 +73,7 @@ export const SHOW_KEYS = ['showQty','showCategory','showLocation','showPack','sh
 // Persönlich (pro Person): Anzeige, Tipps, Gesundheit, Erinnerungszeiten, Trinkzähler, Gewicht, Dienstplan-Rahmen
 export const PERSONAL_KEYS = [...SHOW_KEYS, 'tipsBread', 'tipsProduce', 'tipsProcessed', 'tipsMeat', 'health',
   'remindExpiry', 'expiryTime', 'remindDinner', 'dinnerTime', 'dinnerAuto', 'glassMl', 'drinkGoalMl',
-  'weightOn', 'myName', 'shiftsOn', 'shiftTips', 'workNoFridge', 'workNoMicrowave'];
+  'askEatenBf', 'eatenBfTime', 'askEatenDin', 'eatenDinTime', 'weightOn', 'myName', 'shiftsOn', 'shiftTips', 'workNoFridge', 'workNoMicrowave'];
 const MINIMAL_ON = ['showQty', 'showExpiryBadge', 'showWarnBox'];
 export const SHOW_PRESETS = {
   minimal: Object.fromEntries(SHOW_KEYS.map(k => [k, MINIMAL_ON.includes(k)])),

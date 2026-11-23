@@ -6,7 +6,7 @@
 // Haushaltsweit: alle sehen dasselbe
 export const HOUSEHOLD_KEYS = [
   'speisekammer.hhSettings',     // Einstellungen für alle (inkl. Anzeige-Standard)
-  'speisekammer.minStock', 'speisekammer.minPending',
+  'speisekammer.minStock', 'speisekammer.minPending', 'speisekammer.parts',
   'speisekammer.utensils', 'warnDays',
   'speisekammer.offers', 'speisekammer.acceptedOffers',
   'speisekammer.shopping',       // Einkaufsliste (eintragsweise zusammengeführt)
