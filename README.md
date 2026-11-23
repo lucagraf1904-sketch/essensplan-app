@@ -160,3 +160,6 @@ Selbst gewählte Gerichte (Anderes Gericht, Heute kochen, „Anders gegessen →
 
 ## v56: Abgleich sichtbar und wiederholt
 Jede Änderung an Haushaltsdaten (Plan, Rezepte, Einkaufsliste, Einstellungen für alle …) wird sofort gesendet. Kopfzeile zeigt ⏳ (wird gesendet), ☁️✓ (gespeichert, verschwindet nach 3 s) oder ⚠️ (nicht gesendet; antippen = erneut versuchen). Nicht gesendete Änderungen werden beim Zurückkehren in die App, bei Netz und alle 20 s erneut geschickt (shared.js `retryDirty`). Gesundheitsangaben und Medikamente bleiben lokal.
+
+## v59: Abgleich-Fehler beim Start behoben
+`initShared` benutzte beim Start `bases`/`busy` vor deren Deklaration (TDZ-Fehler, still abgefangen): Hochladen lokaler, noch nicht gesendeter Stände und fehlender Schlüssel beim Start schlug fehl. Jetzt deklariert vor Gebrauch. Dazu: zuletzt bekannter Serverstand wird je Schlüssel gespeichert (`speisekammer.base.*`) und als Grundlage für Wiederholungen genutzt, damit ein veralteter Zweitstand keine neueren Einstellungen überschreibt; nach jedem Senden wird zurückgelesen und ein Fehler gemeldet, wenn der Server etwas anderes hat.

@@ -25,7 +25,7 @@ const keepLocal = (key, v, cur) => { const f = LOCAL_ONLY[key]; if (!f || !cur |
 const kind = k => HOUSEHOLD_KEYS.includes(k) ? 'hh' : MEMBER_KEYS.includes(k) ? 'me' : null;
 const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 
-const DIRTY = 'speisekammer.dirty.';
+const DIRTY = 'speisekammer.dirty.', BASEK = 'speisekammer.base.'; // BASEK: zuletzt bekannter Serverstand (Grundlage für den Abgleich)
 // Dreiwege-Zusammenführung: base = zuletzt bekannter Stand, mine = meine neue Fassung, theirs = Stand auf dem Server.
 // Was ich nicht geändert habe, kommt vom Server; was ich geändert habe, von mir (bei Objekten bis in die Tiefe).
 // Schlüsselreihenfolge ignorieren: jsonb in der Datenbank sortiert die Schlüssel um, sonst wird das eigene Echo nicht erkannt
@@ -59,12 +59,14 @@ export async function initShared(store, onChange) {
   const raw = Storage.prototype.setItem.bind(localStorage);
   const rawGet = Storage.prototype.getItem.bind(localStorage);
 
+  const mine = new Map(), busy = new Set(), pending = new Map(), bases = new Map();
+  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(canon(parse(json))); mine.set(key, l.slice(-30)); };
   // 1) Stand vom Server holen; was es dort noch nicht gibt, einmal vom Handy hochladen
   const [hh, me] = await Promise.all([store.listShared(), store.listMine()]);
   const have = new Set();
   for (const { key, value } of [...hh, ...me]) {
     have.add(key);
-    if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), null).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen
+    if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), parse(rawGet(BASEK + key))).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen (Grundlage: zuletzt bekannter Serverstand, damit nur echte Änderungen überschreiben)
     if (key === 'speisekammer.settings') { // Diagnose: was hat der Server beim Start überschrieben?
       const loc = parse(rawGet(key)) ?? {}, diff = Object.keys({ ...loc, ...value }).filter(k => k !== 'health' && JSON.stringify(loc[k]) !== JSON.stringify(value[k]));
       raw('speisekammer.dbg', JSON.stringify({ at: new Date().toISOString(), diff: diff.map(k => `${k}: lokal ${JSON.stringify(loc[k])} → Server ${JSON.stringify(value[k])}`).slice(0, 6) }));
@@ -75,6 +77,7 @@ export async function initShared(store, onChange) {
       if (!same(m, value)) push(key, m, null).catch(e => console.warn('Abgleich', key, e));
       continue;
     }
+    if (!MERGE_KEYS.includes(key)) raw(BASEK + key, JSON.stringify(value));
     raw(key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key)))));
   }
   for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
@@ -93,8 +96,6 @@ export async function initShared(store, onChange) {
 
   // Eigene Schreibzugriffe: nacheinander senden (nur der neueste Wert zählt) und das Echo vom Server nicht zurückspielen,
   // sonst überschreibt ein verspätetes Echo eines älteren Wertes die aktuelle Einstellung (Uhrzeit sprang zurück, 23.11.)
-  const mine = new Map(), busy = new Set(), pending = new Map(), bases = new Map();
-  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(canon(parse(json))); mine.set(key, l.slice(-30)); };
   async function send(key, value, fn) {
     pending.set(key, value);
     if (busy.has(key)) return;
@@ -122,7 +123,10 @@ export async function initShared(store, onChange) {
         remember(key, json);
         if (json !== JSON.stringify(v)) { raw(key, json); onChange?.(key); }
         await store.setShared(key, merged);
-        bases.set(key, merged);
+        bases.set(key, merged); raw(BASEK + key, JSON.stringify(merged));
+        // Kontrolle: steht beim Server wirklich, was ich gesendet habe?
+        const back = await store.getShared(key);
+        if (back != null && !same(back, merged)) throw new Error('Der Server hat etwas anderes gespeichert als gesendet (' + key.replace('speisekammer.', '') + ')');
       });
     }
     // Liste: nur geänderte und gelöschte Einträge schicken
@@ -148,7 +152,7 @@ export async function initShared(store, onChange) {
     if (navigator.onLine === false) return;
     for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
       if (MERGE_KEYS.includes(key) || busy.has(key) || !rawGet(DIRTY + key) || rawGet(key) == null) continue;
-      push(key, parse(rawGet(key)), null).catch(e => console.warn('Erneut senden', key, e));
+      push(key, parse(rawGet(key)), parse(rawGet(BASEK + key))).catch(e => console.warn('Erneut senden', key, e));
     }
   };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) retryDirty(); });
@@ -164,6 +168,7 @@ export async function initShared(store, onChange) {
     const locPlan = key === 'speisekammer.plan' ? parse(rawGet(key)) : null;
     const v = JSON.stringify(locPlan?.days && value?.days ? mergePlan(null, locPlan, value) : MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
+    if (kind(key) === 'hh' && !MERGE_KEYS.includes(key)) { bases.set(key, value); raw(BASEK + key, JSON.stringify(value)); } // jetzt bekannter Serverstand
     raw(key, v); onChange?.(key);
   });
 }
