@@ -11,6 +11,7 @@ import { shiftOf, shiftDay, SHIFTS } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE, ARZT } from './tips.js';
+import { initEaten, openEaten, partsOf, partsLabel, partsLeft, configureParts, eatenPending } from './eaten.js';
 import { initOnboarding } from './onboarding.js';
 import { initAi, aiOn, parsePhoto, adaptRecipe } from './ai.js';
 const moreHtml = t => t?.more?.length ? `<details class="tip-more"><summary>Mehr dazu</summary>${t.more.map(m => `<p class="tiny">${esc(m)}</p>`).join('')}${t.doc ? `<p class="tiny muted">${esc(ARZT)}</p>` : ''}</details>` : '';
@@ -81,7 +82,7 @@ async function renderPantry() {
 
   const sh = getSettings();
   const metaFor = i => [
-    sh.showQty && `${esc(i.qty)} ${esc(i.unit === 'Portion' && i.qty != 1 ? 'Portionen' : i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`,
+    sh.showQty && (partsLabel(i) ? esc(partsLabel(i)) : `${esc(+(+i.qty).toFixed(2))} ${esc(i.unit === 'Portion' && i.qty != 1 ? 'Portionen' : i.unit)}${i.size ? ' à ' + esc(i.size) : ''}`),
     sh.showCategory && esc(i.category), sh.showLocation && esc(i.location),
     sh.showPack && drinksOn() && i.pack && PACKS[i.pack] && esc(PACKS[i.pack].label),
     sh.showPrice && i.price != null && eur(i.price),
@@ -141,6 +142,9 @@ $('#use-dialog').addEventListener('close', async () => {
   if (!current) return;
   if (v === 'eaten' || v === 'wasted') {
     await store.consume(current.id, parseFloat($('#use-qty').value) || current.qty, v);
+    renderPantry();
+  } else if (v === 'parts') {
+    const it = current; if (partsOf(it) || await configureParts(it)) await openEaten('manual', [it], `${it.name}: Teile entnehmen`);
     renderPantry();
   } else if (v === 'freeze') {
     await freezeItem(current, parseFloat($('#use-qty').value) || current.qty);
@@ -679,7 +683,7 @@ document.addEventListener('plan:leftoverEaten', async e => {
 // Abends einmal fragen, falls nicht schon über den Plan geschehen
 async function checkLeftoverPrompt() {
   const s = getSettings(), today = isoLocal();
-  if (!s.askLeftovers || localStorage.getItem('leftoverAsked') === today || $('dialog[open]')) return;
+  if (!s.askLeftovers || localStorage.getItem('leftoverAsked') === today || $('dialog[open]') || eatenPending()) return;
   if (nowHM() < minToHM(hmToMin(s.dinnerAt) + 90)) return;
   let meal = null;
   try { const m = await import('./plan.js'); meal = await m.getPlannedMeal?.(today, 'dinner'); } catch {}
@@ -700,6 +704,7 @@ $('#btn-push').addEventListener('click', enableNotifications);
 
 // Push-Abo bei Supabase speichern (nur wenn eingerichtet). Uhrzeiten wandern mit.
 const b64ToBytes = b => { const p = '='.repeat((4 - b.length % 4) % 4); const r = atob((b + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(r, c => c.charCodeAt(0)); };
+let pushTimer;
 async function syncPush() {
   if (store.mode !== 'supabase' || !VAPID_PUBLIC_KEY || !canNotify() || !('PushManager' in window)) return false;
   try {
@@ -708,7 +713,8 @@ async function syncPush() {
       ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC_KEY) });
     const s = getSettings();
     await store.savePush(sub.toJSON(), { remindExpiry: s.remindExpiry, expiryTime: s.expiryTime, remindDinner: s.remindDinner,
-      dinnerTime: s.dinnerTime, dinnerAuto: s.dinnerAuto, dinnerAt: s.dinnerAt, warnDays: WARN_DAYS, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      dinnerTime: s.dinnerTime, dinnerAuto: s.dinnerAuto, dinnerAt: s.dinnerAt, warnDays: WARN_DAYS,
+      askEatenBf: s.askEatenBf, eatenBfTime: s.eatenBfTime, askEatenDin: s.askEatenDin, eatenDinTime: s.eatenDinTime, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
     return true;
   } catch (e) { console.warn('Push-Abo fehlgeschlagen', e); return false; }
 }
@@ -780,7 +786,8 @@ async function start() {
       },
       refresh: () => { renderPantry(); renderSettings(); renderUtensils(); document.dispatchEvent(new CustomEvent('pantry:changed')); } });
   }
-  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, aiRecipePhoto, aiAdapt: adaptRecipe, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
+  initEaten({ store, ask, askInput, renderPantry, getSettings, nowHM, canNotify, showNote, afterDinnerAsk: () => checkLeftoverPrompt() });
+  if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, partsOf, partsLeft, openEaten, configureParts, aiRecipePhoto, aiAdapt: adaptRecipe, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
   initHealth(store, $);
   checkReminders();
   pushStatus();
@@ -1141,6 +1148,8 @@ const SWITCHES = {
   '#settings-pantry': [
     ['askFreeze', 'Bei Fleisch und Fisch fragen, ob eingefroren wird'],
     ['askLeftovers', 'Nach dem Abendessen nach Resten fragen'],
+    ['askEatenBf', 'Nachfragen: Was hast du gefrühstückt?', null, null, 'eatenBfTime'],
+    ['askEatenDin', 'Nachfragen: Was wurde zum Abendessen gegessen?', null, null, 'eatenDinTime'],
   ],
 };
 // Gesundheit (nur auf diesem Gerät) & Vorlieben (Haushalt). Erkrankungen über ein Suchfeld mit Vorschlägen,
@@ -1345,6 +1354,9 @@ $('#tab-kitchen').addEventListener('change', e => {
     setSetting(e.target.dataset.k, e.target.value);
     // heute neu prüfen, falls die Uhrzeit verschoben wurde
     localStorage.removeItem(e.target.dataset.k === 'expiryTime' ? 'lastNotify' : 'lastDinnerNotify');
+    // Nicht neu zeichnen: Sonst schließt sich die Zeitauswahl bei jedem Drehen am iPhone (Luca 23.11.)
+    clearTimeout(pushTimer); pushTimer = setTimeout(syncPush, 1500);
+    return;
   } else return;
   renderSettings();
   renderPantry();
@@ -1352,6 +1364,16 @@ $('#tab-kitchen').addEventListener('change', e => {
 });
 
 // ---------- KI (ai.js): Chat, Gericht anpassen, Fotos einlesen ----------
+document.addEventListener('shared:error', e => toast(`Speichern beim Server fehlgeschlagen: ${String(e.detail.message).slice(0, 120)}`, 6000));
+document.addEventListener('shared:saved', e => { if (e.detail.key === 'speisekammer.settings') toast('Einstellung gespeichert ✓', 1500); });
+function showDebug() {
+  const el = $('#app-version'); if (!el) return;
+  const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
+  const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
+  el.textContent = `Version v43 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+}
+document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
+setTimeout(showDebug, 3000);
 function toast(msg, ms = 2500) {
   let t = document.getElementById('plan-toast');
   if (!t) { t = Object.assign(document.createElement('div'), { id: 'plan-toast' }); document.body.appendChild(t); }

@@ -6,7 +6,7 @@
 // Haushaltsweit: alle sehen dasselbe
 export const HOUSEHOLD_KEYS = [
   'speisekammer.hhSettings',     // Einstellungen für alle (inkl. Anzeige-Standard)
-  'speisekammer.minStock', 'speisekammer.minPending',
+  'speisekammer.minStock', 'speisekammer.minPending', 'speisekammer.parts',
   'speisekammer.utensils', 'warnDays',
   'speisekammer.offers', 'speisekammer.acceptedOffers',
   'speisekammer.shopping',       // Einkaufsliste (eintragsweise zusammengeführt)
@@ -25,6 +25,7 @@ const keepLocal = (key, v, cur) => { const f = LOCAL_ONLY[key]; if (!f || !cur |
 const kind = k => HOUSEHOLD_KEYS.includes(k) ? 'hh' : MEMBER_KEYS.includes(k) ? 'me' : null;
 const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 
+const DIRTY = 'speisekammer.dirty.';
 export async function initShared(store, onChange) {
   if (!store.listShared) return;
   const raw = Storage.prototype.setItem.bind(localStorage);
@@ -35,6 +36,11 @@ export async function initShared(store, onChange) {
   const have = new Set();
   for (const { key, value } of [...hh, ...me]) {
     have.add(key);
+    if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), null).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen
+    if (key === 'speisekammer.settings') { // Diagnose: was hat der Server beim Start überschrieben?
+      const loc = parse(rawGet(key)) ?? {}, diff = Object.keys({ ...loc, ...value }).filter(k => k !== 'health' && JSON.stringify(loc[k]) !== JSON.stringify(value[k]));
+      raw('speisekammer.dbg', JSON.stringify({ at: new Date().toISOString(), diff: diff.map(k => `${k}: lokal ${JSON.stringify(loc[k])} → Server ${JSON.stringify(value[k])}`).slice(0, 6) }));
+    }
     raw(key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key)))));
   }
   for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
@@ -51,9 +57,27 @@ export async function initShared(store, onChange) {
     if (k) push(key, parse(value), before).catch(e => console.warn('Abgleich', key, e));
   };
 
+  // Eigene Schreibzugriffe: nacheinander senden (nur der neueste Wert zählt) und das Echo vom Server nicht zurückspielen,
+  // sonst überschreibt ein verspätetes Echo eines älteren Wertes die aktuelle Einstellung (Uhrzeit sprang zurück, 23.11.)
+  const mine = new Map(), busy = new Set(), pending = new Map();
+  const remember = (key, json) => { const l = mine.get(key) ?? []; l.push(json); mine.set(key, l.slice(-30)); };
+  async function send(key, value, fn) {
+    pending.set(key, value);
+    if (busy.has(key)) return;
+    busy.add(key);
+    try {
+      while (pending.has(key)) {
+        const v = pending.get(key); pending.delete(key); remember(key, JSON.stringify(v));
+        raw(DIRTY + key, '1'); // noch nicht beim Server angekommen (App kann vorher geschlossen werden)
+        raw('speisekammer.dbg2', JSON.stringify({ at: new Date().toISOString(), key, sent: v?.eatenBfTime ?? v?.expiryTime ?? null }));
+        try { await fn(v); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
+        if (!pending.has(key)) { localStorage.removeItem(DIRTY + key); raw('speisekammer.dbg3', new Date().toISOString()); document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } })); }
+      }
+    } finally { busy.delete(key); }
+  }
   async function push(key, value, before) {
-    if (kind(key) === 'me') return store.setMine(key, strip(key, value));
-    if (!MERGE_KEYS.includes(key)) return store.setShared(key, value);
+    if (kind(key) === 'me') return send(key, strip(key, value), v => store.setMine(key, v));
+    if (!MERGE_KEYS.includes(key)) return send(key, value, v => store.setShared(key, v));
     // Liste: nur geänderte und gelöschte Einträge schicken
     const now = Date.now(), old = new Map((Array.isArray(before) ? before : []).map(x => [x.id, x]));
     const changed = [];
@@ -72,6 +96,7 @@ export async function initShared(store, onChange) {
   // 3) Änderungen vom anderen Handy
   store.onShared((scope, key, value) => {
     if (!kind(key)) return;
+    if (!MERGE_KEYS.includes(key) && (mine.get(key) ?? []).includes(JSON.stringify(kind(key) === 'me' ? strip(key, value) : value))) return; // eigenes Echo
     const v = JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
     raw(key, v); onChange?.(key);

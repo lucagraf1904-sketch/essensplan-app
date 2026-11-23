@@ -615,7 +615,9 @@ async function askUsed(need) {
     const v = await ctx.ask('Was wurde verbraucht?', 'Antippen, was aufgebraucht ist. Der Rest bleibt im Vorrat.',
       [...left.map(x => ({ value: x.id, label: `${x.name} (${x.qty} ${x.unit})` })), { value: '', label: 'Fertig', cls: 'primary' }]);
     if (!v) break;
-    const it = left.find(x => x.id === v); await ctx.store.consume(it.id, it.qty, 'eaten');
+    const it = left.find(x => x.id === v);
+    if (ctx.partsOf?.(it)) { await ctx.openEaten('cook', [it], `${it.name}: wie viel verbraucht?`); left = left.filter(x => x.id !== v); continue; }
+    await ctx.store.consume(it.id, it.qty, 'eaten');
     left = left.filter(x => x.id !== v);
   }
   await ctx.renderPantry();
