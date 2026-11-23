@@ -11,6 +11,7 @@ import { shiftOf, shiftDay, SHIFTS } from './shifts.js';
 import { scanBarcode, lookupBarcode, nutritionLine } from './barcode.js';
 import { CHAINS, chainName, listOffers, addOffer, deleteOffer, defaultUntil, offersFor, allOffers, shoppingCheck } from './offers.js';
 import { tipFor, listHints, SOURCE, ARZT } from './tips.js';
+import { initOnboarding } from './onboarding.js';
 const moreHtml = t => t?.more?.length ? `<details class="tip-more"><summary>Mehr dazu</summary>${t.more.map(m => `<p class="tiny">${esc(m)}</p>`).join('')}${t.doc ? `<p class="tiny muted">${esc(ARZT)}</p>` : ''}</details>` : '';
 import { conditionLabel, searchConditions, conditionTags } from './conditions.js';
 import { initHealth } from './health.js';
@@ -769,6 +770,15 @@ async function start() {
     WARN_DAYS = +(localStorage.getItem('warnDays') ?? 3); $('#warn-days').value = String(WARN_DAYS); renderSettings(); renderUtensils();
   }
   await renderPantry();
+  if (!planStarted) {
+    initOnboarding({ store, getSettings, setSetting, ut: { load: loadUt, save: saveUt }, scanBarcode, lookupBarcode, askInput, openItem: () => openItem(null),
+      applyExcludes: (want, known) => {
+        const label = w => known.find(k => k[0] === w)?.[1] ?? w;
+        for (const w of want) if (!isExcluded(w)) toggleExclude(w, label(w), 'Einrichtung');
+        for (const e of [...excludes()]) if (!want.has(e.w) && (e.from === 'Einrichtung' || known.some(k => k[0] === e.w))) toggleExclude(e.w, e.label, e.from);
+      },
+      refresh: () => { renderPantry(); renderSettings(); renderUtensils(); document.dispatchEvent(new CustomEvent('pantry:changed')); } });
+  }
   if (!planStarted) { planStarted = true; initPlan({ store, ask, askInput, allOffers: () => allOffers(store), addShop, renderPantry, setSetting }); }
   initHealth(store, $);
   checkReminders();
@@ -1343,3 +1353,4 @@ document.addEventListener('click', e => {
   const ex = e.target.closest('#shop-list [data-excl]'); if (!ex) return;
   toggleExclude(ex.dataset.excl, ex.dataset.exclLabel, ex.dataset.exclFrom); renderShop();
 });
+$('#onb-restart')?.addEventListener('click', () => window.__startOnboarding?.());

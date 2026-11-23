@@ -34,6 +34,7 @@ export const DEFAULT_SETTINGS = {
   showBalHints: true, showBalCompare: true, showUnitPrice: true, showWaste: true,
   shopSort: 'aisle',     // Einkaufsliste: 'aisle' = nach Ladenweg, 'added' = wie eingetragen
   shopLayoutStore: '',   // Ladenweg für welchen Laden ('' = Stammladen)
+  householdSize: 2,      // Personen im Haushalt (Einrichtung, für „pro Person“-Richtwerte)
   myName: '',            // Name dieser Person (für Dienstplan)
   weightOn: false,       // Gewichtstracker (Luca 22.11.: Schalter, standardmäßig aus)
   shiftsOn: false,       // Dienstplan für diese Person

@@ -42,6 +42,12 @@ Web-App für das iPhone (Homebildschirm), ohne Build-Schritt.
   Tag antippen → Blatt von unten: Person (auch andere, z. B. Mama), Schicht, Zeiten nur für diesen Tag. „Meine Zeiten“ = Standard je Schichtart
   (Beginn, Ende, Hauptmahlzeit, Pause; speisekammer.shiftConf, Haushalt). Tipps nur passend zur Schicht und den eigenen Zeiten, Schalter settings.shiftTips.
 
+## Ersteinrichtung (onboarding.js, Luca 23.11.)
+Beim ersten Öffnen (je Gerät, Flag `speisekammer.onboarded`): Einführung, Kennenlern-Fragen zum Antippen (Name/Personen, Essenszeit, Küche, Vorlieben und Ziele,
+Ausschlüsse, Gesundheit freiwillig nur lokal, Schichtdienst) und Bestandsaufnahme (typische Artikel antippen = +1 Stück, Barcode, Bon). Bekanntes ist als
+Vorschlag vorausgewählt und gilt erst mit „Weiter“; jeder Schritt ist überspringbar. Ausschlüsse setzt die Person selbst. Bestandsaufnahme bucht nichts in die Ausgaben
+(noLog), Haltbarkeit sind Schätzwerte. Erneut starten: Einstellungen → 🧭 Einrichtung wiederholen. In der Demo startet sie nicht automatisch (Knopf „Einrichtung“).
+
 ## Gemeinsame Daten mit Supabase einrichten
 1. Projekt auf supabase.com anlegen (Region Frankfurt).
 2. SQL Editor → Inhalt von `supabase/schema.sql` einfügen → Run (mehrfach ausführbar).

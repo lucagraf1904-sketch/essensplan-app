@@ -95,7 +95,7 @@ Summe                     12,77`;
 
   document.addEventListener('DOMContentLoaded', () => {
     document.body.insertAdjacentHTML('afterbegin', `<div id="demo-bar">🧪 <b>Demo</b> mit Beispieldaten. Probier alles aus, nichts geht kaputt.
-      <button id="demo-help" class="chip">Rundgang</button> <button id="demo-reset" class="chip">Zurücksetzen</button></div>
+      <button id="demo-help" class="chip">Rundgang</button> <button id="demo-onb" class="chip">Einrichtung</button> <button id="demo-reset" class="chip">Zurücksetzen</button></div>
       <dialog id="demo-intro"><form method="dialog">
         <h2>Willkommen in der Speisekammer 👋</h2>
         <p class="muted">Das ist eine Demo mit ausgedachten Beispieldaten. Du kannst alles antippen, ändern und löschen. Mit „Zurücksetzen“ oben ist alles wieder wie am Anfang.</p>
@@ -105,6 +105,7 @@ Summe                     12,77`;
           <li><b>📅 Plan:</b> Wochenplan aus euren Gerichten: bald Ablaufendes und Angebote zuerst, Lieblingsgerichte öfter. Unter „Gerichte“ eigene eintragen oder Rezepttext einfügen. Mit Dienstplan (Einstellungen → Persönlich) berücksichtigt der Plan Früh-, Spät- und Nachtschicht.</li>
           <li><b>🛒 Einkauf:</b> Einkaufsliste mit Tipps (z. B. beim Toast), Angeboten der Läden und dem Einkaufs-Check: lohnt sich ein zweiter Laden?</li>
           <li><b>📊 Verlauf:</b> Was gekauft, gegessen und weggeworfen wurde, mit Monatsbilanz in Euro und Budget. Gewicht nur, wenn eingeschaltet.</li>
+          <li><b>🧭 Einrichtung:</b> Oben „Einrichtung“ zeigt die Ersteinrichtung: Kennenlern-Fragen zum Antippen und die Bestandsaufnahme. In der echten App startet sie beim ersten Öffnen.</li>
           <li><b>⚙️ Einstellungen:</b> Erinnerungen, Tipps, Stammladen und mehr. Alles per Antippen.</li>
         </ul>
         <p class="tiny muted">Die Gerichte sind Beispiele, die Schichten gehören zu einer Beispielperson. Automatische Angebote und Rezeptimport per Link brauchen den Server; Angebote hier sind Beispiele.</p>
@@ -113,6 +114,7 @@ Summe                     12,77`;
     const intro = document.getElementById('demo-intro');
     document.getElementById('demo-help').onclick = () => intro.showModal();
     document.getElementById('demo-reset').onclick = reset;
+    document.getElementById('demo-onb').onclick = () => window.__startOnboarding?.();
     if (!localStorage.getItem('demo.introSeen')) { intro.showModal(); localStorage.setItem('demo.introSeen', '1'); }
     // Beispiel-Bon im Bon-Tab
     const parse = document.getElementById('scan-parse');
