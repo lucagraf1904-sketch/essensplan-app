@@ -1,5 +1,7 @@
 # Haushaltskasse einrichten (einmalig, ca. 10 Minuten)
 
+> **Neu:** Updates in Supabase gehen auch automatisch. Einmal einrichten nach `anleitung/automatik-setup.md`, danach führt GitHub `budget.sql` und das Deployment der KI-Funktion nach jedem Merge selbst aus. Die Schritte unten sind dann nur noch für die allererste Einrichtung nötig.
+
 Die Haushaltskasse liegt unter `/budget/` im selben Repo wie die Speisekammer, also z. B.
 `https://<dein-github-name>.github.io/essensplan-app/budget/`. Sie nutzt dasselbe Supabase-Projekt, dieselbe Anmeldung und denselben Haushalt.
 Ohne Einrichtung kannst du sie mit `…/budget/?demo=1` sofort mit Beispieldaten ausprobieren (nur auf dem Gerät, ohne KI).
@@ -51,6 +53,14 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - Am Zahltag bucht die App die Fixkosten wie bisher als Ausgabe und nimmt den gleichen Betrag automatisch aus dem Umschlag. „Noch frei“ wird dadurch nicht noch einmal belastet.
 - Der Umschlag zeigt, wie viel drin ist, welche Fixkosten daraus bezahlt werden und ob das Geld bis zur nächsten Fälligkeit reicht (Annahme: Abheben jeweils zu Monatsbeginn).
 - Normale Umschläge (ohne Fixkosten) verfallen weiter jeden Monat.
+
+## Update: Umschläge einstellbar (Version 8)
+`supabase/budget.sql` noch einmal ausführen. Im Umschlag (Übersicht → Bargeld → Umschlag antippen):
+- **Betrag je Abhebung** und **Rhythmus** (monatlich, vierteljährlich, halbjährlich, jährlich) ab einem **Startmonat**.
+- **Abhebetag**: ab diesem Tag erscheint in der Übersicht „Bargeld abheben“. Knopf „Erinnerung in den Kalender eintragen“ legt einen wiederkehrenden Termin mit Erinnerung im Handy-Kalender an (.ics-Datei; auf dem iPhone „Zum Kalender hinzufügen“ antippen).
+- **Einzelne Abhebungen anpassen**: für die nächsten Termine einen anderen Betrag eintragen (leer = normaler Betrag).
+- **Fixkosten per Häkchen** wählen, mit Vorschlag für den Betrag je Abhebung. Es sind nur Fixkosten mit gleichem Besitzer wählbar (beide gemeinsam oder beide privat).
+- **Stand anpassen** (Rücklagen): dazulegen, entnehmen oder den aktuellen Inhalt direkt eintragen (die Differenz wird als Korrektur gebucht).
 
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |

@@ -205,6 +205,8 @@ Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeld
 - **ETFs** (v5): Sparplan, eingezahlte Summe, selbst eingetragener Depotwert mit Gewinn/Verlust, ISIN-Prüfung.
 - **Verträge** (v6): Arbeitsvertrag (mit Gehalt verknüpft), Miete, Energie, Handy, Abos neben Versicherungen; Fragen-Chat für alle.
 - **Rücklage-Umschläge** (v7): Fixkosten aus einem Bargeld-Umschlag bezahlen, Geld sammelt sich bis zum Zahltag, Prognose ob es reicht.
+- **Umschläge einstellbar** (v8): Rhythmus, Abhebetag mit Kalender-Erinnerung, abweichende Abhebungen, Fixkosten per Häkchen, Stand anpassen.
+- **Automatik:** `.github/workflows/supabase-update.yml` führt nach jedem Merge `supabase/budget.sql` aus und deployt die Function `ai` (Einrichtung: `anleitung/automatik-setup.md`).
 - Tests: `tests/budget` (Logik, Oberfläche, SQL).
 
 ## v70: Rubrik „Badezimmer"; Süßigkeiten erweitert (Luca 24.11.)

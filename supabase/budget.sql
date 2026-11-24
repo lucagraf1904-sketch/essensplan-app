@@ -188,6 +188,25 @@ create index if not exists budget_cash_household on budget_cash(household_id);
 -- Abheben = Einzahlung in diesen Topf, Fälligkeit der Fixkosten = Ausgabe wie bisher + Entnahme aus dem Topf (bucht budget_book_due).
 alter table budget_cash add column if not exists pot_id uuid references budget_pots(id) on delete set null;
 alter table budget_recurring add column if not exists cash_id uuid references budget_cash(id) on delete set null;
+-- Version 8: Umschlag einstellbar. Rhythmus (wie oft abheben), ab welchem Monat, Abhebetag, abweichende Beträge einzelner Abhebungen.
+alter table budget_cash add column if not exists freq text not null default 'monthly';
+alter table budget_cash drop constraint if exists budget_cash_freq_check;
+alter table budget_cash add constraint budget_cash_freq_check check (freq in ('monthly', 'quarterly', 'halfyearly', 'yearly'));
+alter table budget_cash add column if not exists start_month text;
+alter table budget_cash drop constraint if exists budget_cash_start_month_check;
+alter table budget_cash add constraint budget_cash_start_month_check check (start_month is null or start_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
+alter table budget_cash add column if not exists withdraw_day int check (withdraw_day is null or withdraw_day between 1 and 28);
+alter table budget_cash add column if not exists overrides jsonb not null default '{}'::jsonb;  -- {"2026-12": 80.00}
+-- Ist ein Umschlag im Monat p_month (YYYY-MM) dran, und mit welchem Betrag?
+create or replace function budget_cash_due(c budget_cash, p_month text) returns numeric
+language sql immutable set search_path = public as $$
+  select case when c.freq = 'monthly' and c.start_month is null then coalesce((c.overrides->>p_month)::numeric, c.amount)
+              when c.start_month is null or p_month < c.start_month then case when c.start_month is null then coalesce((c.overrides->>p_month)::numeric, c.amount) else 0 end
+              when mod((substr(p_month, 1, 4)::int * 12 + substr(p_month, 6, 2)::int) - (substr(c.start_month, 1, 4)::int * 12 + substr(c.start_month, 6, 2)::int),
+                       case c.freq when 'monthly' then 1 when 'quarterly' then 3 when 'halfyearly' then 6 else 12 end) = 0
+                then coalesce((c.overrides->>p_month)::numeric, c.amount)
+              else 0 end
+$$;
 
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
@@ -417,7 +436,7 @@ language sql stable security definer set search_path = public as $$
    where r.household_id = my_household() and r.active and r.pot_id is null and m.share->>'fixed' = 'sums'
    group by r.owner, r.kind
   union all
-  select c.owner, 'cash', to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM'), 'expense', c.category, sum(c.amount)
+  select c.owner, 'cash', to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM'), 'expense', c.category, sum(budget_cash_due(c, to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM')))
     from budget_cash c join m on m.user_id = c.owner
    where c.household_id = my_household() and c.active and c.pot_id is null and m.share->>'tx' = 'sums'
      and not exists (select 1 from budget_tx t where t.household_id = c.household_id

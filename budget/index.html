@@ -248,10 +248,18 @@
       <label class="field">Name<input id="cash-name" required maxlength="40" placeholder="z. B. Wochenmarkt, Friseur, Taschengeld"></label>
       <div class="icon-pick" id="cash-icons" role="radiogroup" aria-label="Symbol"></div>
       <div class="grid2">
-        <label class="field">Pro Monat (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
-        <label class="field">Kategorie<select id="cash-cat"></select></label>
+        <label class="field">Betrag je Abhebung (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Rhythmus<select id="cash-freq"></select></label>
       </div>
+      <div class="grid2">
+        <label class="field">Erste Abhebung im<input type="month" id="cash-start"></label>
+        <label class="field">Abhebetag<select id="cash-day"></select></label>
+      </div>
+      <label class="field">Kategorie<select id="cash-cat"></select></label>
       <div id="cash-reserve"></div>
+      <details class="more" id="cash-links-wrap"><summary>Fixkosten aus diesem Umschlag bezahlen</summary><div id="cash-links" class="stack"></div></details>
+      <details class="more"><summary>Einzelne Abhebungen anpassen</summary><div id="cash-next" class="stack"></div></details>
+      <div id="cash-cal"></div>
       <div id="cash-who" class="who"></div>
       <p class="tiny muted" id="cash-hint">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
       <p id="cash-err" class="msg" role="alert"></p>

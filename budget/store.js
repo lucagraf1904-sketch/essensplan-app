@@ -27,7 +27,8 @@ const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', s
 const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
 // Summen-Zeilen (Freigabe „nur Summen“) in Cent
 const toSum = r => ({ owner: r.owner, area: r.area, month: r.month, kind: r.kind, category: r.category, total: toCents(r.total) });
-const toCash = r => ({ id: r.id, name: r.name, icon: r.icon || '💶', amount: toCents(r.amount), category: r.category, owner: r.owner ?? null, active: r.active !== false, potId: r.pot_id ?? null });
+const toCash = r => ({ id: r.id, name: r.name, icon: r.icon || '💶', amount: toCents(r.amount), category: r.category, owner: r.owner ?? null, active: r.active !== false, potId: r.pot_id ?? null,
+  freq: r.freq || 'monthly', startMonth: r.start_month ?? null, withdrawDay: r.withdraw_day ?? null, overrides: Object.fromEntries(Object.entries(r.overrides ?? {}).map(([k, v]) => [k, toCents(v)])) });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
   noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
   pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null, owner: r.owner ?? null });
@@ -142,7 +143,8 @@ export async function createSupabaseStore() {
       return toAcc(must(r));
     },
     async listCash() { return must(await sb.from('budget_cash').select('*').order('created_at')).map(toCash); },
-    async saveCash(e) { return toCash(must(await sb.from('budget_cash').upsert({ id: e.id ?? uid(), household_id: hh(), name: e.name, icon: e.icon || '💶', amount: fromCents(e.amount), category: e.category, owner: e.owner || null, active: e.active !== false, pot_id: e.potId || null, updated_at: new Date().toISOString() }).select().single())); },
+    async saveCash(e) { return toCash(must(await sb.from('budget_cash').upsert({ id: e.id ?? uid(), household_id: hh(), name: e.name, icon: e.icon || '💶', amount: fromCents(e.amount), category: e.category, owner: e.owner || null, active: e.active !== false, pot_id: e.potId || null, freq: e.freq || 'monthly', start_month: e.startMonth || null, withdraw_day: e.withdrawDay ?? null,
+      overrides: Object.fromEntries(Object.entries(e.overrides ?? {}).map(([k, v]) => [k, fromCents(v)])), updated_at: new Date().toISOString() }).select().single())); },
     async deleteCash(id) { must(await sb.from('budget_cash').delete().eq('id', id)); },
     async sharedSums(sinceIso) { return must(await sb.rpc('budget_shared_sums', { p_since: sinceIso })).map(toSum); },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
@@ -282,13 +284,13 @@ function demoSeed() {
   }
   sums.push({ owner: LEA, area: 'potbal', total: 240000 }, { owner: LEA, area: 'fixed', kind: 'expense', total: 8900 });
   const cash = [{ id: uid(), name: 'Wochenmarkt', icon: '🥕', amount: 6000, category: 'lm-markt', owner: null, active: true },
-    { id: uid(), name: 'Friseur', icon: '💇', amount: 2500, category: 'kl-friseur', owner: ME, active: true },
+    { id: uid(), name: 'Friseur', icon: '💇', amount: 2500, category: 'kl-friseur', owner: ME, active: true, freq: 'quarterly', startMonth: t.slice(0, 7), withdrawDay: 3, overrides: {} },
     { id: uid(), name: 'Kleinkram', icon: '🪙', amount: 4000, category: 'sonstiges', owner: ME, active: true }];
   // Rücklage für Versicherungen: monatlich bar zurücklegen, am Zahltag wird es aus dem Umschlag genommen
   const resPot = uid(), resEnv = uid();
   pots.push({ id: resPot, name: 'Umschlag Rücklage Versicherungen', icon: '🛡️', kind: 'reserve', goal: null, targetDate: null, startBalance: 32000, autoRest: false, archived: false, owner: ME });
-  cash.push({ id: resEnv, name: 'Rücklage Versicherungen', icon: '🛡️', amount: 5000, category: 'versicherung', owner: ME, active: true, potId: resPot });
-  for (const x of rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = resEnv;
+  cash.push({ id: resEnv, name: 'Rücklage Versicherungen', icon: '🛡️', amount: 5000, category: 'versicherung', owner: ME, active: true, potId: resPot, freq: 'monthly', startMonth: t.slice(0, 7), withdrawDay: 1, overrides: { [addMonths(m0, 1).slice(0, 7)]: 8000 } });
+  for (const x of rec) if (x.name === 'Autoversicherung Golf' && x.owner === ME) x.cashId = resEnv; // gleicher Besitzer wie der Umschlag
   return { tx, rec, pol, config, pots, pantry, accounts, members, sums, cash, files: {} };
 }
 
@@ -296,7 +298,7 @@ export function createDemoStore() {
   let db = null;
   const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf') || !db.pots.some(p => p.kind === 'reserve')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); }
       if (!db.pots.some(p => p.kind === 'reserve')) { const rp = fresh.pots.find(p => p.kind === 'reserve'), re = fresh.cash.find(e => e.potId === rp.id); db.pots.push(rp); if (!db.cash.some(e => e.id === re.id)) db.cash.push(re);
-        for (const x of db.rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = re.id; }
+        for (const x of db.rec) if (x.name === 'Autoversicherung Golf' && x.owner === 'demo') x.cashId = re.id; }
       save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)

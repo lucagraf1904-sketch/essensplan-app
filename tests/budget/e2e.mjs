@@ -274,7 +274,10 @@ await page.click('#form-cash [type=submit]');
 await page.waitForFunction(() => /abheben\s*195,00/.test(document.querySelector('#view-home').textContent));
 assert.notEqual(await page.textContent('.band-value'), freeBefore, 'Noch frei berücksichtigt das Bargeld');
 await shot(page, '20-bargeld');
-await page.click('#view-home [data-act=cash-withdraw]');
+// Hinweis „Bargeld abheben“ nennt nur die Umschläge, deren Abhebetag erreicht ist
+const alertIds = await page.$eval('#view-home .alert [data-act=cash-withdraw]', b => b.dataset.only.split(','));
+assert.ok(alertIds.length >= 1 && alertIds.length < 5, 'nur fällige Umschläge im Hinweis');
+await page.click('#view-home [data-act=cash-withdraw]:not([data-only])');
 await page.click('#ask-btns button[value=ok]');
 await page.waitForFunction(() => /Abgehoben im/.test(document.querySelector('#view-home').textContent));
 const cashTx = await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'));
@@ -367,6 +370,38 @@ await page.click('#chat-chips .chip >> nth=0');
 await page.waitForSelector('#chat-msgs .msg-a blockquote', { state: 'attached' });
 assert.match(await page.$$eval('#chat-msgs blockquote', e => e.map(x => x.textContent).join(' ')), /30 Arbeitstage/);
 await shot(page, '24-arbeitsvertrag', false);
+await page.keyboard.press('Escape');
+
+// ---------- Umschlag einstellen ----------
+await page.click('.tabs [data-view=home]');
+await page.click('#view-home [data-cash] >> text=Rücklage Versicherungen');
+await page.waitForTimeout(300);
+// Fixkosten per Häkchen + Vorschlag
+await page.click('#cash-links-wrap summary').catch(() => {});
+const linkedCount = await page.$$eval('#cash-links [data-link]:checked', e => e.length);
+assert.ok(linkedCount >= 2, 'zugeordnete Fixkosten sind angehakt');
+assert.match(await page.textContent('#cash-suggest'), /Vorschlag/);
+// Rhythmus vierteljährlich, Abhebetag 5, einzelne Abhebung anpassen
+await page.selectOption('#cash-freq', 'quarterly');
+await page.selectOption('#cash-day', '5');
+await page.click('#dlg-cash details.more summary >> text=Einzelne Abhebungen anpassen');
+const ovKey = await page.$eval('[data-ov]', e => e.dataset.ov);
+await page.fill(`[data-ov="${ovKey}"]`, '123');
+await page.click('#form-cash [type=submit]');
+await page.waitForFunction(k => { const e = window.__budget.state.cash.find(x => x.name === 'Rücklage Versicherungen'); return e.freq === 'quarterly' && e.withdrawDay === 5 && e.overrides[k] === 12300; }, ovKey);
+// Kalendertermin
+await page.click('#view-home [data-cash] >> text=Rücklage Versicherungen');
+await page.waitForSelector('#cash-ics');
+const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#cash-ics')]);
+const icsText = (await readFile(await dl.path())).toString();
+assert.match(icsText, /RRULE:FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=5/);
+// Stand korrigieren
+await page.click('[data-cmove=set]');
+await page.fill('#cm-amount', '500');
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(() => /Stand auf 500,00/.test(document.querySelector('#toast').textContent));
+await page.waitForFunction(() => /500,00/.test(document.querySelector('#cash-reserve').textContent));
+await shot(page, '26-umschlag-einstellen', false);
 await page.keyboard.press('Escape');
 
 // Monat wechseln

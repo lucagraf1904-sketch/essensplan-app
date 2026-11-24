@@ -6,12 +6,12 @@ import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
   noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, etfGain, etfValue, isValidIsin, groupPantry, similarTx, pantryDone,
-  inScope, defaultOwner, sumsToTx, byAccount, cashPending, cashRef, reserveForecast,
+  inScope, defaultOwner, sumsToTx, byAccount, cashPending, cashRef, reserveForecast, cashDueAmount, nextWithdrawals, cashIcs, CASH_FREQ,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v7';
+const VERSION = 'v8';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -221,7 +221,7 @@ function reserveInfo(e) {
   const until = addMonths(state.today.slice(0, 7) + '-01', 12);
   const dues = linked.flatMap(r => occurrences(r, state.today, until).map(d => ({ date: d, amount: r.amount, name: r.name }))).sort((a, b) => a.date.localeCompare(b.date));
   const withdrawnThisMonth = state.tx.some(t => t.extRef === cashRef(state.today.slice(0, 7), e.id));
-  return { pot, balance, linked, dues, forecast: reserveForecast({ balance, monthly: e.amount, withdrawnThisMonth, dues, today: state.today }) };
+  return { pot, balance, linked, dues, forecast: reserveForecast({ balance, deposit: k => cashDueAmount(e, k), withdrawnThisMonth, dues, today: state.today, withdrawDay: e.withdrawDay ?? 1 }) };
 }
 
 // ---------- Übersicht ----------
@@ -292,6 +292,8 @@ function renderHome() {
 
   // Fristen
   const dl = deadlines();
+  const cashTodo = state.month === state.today.slice(0, 7) ? cashPending(cashList(), state.tx, state.month, state.today, groupOf).open.filter(e => canWrite(e.owner) && e.withdrawDay && +state.today.slice(8) >= e.withdrawDay) : [];
+  const cashAlert = cashTodo.length ? `<div class="alert"><span aria-hidden="true">💶</span><span><b>Bargeld abheben: ${eur(cashTodo.reduce((a, e) => a + e.due, 0))}</b><span class="tiny">${cashTodo.map(e => esc(e.name)).join(', ')} · fällig seit dem ${Math.min(...cashTodo.map(e => e.withdrawDay))}.</span></span><button class="btn small" data-act="cash-withdraw" data-only="${esc(cashTodo.map(e => e.id).join(','))}">Abgehoben</button></div>` : '';
   const alerts = dl.map((d, i) => `<div class="alert ${d.daysLeft <= 14 ? 'bad' : ''}"><span aria-hidden="true">${d.icon}</span>
     <span><b>${esc(d.name)}: kündbar bis ${dateShort(d.deadline)}</b><span class="tiny">${d.daysLeft === 0 ? 'Heute ist der letzte Tag.' : `Noch ${d.daysLeft} ${d.daysLeft === 1 ? 'Tag' : 'Tage'}`}. Vertrag läuft bis ${dateShort(d.end)}.</span></span>
     <button class="btn small" data-deadline="${i}">Ansehen</button></div>`).join('');
@@ -318,6 +320,7 @@ function renderHome() {
   const recent = real(V.tx).filter(t => monthKey(t.date) === state.month).slice(0, 5);
 
   $('#view-home').innerHTML = bandHtml
+    + (cashAlert ? `<div style="margin-top:14px">${cashAlert}</div>` : '')
     + restCard() + pantryCard()
     + (alerts ? `<div class="section-head"><h2>Fristen</h2></div>${alerts}` : '')
     + cashSection()
@@ -835,15 +838,75 @@ function cashSection() {
     const sub = ri ? `Rücklage · drin ${eur(ri.balance)}${ri.linked.length ? ` · für ${ri.linked.map(r => r.name).join(', ')}` : ''}` : cat(e.category).label;
     const warn = ri && !ri.forecast.ok ? `<span class="budget-note warn" style="display:block;margin-top:3px">⚠️ Für ${esc(ri.forecast.name)} am ${dateShortNoYear(ri.forecast.date)} fehlen voraussichtlich ${eur(ri.forecast.missing)}</span>`
       : ri?.forecast.next ? `<span class="tiny muted" style="display:block;margin-top:3px">✓ Reicht für ${esc(ri.forecast.next.name)} am ${dateShortNoYear(ri.forecast.next.date)}</span>` : '';
+    const dueNow = cashDueAmount(e, key), nx = !dueNow && nextWithdrawals(e, key + '-01', 1)[0];
+    const when = `${CASH_FREQ[e.freq ?? 'monthly'].label}${e.withdrawDay ? `, am ${e.withdrawDay}.` : ''}`;
     return `<li><button class="item" data-cash="${esc(e.id)}"><span class="ic" aria-hidden="true">${esc(e.icon)}</span>
-      <span><span class="t">${esc(e.name)}</span><span class="s">${esc(sub)}${ownerTag(e.owner)}${done && (cur || future) ? ' · ✓ abgehoben' : ''}</span>${warn}</span>
-      <span class="a">${eur(e.amount)}<small>im Monat</small></span></button></li>`;
+      <span><span class="t">${esc(e.name)}</span><span class="s">${esc(sub)} · ${esc(when)}${ownerTag(e.owner)}${done && (cur || future) && dueNow ? ' · ✓ abgehoben' : ''}</span>${warn}</span>
+      <span class="a">${dueNow ? eur(dueNow) : '–'}<small>${dueNow ? (dueNow !== e.amount ? 'diesmal' : 'jetzt') : nx ? `ab ${monthShort(nx.key)}` : ''}</small></span></button></li>`;
   }).join('');
-  const btn = cur && writableOpen.length ? `<div style="padding:4px 14px 14px"><button class="btn primary" style="width:100%" data-act="cash-withdraw">Abgehoben: ${eur(writableOpen.reduce((a, e) => a + e.amount, 0))}</button>
+  const btn = cur && writableOpen.length ? `<div style="padding:4px 14px 14px"><button class="btn primary" style="width:100%" data-act="cash-withdraw">Abgehoben: ${eur(writableOpen.reduce((a, e) => a + e.due, 0))}</button>
     <p class="tiny muted" style="margin-top:6px">Normale Umschläge werden als Ausgabe gebucht, Rücklagen als zurückgelegt. Bis dahin zählen sie wie offene Fixkosten.</p></div>` : '';
   return head + `<div class="card" style="padding:0">${top}<ul class="list" style="box-shadow:none;border-radius:0">${rows}</ul>${btn}</div>`;
 }
 let cashEditing = null;
+// Häkchenliste der Fixkosten; nur gleicher Besitzer (beide gemeinsam oder beide privat) wählbar. Mit Betragsvorschlag.
+function drawCashLinks(e) {
+  const owner = $('#cash-who').dataset.owner || null; // aktueller Stand im Formular
+  const list = state.recurring.filter(r => r.active && r.kind === 'expense' && canWrite(r.owner))
+    .sort((a, b) => ((a.owner ?? null) === owner ? 0 : 1) - ((b.owner ?? null) === owner ? 0 : 1) || monthlyCents(b) - monthlyCents(a)); // wählbare zuerst
+  $('#cash-links-wrap').open = !!(e && list.some(r => r.cashId === e.id));
+  $('#cash-links').innerHTML = list.length ? list.map(r => {
+    const other = r.cashId && r.cashId !== e?.id ? state.cash.find(x => x.id === r.cashId) : null, same = (r.owner ?? null) === owner;
+    return `<label class="check"><input type="checkbox" data-link="${esc(r.id)}" ${e && r.cashId === e.id ? 'checked' : ''} ${same ? '' : 'disabled'}><span>${esc(r.name)} · ${eur(r.amount)} ${FREQS[r.freq].label}
+      <span class="tiny muted" style="display:block">${!same ? (r.owner ? 'privat, Umschlag ist gemeinsam' : 'gemeinsam, Umschlag ist privat') : other ? `bisher aus „${esc(other.name)}“` : `≈ ${eur(monthlyCents(r))} im Monat`}</span></span></label>`;
+  }).join('') + '<p class="tiny" id="cash-suggest"></p>' : '<p class="tiny muted">Noch keine Fixkosten angelegt.</p>';
+  const suggest = () => {
+    const step = CASH_FREQ[$('#cash-freq').value]?.step ?? 1;
+    const sum = $$('[data-link]').filter(x => x.checked).reduce((a, x) => a + monthlyCents(state.recurring.find(r => r.id === x.dataset.link)), 0) * step;
+    const el = $('#cash-suggest'); if (!el) return;
+    el.innerHTML = sum ? `Vorschlag: ${eur(sum)} je Abhebung (${CASH_FREQ[$('#cash-freq').value].label}) <button type="button" class="btn small" id="cash-take">Übernehmen</button>` : '';
+    if ($('#cash-take')) $('#cash-take').onclick = () => { $('#cash-amount').value = amountInput(sum); drawCashNext(cashEditing); };
+  };
+  $$('[data-link]').forEach(x => x.onchange = suggest);
+  const redrawNext = () => { if (cashEditing) drawCashNext({ ...cashEditing, freq: $('#cash-freq').value, startMonth: $('#cash-start').value || cashEditing.startMonth, withdrawDay: $('#cash-day').value ? +$('#cash-day').value : null }); };
+  $('#cash-freq').onchange = () => { suggest(); redrawNext(); };
+  $('#cash-start').onchange = redrawNext; $('#cash-day').onchange = redrawNext;
+  suggest();
+}
+// Nächste Abhebungen mit eigenem Betrag (leer = normaler Betrag)
+function drawCashNext(e) {
+  if (!e) { $('#cash-next').innerHTML = '<p class="tiny muted">Nach dem Speichern kannst du einzelne Abhebungen anpassen.</p>'; return; }
+  const list = nextWithdrawals(e, state.today, 6);
+  $('#cash-next').innerHTML = list.map(w => `<label class="limit-row"><span>${esc(monthName(w.key))}${e.withdrawDay ? `, ${dateShortNoYear(w.date)}` : ''}${w.skipped ? ' · ausgesetzt' : ''}</span>
+    <input inputmode="decimal" data-ov="${w.key}" value="${w.override ? amountInput(w.amount) : ''}" placeholder="${amountInput(e.amount)}" aria-label="Betrag ${esc(monthName(w.key))}"></label>`).join('')
+    + '<p class="tiny muted">Leer lassen = normaler Betrag, 0 = diesmal aussetzen.</p>';
+}
+// Stand eines Rücklage-Umschlags anpassen: dazulegen, entnehmen oder direkt korrigieren
+async function cashMove(e, mode) {
+  const ri = reserveInfo(e); if (!ri) return;
+  const v = await ask(mode === 'in' ? `In „${e.name}“ dazulegen` : mode === 'out' ? `Aus „${e.name}“ entnehmen` : `Stand von „${e.name}“ korrigieren`,
+    `<label class="field">${mode === 'set' ? `Was ist gerade im Umschlag? (bisher ${eur(ri.balance)})` : 'Betrag (€)'}<input id="cm-amount" inputmode="decimal" placeholder="0,00"></label>
+     <p class="tiny muted">${mode === 'set' ? 'Die App bucht den Unterschied als Korrektur.' : mode === 'in' ? 'Zählt im laufenden Monat als zurückgelegt.' : 'Das Geld steht im laufenden Monat wieder zur Verfügung.'}</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Buchen', cls: 'primary' }]);
+  if (v !== 'ok') return;
+  const raw = $('#cm-amount').value.trim(), c = parseAmount(raw);
+  if (c == null || (mode !== 'set' && !c)) { toast('Kein gültiger Betrag'); return; }
+  let kind = mode === 'out' ? 'unsave' : 'save', amount = c;
+  if (mode === 'set') { const diff = c - ri.balance; if (!diff) { toast('Stand stimmt schon'); return; } kind = diff > 0 ? 'save' : 'unsave'; amount = Math.abs(diff); }
+  try {
+    await store.saveTx({ id: uid(), date: state.today, amount, kind, category: 'fi-sparen', potId: ri.pot.id, owner: ri.pot.owner ?? null, note: mode === 'set' ? 'Korrektur Bestand' : mode === 'in' ? 'Dazugelegt' : 'Entnommen', source: 'manual', createdAt: new Date().toISOString() });
+    await loadAll({ book: false }); render(); openCash(state.cash.find(x => x.id === e.id));
+    toast(mode === 'set' ? `Stand auf ${eur(c)} korrigiert` : `${eur(amount)} ${mode === 'in' ? 'dazugelegt' : 'entnommen'}`);
+  } catch (err) { $('#cash-err').textContent = err.message; }
+}
+// Kalendertermin (.ics) herunterladen: iPhone und Android bieten dann „Zum Kalender hinzufügen“ an
+function downloadCashIcs(e) {
+  const next = nextWithdrawals(e, state.today, 3).find(w => w.date >= state.today) ?? nextWithdrawals(e, state.today, 1)[0];
+  if (!next) { toast('Keine nächste Abhebung gefunden'); return; }
+  const blob = new Blob([cashIcs(e, next.date, e.id)], { type: 'text/calendar;charset=utf-8' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `bargeld-${e.name.replace(/[^\w-]+/g, '-').toLowerCase()}.ics` });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
 function openCash(e = null) {
   cashEditing = e;
   $('#cash-title').textContent = e ? `${e.icon} ${e.name}` : 'Neuer Bargeld-Umschlag';
@@ -851,18 +914,27 @@ function openCash(e = null) {
   const icon = e?.icon ?? '💶';
   $('#cash-icons').innerHTML = CASH_ICONS.map(i => `<label><input type="radio" name="cash-icon" value="${i}" ${i === icon ? 'checked' : ''} aria-label="Symbol ${i}"><span aria-hidden="true">${i}</span></label>`).join('');
   $('#cash-amount').value = e ? amountInput(e.amount) : '';
+  $('#cash-freq').innerHTML = Object.entries(CASH_FREQ).map(([k, v]) => `<option value="${k}" ${k === (e?.freq ?? 'monthly') ? 'selected' : ''}>${v.label}</option>`).join('');
+  $('#cash-start').value = e?.startMonth ?? state.today.slice(0, 7);
+  $('#cash-day').innerHTML = `<option value="">kein fester Tag</option>` + Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}" ${e?.withdrawDay === i + 1 ? 'selected' : ''}>${i + 1}.</option>`).join('');
+  $('#cash-cal').innerHTML = e?.withdrawDay ? '<button type="button" class="btn" id="cash-ics">📅 Erinnerung in den Kalender eintragen</button><p class="tiny muted" style="margin-top:4px">Legt einen wiederkehrenden Termin mit Erinnerung in deinem Handy-Kalender an.</p>' : e ? '<p class="tiny muted">Mit einem Abhebetag kannst du dir eine Erinnerung in den Kalender legen.</p>' : '';
+  if ($('#cash-ics')) $('#cash-ics').onclick = () => downloadCashIcs(e);
   $('#cash-cat').innerHTML = catOptions('expense', e?.category ?? 'sonstiges');
   const ri = e && reserveInfo(e);
   $('#cash-reserve').innerHTML = ri ? `<div class="pot-head"><span class="tiny muted">Rücklage: drin</span><span class="big">${eur(ri.balance)}</span>
       ${ri.linked.length ? `<span class="tiny">Wird bezahlt: ${ri.linked.map(r => `${esc(r.name)} ${eur(r.amount)} ${FREQS[r.freq].label}`).join(' · ')}</span>` : '<span class="tiny">Noch keine Fixkosten zugeordnet.</span>'}
-      <span class="tiny ${ri.forecast.ok ? '' : 'budget-note warn'}">${ri.forecast.ok ? (ri.forecast.next ? `✓ Mit ${eur(e.amount)} im Monat reicht es für ${esc(ri.forecast.next.name)} am ${dateShort(ri.forecast.next.date)}.` : 'In den nächsten 12 Monaten ist nichts fällig.') : `⚠️ Für ${esc(ri.forecast.name)} am ${dateShort(ri.forecast.date)} fehlen voraussichtlich ${eur(ri.forecast.missing)}. Monatsbetrag erhöhen oder einmalig mehr zurücklegen.`}</span></div>
-      <p class="tiny muted">Zuordnen und lösen geht bei den Fixkosten bzw. Verträgen: „Aus Bargeld-Umschlag bezahlen“.</p>`
-    : e ? '<p class="tiny muted">Tipp: Ordne bei Fixkosten oder Verträgen diesen Umschlag zu („Aus Bargeld-Umschlag bezahlen“). Dann sammelt er das Geld bis zum Zahltag.</p>' : '';
+      <span class="tiny ${ri.forecast.ok ? '' : 'budget-note warn'}">${ri.forecast.ok ? (ri.forecast.next ? `✓ Mit den geplanten Abhebungen reicht es für ${esc(ri.forecast.next.name)} am ${dateShort(ri.forecast.next.date)}.` : 'In den nächsten 12 Monaten ist nichts fällig.') : `⚠️ Für ${esc(ri.forecast.name)} am ${dateShort(ri.forecast.date)} fehlen voraussichtlich ${eur(ri.forecast.missing)}. Betrag erhöhen, eine Abhebung anpassen oder einmalig mehr dazulegen.`}</span>
+      ${canWrite(e.owner) ? '<div class="row wrap"><button type="button" class="btn small primary" data-cmove="in">Dazulegen</button><button type="button" class="btn small" data-cmove="out">Entnehmen</button><button type="button" class="btn small" data-cmove="set">Stand korrigieren</button></div>' : ''}</div>
+      <p class="tiny muted">Fixkosten zuordnen oder lösen: unten per Häkchen oder bei der Fixkosten-Position („Aus Bargeld-Umschlag bezahlen“).</p>`
+    : e ? '<p class="tiny muted">Tipp: Hake unten Fixkosten an, die aus diesem Umschlag bezahlt werden sollen. Dann sammelt er das Geld bis zum Zahltag.</p>' : '';
   $('#cash-cat').closest('label').classList.toggle('hidden', !!ri);
+  $$('[data-cmove]').forEach(b => b.onclick = () => cashMove(e, b.dataset.cmove));
   $('#cash-hint').textContent = ri ? 'Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er zurückgelegt und bleibt im Umschlag, bis die zugeordneten Fixkosten fällig sind; dann nimmt die App den Betrag automatisch heraus.'
     : 'Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.';
   const ro = whoWidget($('#cash-who'), { account: undefined, owner: e ? e.owner : (myMember().defaultPrivate ? me() : null), editing: !!e, accounts: false, hint: 'Ein privater Umschlag zählt nur zu deiner Abhebesumme.' });
   $('#form-cash [type=submit]').classList.toggle('hidden', ro);
+  drawCashLinks(e); drawCashNext(e);
+  $('#cash-who').onchange = () => drawCashLinks(e);
   $('#cash-delete').classList.toggle('hidden', !e || ro);
   $('#cash-err').textContent = '';
   $('#dlg-cash').showModal();
@@ -876,22 +948,46 @@ async function saveCashForm() {
   const old = cashEditing;
   if (old?.potId && (keepOwner(old, who.owner) ?? null) !== (old.owner ?? null)) return err('Eine Rücklage kann nicht zwischen privat und gemeinsam wechseln. Lege dafür einen neuen Umschlag an.');
   try {
-    await store.saveCash({ ...(old ?? {}), name, amount, icon: $$('[name=cash-icon]').find(x => x.checked)?.value ?? '💶', category: $('#cash-cat').value, owner: keepOwner(old, who.owner), active: true });
+    const freq = $('#cash-freq').value, startMonth = $('#cash-start').value || state.today.slice(0, 7), withdrawDay = $('#cash-day').value ? +$('#cash-day').value : null;
+    if (!/^\d{4}-\d{2}$/.test(startMonth)) return err('Bitte den Monat der ersten Abhebung wählen.');
+    // Abweichende Beträge: vergangene Monate aufräumen, leere oder gleiche Werte entfernen
+    const overrides = Object.fromEntries(Object.entries(old?.overrides ?? {}).filter(([k]) => k >= state.today.slice(0, 7)));
+    for (const inp of $$('[data-ov]')) {
+      const v = inp.value.trim(), c = v ? parseAmount(v) : null;
+      if (v && c == null) return err(`Abhebung ${monthName(inp.dataset.ov)}: keine gültige Zahl.`);
+      if (c == null || c === amount) delete overrides[inp.dataset.ov]; else overrides[inp.dataset.ov] = c;
+    }
+    const owner = keepOwner(old, who.owner);
+    const wrong = $$('[data-link]').filter(x => x.checked).map(x => state.recurring.find(r => r.id === x.dataset.link)).filter(r => r && (r.owner ?? null) !== (owner ?? null));
+    if (wrong.length) return err(`„${wrong[0].name}“ ist ${wrong[0].owner ? 'privat' : 'gemeinsam'}, der Umschlag ${owner ? 'privat' : 'gemeinsam'}. Häkchen entfernen oder „Wer sieht das?“ anpassen.`);
+    let saved = await store.saveCash({ ...(old ?? {}), name, amount, freq, startMonth, withdrawDay, overrides, icon: $$('[name=cash-icon]').find(x => x.checked)?.value ?? '💶', category: $('#cash-cat').value, owner, active: true });
+    // Fixkosten per Häkchen: angehakte zuordnen (Umschlag wird dann Rücklage), abgehakte lösen
+    const boxes = $$('[data-link]'), want = new Set(boxes.filter(x => x.checked).map(x => x.dataset.link));
+    if (want.size && !saved.potId) {
+      const pot = await store.savePot({ name: `Umschlag ${saved.name}`, icon: saved.icon, kind: 'reserve', goal: null, targetDate: null, startBalance: 0, autoRest: false, archived: false, owner: saved.owner ?? null });
+      saved = await store.saveCash({ ...saved, potId: pot.id });
+    }
+    // Nur die angezeigten Fixkosten ändern (pausierte bleiben, wie sie sind)
+    for (const box of boxes) {
+      const r = state.recurring.find(x => x.id === box.dataset.link); if (!r) continue;
+      const should = want.has(r.id) ? saved.id : r.cashId === saved.id ? null : r.cashId;
+      if ((should ?? null) !== (r.cashId ?? null)) await store.saveRecurring({ ...r, cashId: should });
+    }
     $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast(old ? 'Umschlag gespeichert' : `Umschlag „${name}“ angelegt`);
   } catch (e) { err(e.message); }
 }
-async function withdrawCash() {
+async function withdrawCash(only = null) {
   const key = state.today.slice(0, 7);
-  const open = cashPending(cashList(), state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
+  const open = cashPending(cashList(), state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner) && (!only || only.includes(e.id)));
   if (!open.length) return;
-  const total = open.reduce((a, e) => a + e.amount, 0);
+  const total = open.reduce((a, e) => a + (e.due ?? e.amount), 0);
   // Gemeinsames Bargeld nur von gemeinsamen Konten, eigenes nur von eigenen (und keine fremden privaten Konten)
   const groups = [
     { id: 'shared', label: 'Gemeinsames Bargeld von', envs: open.filter(e => e.owner == null), accs: state.accounts.filter(a => !a.archived && a.owner == null) },
     { id: 'mine', label: 'Eigenes Bargeld von', envs: open.filter(e => e.owner != null), accs: state.accounts.filter(a => !a.archived && a.owner === me()) },
   ].filter(g => g.envs.length);
   const pick = g => { const last = lastAccount(); return g.accs.some(a => a.id === last) ? last : g.accs[0]?.id; };
-  const v = await ask(`${eur(total)} abgehoben?`, `<p>${open.map(e => `${esc(e.icon)} ${esc(e.name)} ${eur(e.amount)}${e.owner ? ' 🔒' : ''}`).join('<br>')}</p>
+  const v = await ask(`${eur(total)} abgehoben?`, `<p>${open.map(e => `${esc(e.icon)} ${esc(e.name)} ${eur(e.due ?? e.amount)}${e.owner ? ' 🔒' : ''}`).join('<br>')}</p>
     ${groups.filter(g => g.accs.length).map(g => `<label class="field">${groups.length > 1 ? g.label : 'Von welchem Konto?'}<select id="cash-acc-${g.id}">${g.accs.map(a => `<option value="${esc(a.id)}" ${a.id === pick(g) ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}<option value="">ohne Konto</option></select></label>`).join('')}
     <p class="tiny muted">Wird heute je Umschlag gebucht: normale als Ausgabe, Rücklagen als zurückgelegt.</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Ja, abgehoben', cls: 'primary' }]);
   if (v !== 'ok') return;
@@ -899,8 +995,8 @@ async function withdrawCash() {
   let n = 0, queued = 0;
   for (const e of open) {
     const rp = e.potId && state.pots.find(x => x.id === e.potId && !x.archived);
-    const t = rp ? { id: uid(), date: state.today, amount: e.amount, kind: 'save', category: 'fi-sparen', potId: rp.id, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: rp.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() }
-      : { id: uid(), date: state.today, amount: e.amount, kind: 'expense', category: e.category, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: e.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() };
+    const t = rp ? { id: uid(), date: state.today, amount: e.due ?? e.amount, kind: 'save', category: 'fi-sparen', potId: rp.id, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: rp.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() }
+      : { id: uid(), date: state.today, amount: e.due ?? e.amount, kind: 'expense', category: e.category, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: e.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() };
     try { await store.saveTx(t); n++; }
     catch (err) {
       if (err.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); state.tx = [t, ...state.tx].sort(byDateDesc); queued++; continue; }
@@ -1296,7 +1392,7 @@ function bindEvents() {
     else if (act === 'add-pot') openPot();
     else if (act === 'add-etf') openPot(null, 'etf');
     else if (act === 'add-cash') openCash();
-    else if (act === 'cash-withdraw') withdrawCash();
+    else if (act === 'cash-withdraw') withdrawCash(el.dataset.only ? el.dataset.only.split(',') : null);
     else if (act === 'rest-book') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId), pot = c && potOf($(`#rest-pot-${CSS.escape(c.sc.id)}`).value); if (pot) bookRest(c, pot); }
     else if (act === 'rest-keep') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId); if (c) { state.config.closed = { ...(state.config.closed ?? {}), [closedKey(c.month, c.sc)]: 'keep' }; saveConfigSoon(0); render(); } }
     else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
