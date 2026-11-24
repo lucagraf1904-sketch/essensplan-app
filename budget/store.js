@@ -8,23 +8,28 @@ import { toCents, fromCents, todayIso, addDays, addMonths, nthDue, bookDueLocal,
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 const toTx = r => ({ id: r.id, date: r.date, amount: toCents(r.amount), kind: r.kind, category: r.category, note: r.note ?? '', source: r.source,
-  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, potId: r.pot_id ?? null, extRef: r.ext_ref ?? null });
+  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, potId: r.pot_id ?? null, extRef: r.ext_ref ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null });
 const fromTx = (t, hh) => ({ id: t.id, household_id: hh, date: t.date, amount: fromCents(t.amount), kind: t.kind, category: t.category, note: t.note || null,
-  source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
+  source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, owner: t.owner || null, account_id: t.accountId || null, ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
 const toRec = r => ({ id: r.id, name: r.name, amount: toCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, startDate: r.start_date, nextDue: r.next_due,
-  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null });
+  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null });
 const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: fromCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, start_date: r.startDate,
   next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
-  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null });
+  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null });
 const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.goal == null ? null : toCents(r.goal), targetDate: r.target_date ?? null,
-  startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived });
+  startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived, owner: r.owner ?? null });
 const fromPot = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, icon: p.icon || '🐷', goal: p.goal ? fromCents(p.goal) : null, target_date: p.targetDate || null,
-  start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived });
+  start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived, owner: p.owner || null });
+const DEFAULT_SHARE = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none' };
+const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', share: { ...DEFAULT_SHARE, ...(r.share ?? {}) }, defaultPrivate: !!r.default_private });
+const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
+// Summen-Zeilen (Freigabe „nur Summen“) in Cent
+const toSum = r => ({ owner: r.owner, area: r.area, month: r.month, kind: r.kind, category: r.category, total: toCents(r.total) });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
   noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
-  pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null });
+  pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null, owner: r.owner ?? null });
 const fromPol = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, category: p.category, insurer: p.insurer || null, policy_no: p.policyNo || null,
-  contract_end: p.contractEnd || null, notice_months: p.noticeMonths ?? null, notes: p.notes || null });
+  contract_end: p.contractEnd || null, notice_months: p.noticeMonths ?? null, notes: p.notes || null, owner: p.owner || null });
 
 // Fehlermeldung einer Edge Function lesbar machen
 async function fnError(error) {
@@ -39,12 +44,12 @@ const friendly = e => {
   return e instanceof Error ? e : new Error(m);
 };
 
-const POL_COLS = 'id,name,category,insurer,policy_no,contract_end,notice_months,notes,file_path,file_name,text_source,page_count';
+const POL_COLS = 'id,name,category,insurer,policy_no,contract_end,notice_months,notes,file_path,file_name,text_source,page_count,owner';
 
 export async function createSupabaseStore() {
   const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
   const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
-  let household = null, userId = null;
+  let household = null, userId = null, userEmail = '';
   const must = ({ data, error }) => { if (error) throw friendly(error); return data; };
   const hh = () => household.id;
 
@@ -53,7 +58,7 @@ export async function createSupabaseStore() {
     async init() {
       const { data: { session } } = await sb.auth.getSession();
       if (!session) return { needsLogin: true };
-      userId = session.user.id;
+      userId = session.user.id; userEmail = session.user.email ?? '';
       const m = await sb.from('members').select('household_id').eq('user_id', userId).maybeSingle();
       if (m.error) throw friendly(m.error);
       if (!m.data) return { needsHousehold: true };
@@ -64,6 +69,8 @@ export async function createSupabaseStore() {
       return { ready: true };
     },
     me: () => userId,
+    // Vorschlag für den Anzeigenamen: Teil der E-Mail vor dem @, ohne Ziffern
+    suggestedName: () => { const n = userEmail.split('@')[0].replace(/[._\d-]+/g, ' ').trim().split(' ')[0] || 'Ich'; return n[0].toUpperCase() + n.slice(1); },
     household: () => household,
     // Offline-Start aus dem letzten Stand: Haushalt setzen, damit Buchungen in die Warteschlange können
     useOffline(h) { household = h; },
@@ -112,6 +119,21 @@ export async function createSupabaseStore() {
       if (r.error && /foreign key|budget_tx_pot_id_fkey/i.test(r.error.message)) throw new Error('Der Topf hat inzwischen Buchungen (vielleicht vom anderen Handy) und kann nur aufgelöst werden. Bitte neu öffnen.');
       must(r);
     },
+    // Personen im Haushalt mit Namen und Freigaben
+    async listMembers() { return must(await sb.from('budget_members').select('*')).map(toMember); },
+    async saveMe(m) {
+      return toMember(must(await sb.from('budget_members').upsert({ user_id: userId, household_id: hh(), display_name: m.displayName || null,
+        share: { ...DEFAULT_SHARE, ...(m.share ?? {}) }, default_private: !!m.defaultPrivate, updated_at: new Date().toISOString() }).select().single()));
+    },
+    // Wer ist im Haushalt (auch ohne Eintrag in budget_members)? Mitglieder-Tabelle der Speisekammer
+    async memberIds() { return must(await sb.from('members').select('user_id')).map(r => r.user_id); },
+    async listAccounts() { return must(await sb.from('budget_accounts').select('*').order('created_at')).map(toAcc); },
+    async saveAccount(a) {
+      const r = await sb.from('budget_accounts').upsert({ id: a.id ?? uid(), household_id: hh(), name: a.name, owner: a.owner || null, icon: a.icon || '💳', archived: !!a.archived }).select().single();
+      if (r.error && /budget_accounts_name|duplicate key/i.test(r.error.message)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
+      return toAcc(must(r));
+    },
+    async sharedSums(sinceIso) { return must(await sb.rpc('budget_shared_sums', { p_since: sinceIso })).map(toSum); },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
     async listPantryPurchases(sinceIso) {
       const rows = must(await sb.from('log').select('id,item_name,category,price,at,by_user').eq('type', 'bought').not('price', 'is', null).gte('at', sinceIso).order('at').limit(2000));
@@ -164,6 +186,8 @@ export async function createSupabaseStore() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_policies', filter: f }, () => cb('policies'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_settings', filter: f }, () => cb('config'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_pots', filter: f }, () => cb('pots'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_members', filter: f }, () => cb('members'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_accounts', filter: f }, () => cb('accounts'))
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'log', filter: f }, () => cb('pantry'))
         .subscribe();
     },
@@ -180,23 +204,32 @@ const DEMO_POLICY = [
 function demoSeed() {
   const t = todayIso(), m0 = t.slice(0, 7) + '-01';
   const tx = [], rec = [];
+  const ME = 'demo', LEA = 'lea';
+  const acc = { me: uid(), lea: uid(), joint: uid() };
+  const accounts = [{ id: acc.me, name: 'Konto Alex', owner: ME, icon: '💳', archived: false }, { id: acc.lea, name: 'Konto Lea', owner: LEA, icon: '💳', archived: false },
+    { id: acc.joint, name: 'Gemeinschaftskonto', owner: null, icon: '🏦', archived: false }];
+  const members = [{ userId: ME, displayName: 'Alex', share: { tx: 'none', fixed: 'none', pots: 'none', policies: 'none' }, defaultPrivate: false },
+    { userId: LEA, displayName: 'Lea', share: { tx: 'sums', fixed: 'sums', pots: 'sums', policies: 'none' }, defaultPrivate: true }];
+  const mine = { owner: ME, accountId: acc.me }, joint = { owner: null, accountId: acc.joint };
   const add = (date, amount, category, note, kind = 'expense', extra = {}) => tx.push({ id: uid(), date, amount, kind, category, note, source: 'manual', recurringId: null, dueDate: null, createdAt: new Date().toISOString(), ...extra });
   const r = (name, amount, category, freq, startDate, extra = {}) => rec.push({ id: uid(), name, amount, kind: 'expense', category, freq, startDate, nextDue: startDate, n: 0, endDate: null, contractEnd: null, noticeMonths: null, active: true, policyId: null, note: '', ...extra });
   const polId = uid();
   // Fixkosten seit vier Monaten (werden beim Start automatisch gebucht)
   const s = addMonths(m0, -4);
-  r('Gehalt', 265000, 'ei-gehalt', 'monthly', addDays(addMonths(s, 1), -3), { kind: 'income' });
-  r('Miete warm', 98000, 'wo-miete', 'monthly', s);
-  r('Strom', 6500, 'wo-strom', 'monthly', addDays(s, 14));
-  r('Internet', 3999, 'wo-internet', 'monthly', addDays(s, 4));
-  r('Handyvertrag', 1499, 'ab-handy', 'monthly', addDays(s, 9));
-  r('Streaming', 1399, 'ab-streaming', 'monthly', addDays(s, 19));
-  r('Deutschlandticket', 5800, 'mo-oepnv', 'monthly', s);
-  r('Fitnessstudio', 2990, 'ge-fitness', 'monthly', addDays(s, 1), { contractEnd: addMonths(m0, 3), noticeMonths: 1 });
-  r('Privathaftpflicht', 6890, 'vers-haftpflicht', 'yearly', addMonths(m0, 2), { contractEnd: addMonths(m0, 2), noticeMonths: 1 });
-  r('Autoversicherung Golf', 48600, 'vers-kfz', 'yearly', `${+t.slice(0, 4) + 1}-01-01`, { contractEnd: `${+t.slice(0, 4) + 1}-01-01`, noticeMonths: 1, policyId: polId });
-  r('Rundfunkbeitrag', 5508, 'wo-rundfunk', 'quarterly', addDays(s, 14));
+  r('Gehalt', 265000, 'ei-gehalt', 'monthly', addDays(addMonths(s, 1), -3), { kind: 'income', ...mine });
+  r('Miete warm', 98000, 'wo-miete', 'monthly', s, joint);
+  r('Strom', 6500, 'wo-strom', 'monthly', addDays(s, 14), joint);
+  r('Internet', 3999, 'wo-internet', 'monthly', addDays(s, 4), joint);
+  r('Handyvertrag', 1499, 'ab-handy', 'monthly', addDays(s, 9), mine);
+  r('Streaming', 1399, 'ab-streaming', 'monthly', addDays(s, 19), mine);
+  r('Deutschlandticket', 5800, 'mo-oepnv', 'monthly', s, mine);
+  r('Fitnessstudio', 2990, 'ge-fitness', 'monthly', addDays(s, 1), { contractEnd: addMonths(m0, 3), noticeMonths: 1, ...mine });
+  r('Privathaftpflicht', 6890, 'vers-haftpflicht', 'yearly', addMonths(m0, 2), { contractEnd: addMonths(m0, 2), noticeMonths: 1, ...joint });
+  r('Autoversicherung Golf', 48600, 'vers-kfz', 'yearly', `${+t.slice(0, 4) + 1}-01-01`, { contractEnd: `${+t.slice(0, 4) + 1}-01-01`, noticeMonths: 1, policyId: polId, ...mine });
+  r('Rundfunkbeitrag', 5508, 'wo-rundfunk', 'quarterly', addDays(s, 14), joint);
   // Alltagsausgaben der letzten Monate
+  // Wer zahlt was: Einkauf vom Gemeinschaftskonto, Sprit und Café privat, Essen gehen gemeinsam von meinem Konto
+  const how = { Rewe: joint, Lidl: joint, 'Bäckerei': joint, dm: joint, Aral: mine, 'Café': mine, 'Geburtstagsgeschenk': mine, Pizzeria: { owner: null, accountId: acc.me }, 'Kino und Essen': { owner: null, accountId: acc.me } };
   const daily = [['lm-supermarkt', 'Rewe', 3400, 7], ['lm-supermarkt', 'Lidl', 2800, 5], ['lm-baecker', 'Bäckerei', 650, 3], ['mo-sprit', 'Aral', 6200, 9],
     ['es-restaurant', 'Pizzeria', 3800, 11], ['li-date', 'Kino und Essen', 5400, 14], ['hh-drogerie', 'dm', 2100, 10], ['es-cafe', 'Café', 900, 6], ['li-geschenk', 'Geburtstagsgeschenk', 3500, 30]];
   for (let back = 4; back >= 0; back--) {
@@ -204,30 +237,38 @@ function demoSeed() {
     for (const [cat, note, amt, every] of daily) {
       for (let d = (note.length * 3) % every; d < 28; d += every) {
         const date = addDays(ms, d); if (date > t) continue;
-        add(date, Math.round(amt * (0.7 + ((d * 7 + back * 13 + note.length) % 10) / 16)), cat, note);
+        add(date, Math.round(amt * (0.7 + ((d * 7 + back * 13 + note.length) % 10) / 16)), cat, note, 'expense', how[note] ?? {});
       }
     }
   }
   const pol = [{ id: polId, name: 'Autoversicherung Golf', category: 'vers-kfz', insurer: 'Muster Versicherung AG', policyNo: 'KF-123456', contractEnd: `${+t.slice(0, 4) + 1}-01-01`,
-    noticeMonths: 1, notes: 'Vollkasko 300 € SB, Teilkasko 150 € SB', filePath: null, fileName: 'Beispielpolice (Demo).pdf', pages: DEMO_POLICY, pageCount: DEMO_POLICY.length, textSource: 'manual' }];
+    noticeMonths: 1, owner: ME, notes: 'Vollkasko 300 € SB, Teilkasko 150 € SB', filePath: null, fileName: 'Beispielpolice (Demo).pdf', pages: DEMO_POLICY, pageCount: DEMO_POLICY.length, textSource: 'manual' }];
   // Spartöpfe: Urlaub mit Ziel und Sparrate, Notgroschen ohne Ziel
   const urlaub = uid(), notgroschen = uid();
   const pots = [
-    { id: urlaub, name: 'Urlaub', icon: '🏖️', goal: 150000, targetDate: `${+t.slice(0, 4) + 1}-07-01`, startBalance: 20000, autoRest: false, archived: false },
-    { id: notgroschen, name: 'Notgroschen', icon: '🛟', goal: null, targetDate: null, startBalance: 100000, autoRest: true, archived: false },
+    { id: urlaub, name: 'Urlaub', icon: '🏖️', goal: 150000, targetDate: `${+t.slice(0, 4) + 1}-07-01`, startBalance: 20000, autoRest: false, archived: false, owner: null },
+    { id: notgroschen, name: 'Notgroschen', icon: '🛟', goal: null, targetDate: null, startBalance: 100000, autoRest: true, archived: false, owner: ME },
   ];
-  r('Sparrate Urlaub', 10000, 'fi-sparen', 'monthly', addDays(s, 2), { kind: 'save', potId: urlaub });
+  r('Sparrate Urlaub', 10000, 'fi-sparen', 'monthly', addDays(s, 2), { kind: 'save', potId: urlaub, owner: null, accountId: acc.joint });
   // Einkäufe, die in der Speisekammer per Bon erfasst wurden (zum Übernehmen)
   const at = (daysBack, h) => { const d = new Date(); d.setDate(d.getDate() - daysBack); d.setHours(h, 12, 0, 0); return d.toISOString(); };
   const pantry = [['Milch', 119, 1], ['Haferflocken', 89, 1], ['Hähnchenbrust', 699, 1], ['Paprika', 249, 1], ['Joghurt', 179, 1], ['Spülmittel', 195, 1, 'Haushalt'], ['Nudeln', 99, 3], ['Tomaten', 229, 3], ['Parmesan', 349, 3]]
     .map(([name, price, back, category], i) => ({ id: uid(), name, price, category: category ?? 'Sonstiges', at: at(back, 17), by: 'demo', i }));
   const config = { limits: { lebensmittel: 45000, essen: 12000, liebe: 15000, mobilitaet: 20000, haushalt: 5000 }, custom: [], pantrySince: addDays(t, -14) };
-  return { tx, rec, pol, config, pots, pantry, files: {} };
+  // Lea gibt nur Summen frei: diese Zeilen liefert der Server in echt per budget_shared_sums
+  const sums = [];
+  for (let back = 3; back >= 0; back--) {
+    const mk = addMonths(m0, -back).slice(0, 7);
+    sums.push({ owner: LEA, area: 'tx', month: mk, kind: 'expense', category: 'kl-kleidung', total: 6000 + back * 1500 }, { owner: LEA, area: 'tx', month: mk, kind: 'expense', category: 'es-cafe', total: 2400 },
+      { owner: LEA, area: 'tx', month: mk, kind: 'income', category: 'ei-gehalt', total: 210000 });
+  }
+  sums.push({ owner: LEA, area: 'potbal', total: 240000 }, { owner: LEA, area: 'fixed', kind: 'expense', total: 8900 });
+  return { tx, rec, pol, config, pots, pantry, accounts, members, sums, files: {} };
 }
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots) { db = demoSeed(); save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));
@@ -236,6 +277,14 @@ export function createDemoStore() {
     async init() { load(); return { ready: true }; },
     me: () => 'demo',
     household: () => ({ name: 'Demo-Haushalt', join_code: 'DEMO00' }),
+    suggestedName: () => 'Alex',
+    async listMembers() { return delay(load().members.map(m => structuredClone(m))); },
+    async saveMe(m) { const d = load(); const i = d.members.findIndex(x => x.userId === 'demo'); const row = { userId: 'demo', ...m }; if (i >= 0) d.members[i] = row; else d.members.push(row); save(); return structuredClone(row); },
+    async memberIds() { return load().members.map(m => m.userId); },
+    async listAccounts() { return delay(load().accounts.map(a => ({ ...a }))); },
+    async saveAccount(a) { const d = load(); if (d.accounts.some(x => x.name === a.name && x.owner === (a.owner ?? null) && x.id !== a.id)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
+      const row = { icon: '💳', archived: false, ...a, id: a.id ?? uid(), owner: a.owner ?? null }; const i = d.accounts.findIndex(x => x.id === row.id); if (i >= 0) d.accounts[i] = row; else d.accounts.push(row); save(); return { ...row }; },
+    async sharedSums(since) { return delay(load().sums.filter(x => !x.month || x.month >= since.slice(0, 7)).map(x => ({ ...x }))); },
     async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
     reset() { localStorage.removeItem(DEMO_KEY); db = null; },
     async listPotTx() { return delay(load().tx.filter(t => t.potId).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },

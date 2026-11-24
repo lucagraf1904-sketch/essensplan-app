@@ -118,20 +118,81 @@ do $$ begin
   end if;
 end $$;
 
+-- ---------- Personen, Konten, Freigaben (Version 3, 24.11.2026) ----------
+-- owner = null: gehört dem Haushalt, alle sehen es. owner = Person: privat, die anderen sehen es nur nach Freigabe (budget_members.share).
+create table if not exists budget_members (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  household_id uuid not null references households(id) on delete cascade,
+  display_name text,
+  -- Freigabe der eigenen privaten Einträge je Bereich: none | sums | all (policies: none | all)
+  share jsonb not null default '{"tx":"none","fixed":"none","pots":"none","policies":"none"}'::jsonb,
+  default_private boolean not null default false,   -- neue Einträge vom eigenen Konto standardmäßig privat
+  updated_at timestamptz not null default now()
+);
+create table if not exists budget_accounts (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references households(id) on delete cascade,
+  name text not null,
+  owner uuid references auth.users(id) on delete cascade,  -- null = Gemeinschaftskonto
+  icon text not null default '💳',
+  archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists budget_accounts_name on budget_accounts(household_id, coalesce(owner, '00000000-0000-0000-0000-000000000000'::uuid), name);
+alter table budget_tx        add column if not exists owner uuid references auth.users(id) on delete cascade;
+alter table budget_tx        add column if not exists account_id uuid references budget_accounts(id) on delete set null;
+alter table budget_recurring add column if not exists owner uuid references auth.users(id) on delete cascade;
+alter table budget_recurring add column if not exists account_id uuid references budget_accounts(id) on delete set null;
+alter table budget_pots      add column if not exists owner uuid references auth.users(id) on delete cascade;
+alter table budget_policies  add column if not exists owner uuid references auth.users(id) on delete cascade;
+
+-- Darf ich einen Eintrag von p_owner im Bereich p_area sehen? Eigene und gemeinsame immer, fremde private nur bei Freigabe 'all'.
+create or replace function budget_can_see(p_owner uuid, p_area text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select p_owner is null or p_owner = auth.uid() or exists (
+    select 1 from budget_members m where m.user_id = p_owner and m.household_id = my_household() and m.share->>p_area = 'all')
+$$;
+-- Ändern dürfen alle nur Gemeinsames und Eigenes (Fremdes auch bei Freigabe nur ansehen)
+create or replace function budget_can_write(p_owner uuid) returns boolean
+language sql stable set search_path = public as $$ select p_owner is null or p_owner = auth.uid() $$;
+
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
 alter table budget_recurring enable row level security;
 alter table budget_tx        enable row level security;
 alter table budget_settings  enable row level security;
 alter table budget_pots      enable row level security;
+alter table budget_members   enable row level security;
+alter table budget_accounts  enable row level security;
+-- Alte Regeln (Version 1/2: alles im Haushalt sichtbar) entfernen
 drop policy if exists budget_pots_all on budget_pots;
-create policy budget_pots_all on budget_pots for all using (household_id = my_household()) with check (household_id = my_household());
 drop policy if exists budget_policies_all on budget_policies;
-create policy budget_policies_all on budget_policies for all using (household_id = my_household()) with check (household_id = my_household());
 drop policy if exists budget_recurring_all on budget_recurring;
-create policy budget_recurring_all on budget_recurring for all using (household_id = my_household()) with check (household_id = my_household());
 drop policy if exists budget_tx_all on budget_tx;
-create policy budget_tx_all on budget_tx for all using (household_id = my_household()) with check (household_id = my_household());
+do $$ declare t text; begin
+  foreach t in array array['budget_pots', 'budget_policies', 'budget_recurring', 'budget_tx'] loop
+    execute format('drop policy if exists %s_read on %s', t, t);
+    execute format('drop policy if exists %s_ins on %s', t, t);
+    execute format('drop policy if exists %s_upd on %s', t, t);
+    execute format('drop policy if exists %s_del on %s', t, t);
+    execute format('create policy %s_ins on %s for insert with check (household_id = my_household() and budget_can_write(owner))', t, t);
+    execute format('create policy %s_upd on %s for update using (household_id = my_household() and budget_can_write(owner)) with check (household_id = my_household() and budget_can_write(owner))', t, t);
+    execute format('create policy %s_del on %s for delete using (household_id = my_household() and budget_can_write(owner))', t, t);
+  end loop;
+end $$;
+create policy budget_tx_read on budget_tx for select using (household_id = my_household() and budget_can_see(owner, case when pot_id is null then 'tx' else 'pots' end));
+create policy budget_recurring_read on budget_recurring for select using (household_id = my_household() and budget_can_see(owner, case when pot_id is null then 'fixed' else 'pots' end));
+create policy budget_pots_read on budget_pots for select using (household_id = my_household() and budget_can_see(owner, 'pots'));
+create policy budget_policies_read on budget_policies for select using (household_id = my_household() and budget_can_see(owner, 'policies'));
+drop policy if exists budget_members_read on budget_members;
+create policy budget_members_read on budget_members for select using (household_id = my_household());
+drop policy if exists budget_members_write on budget_members;
+create policy budget_members_write on budget_members for all using (user_id = auth.uid()) with check (user_id = auth.uid() and household_id = my_household());
+drop policy if exists budget_accounts_read on budget_accounts;
+create policy budget_accounts_read on budget_accounts for select using (household_id = my_household());
+drop policy if exists budget_accounts_write on budget_accounts;
+create policy budget_accounts_write on budget_accounts for all using (household_id = my_household() and budget_can_write(owner)) with check (household_id = my_household() and budget_can_write(owner));
 drop policy if exists budget_settings_all on budget_settings;
 create policy budget_settings_all on budget_settings for all using (household_id = my_household()) with check (household_id = my_household());
 
@@ -143,6 +204,14 @@ begin
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
      and not exists (select 1 from budget_pots where id = new.pot_id and household_id = new.household_id) then
     raise exception 'Spartopf gehört nicht zu diesem Haushalt';
+  end if;
+  if tg_table_name in ('budget_tx', 'budget_recurring') and new.account_id is not null
+     and not exists (select 1 from budget_accounts where id = new.account_id and household_id = new.household_id) then
+    raise exception 'Konto gehört nicht zu diesem Haushalt';
+  end if;
+  if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
+     and new.owner is distinct from (select owner from budget_pots where id = new.pot_id) then
+    raise exception 'Buchungen eines Spartopfs gehören dem Besitzer des Topfs';
   end if;
   if tg_table_name = 'budget_tx' then
     if new.recurring_id is not null and not exists (select 1 from budget_recurring where id = new.recurring_id and household_id = new.household_id) then
@@ -176,8 +245,9 @@ $$;
 
 -- Bucht alle bis heute (Zeitzone Berlin) fälligen Fixkosten des eigenen Haushalts. Wird beim Öffnen der App aufgerufen.
 -- Zwei Handys gleichzeitig: Zeilensperre (skip locked) und der eindeutige Index (recurring_id, due_date) verhindern Doppelbuchungen.
+-- security definer: bucht auch private Fixkosten der anderen Personen (die man selbst nicht sieht), aber nur im eigenen Haushalt.
 create or replace function budget_book_due() returns int
-language plpgsql security invoker set search_path = public as $$
+language plpgsql security definer set search_path = public as $$
 declare
   r budget_recurring;
   today date := (now() at time zone 'Europe/Berlin')::date;
@@ -187,8 +257,8 @@ begin
   for r in select * from budget_recurring where household_id = hh and active and next_due <= today for update skip locked loop
     d := r.next_due; k := r.n; guard := 0;
     while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
-      insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id)
-        values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id)
+      insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id)
+        values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, r.account_id)
         on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
       if found then cnt := cnt + 1; end if;
       k := k + 1; guard := guard + 1;
@@ -205,12 +275,39 @@ values ('budget-policies', 'budget-policies', false, 26214400, array['applicatio
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 drop policy if exists budget_policies_files on storage.objects;
 create policy budget_policies_files on storage.objects for all to authenticated
-  using (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text)
+  using (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text
+         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2]))  -- objects.name: sonst nähme Postgres p.name
   with check (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text);
 
+-- ---------- Freigabe „nur Summen“ ----------
+-- Liefert für Personen, die einen Bereich nur als Summe freigeben, Monatssummen je Kategorie (Buchungen), je Art (Spartöpfe),
+-- den Stand aller Töpfe und die monatlichen Fixkosten. Keine Einzelbuchungen, keine Notizen.
+create or replace function budget_shared_sums(p_since date) returns table(owner uuid, area text, month text, kind text, category text, total numeric)
+language sql stable security definer set search_path = public as $$
+  with m as (select user_id, share from budget_members where household_id = my_household() and user_id <> auth.uid())
+  select t.owner, case when t.pot_id is null then 'tx' else 'pots' end, to_char(t.date, 'YYYY-MM'), t.kind,
+         case when t.pot_id is null then t.category else 'fi-sparen' end, sum(t.amount)
+    from budget_tx t join m on m.user_id = t.owner
+   where t.household_id = my_household() and t.date >= p_since and m.share->>(case when t.pot_id is null then 'tx' else 'pots' end) = 'sums'
+   group by 1, 2, 3, 4, 5
+  union all
+  select p.owner, 'potbal', null, null, null,
+         sum(p.start_balance + coalesce((select sum(case when t.kind = 'save' then t.amount else -t.amount end) from budget_tx t where t.pot_id = p.id), 0))
+    from budget_pots p join m on m.user_id = p.owner
+   where p.household_id = my_household() and not p.archived and m.share->>'pots' = 'sums'
+   group by p.owner
+  union all
+  select r.owner, 'fixed', null, r.kind, null,
+         sum(r.amount * case r.freq when 'weekly' then 52.0 / 12 when 'monthly' then 1 when 'quarterly' then 1.0 / 3 when 'halfyearly' then 1.0 / 6 else 1.0 / 12 end)
+    from budget_recurring r join m on m.user_id = r.owner
+   where r.household_id = my_household() and r.active and r.pot_id is null and m.share->>'fixed' = 'sums'
+   group by r.owner, r.kind
+$$;
+
 -- ---------- Rechte und Live-Abgleich ----------
-grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots to authenticated;
-grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots to service_role;
+grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to authenticated;
+grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to service_role;
+grant execute on function budget_can_see(uuid, text), budget_can_write(uuid), budget_shared_sums(date) to authenticated;
 grant execute on function budget_nth_due(date, text, int), budget_book_due() to authenticated;
 do $$ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_tx') then
@@ -223,5 +320,9 @@ do $$ begin
     alter publication supabase_realtime add table budget_settings; end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_pots') then
     alter publication supabase_realtime add table budget_pots; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_members') then
+    alter publication supabase_realtime add table budget_members; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_accounts') then
+    alter publication supabase_realtime add table budget_accounts; end if;
 end $$;
 notify pgrst, 'reload schema';

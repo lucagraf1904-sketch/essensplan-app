@@ -90,7 +90,7 @@ export function bookDueLocal(recurring, today, existingKeys = new Set()) {
     let k = r.n, d = r.nextDue, guard = 0;
     while (d <= today && (!r.endDate || d <= r.endDate) && guard < 60) {
       const key = r.id + '|' + d;
-      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null }); existingKeys.add(key); }
+      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null, owner: r.owner ?? null, accountId: r.accountId ?? null }); existingKeys.add(key); }
       k++; guard++; d = nthDue(r.startDate, r.freq, k);
     }
     r.n = k; r.nextDue = d; r.active = !r.endDate || d <= r.endDate;
@@ -240,6 +240,37 @@ export const pantryDone = (key, refs) => refs.some(r => r === key || r.startsWit
 export function similarTx(tx, purchase, groupOf) {
   return tx.find(t => t.kind === 'expense' && t.date === purchase.date && groupOf(t.category) === 'lebensmittel' && !String(t.extRef ?? '').startsWith(purchase.key)
     && Math.abs(t.amount - purchase.amount) <= Math.max(100, purchase.amount * 0.03)) ?? null;
+}
+
+// ---------- Personen und Konten ----------
+// Ansicht: 'all' = alles, was ich sehen darf; 'shared' = nur Gemeinsames; 'mine' = nur meine privaten; sonst User-ID = private Einträge dieser Person
+export function inScope(owner, scope, me) {
+  if (scope === 'all' || !scope) return true;
+  if (scope === 'shared') return owner == null;
+  if (scope === 'mine') return owner === me;
+  return owner === scope;
+}
+// Vorgabe für neue Einträge: Gemeinschaftskonto → gemeinsam; Konto einer anderen Person → gemeinsam (privat kann nur sie selbst buchen);
+// eigenes Konto → je nach Einstellung „neue Einträge privat“
+export function defaultOwner(account, me, defaultPrivate) {
+  if (!account || account.owner == null || account.owner !== me) return defaultPrivate && !account ? me : null;
+  return defaultPrivate ? me : null;
+}
+// Freigabe „nur Summen“ als Monatswerte, die in die Übersicht und Auswertung einfließen (keine Einzelbuchungen)
+export function sumsToTx(sums) {
+  return sums.filter(x => (x.area === 'tx' || x.area === 'pots') && x.month && x.total).map(x => ({
+    id: `sum:${x.owner}:${x.area}:${x.month}:${x.kind}:${x.category}`, date: `${x.month}-01`, amount: x.total, kind: x.kind, category: x.category,
+    note: '', source: 'sums', owner: x.owner, synthetic: true, potId: null, accountId: null,
+  }));
+}
+// Ausgaben je Konto in einem Zeitraum (Cent); ohne Konto unter dem Schlüssel ''
+export function byAccount(tx, from, to) {
+  const m = new Map();
+  for (const t of tx) {
+    if (t.synthetic || t.date < from || t.date > to || (t.kind !== 'expense' && t.kind !== 'save')) continue;
+    const k = t.accountId ?? ''; m.set(k, (m.get(k) ?? 0) + t.amount);
+  }
+  return m;
 }
 
 // ---------- Suche ----------

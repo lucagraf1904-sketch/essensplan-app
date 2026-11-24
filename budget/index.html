@@ -65,6 +65,7 @@
 
     <aside id="demo-bar" class="demo-bar hidden" aria-label="Hinweis Demo">Demo mit Beispieldaten, nur auf diesem Gerät. <button class="btn link" id="btn-demo-exit">Beenden</button></aside>
 
+    <nav id="scope-bar" class="scope-bar hidden" aria-label="Ansicht: wessen Einträge"></nav>
     <main id="views">
       <section id="view-home" class="view" aria-label="Übersicht"></section>
       <section id="view-tx" class="view hidden" aria-label="Buchungen"></section>
@@ -117,6 +118,7 @@
         <input type="date" id="tx-date" class="hidden" aria-label="Datum">
       </div>
       <label class="field">Notiz <span class="muted">(optional, z. B. Laden oder Anlass)</span><input id="tx-note" list="note-list" autocomplete="off" maxlength="120"></label>
+      <div id="tx-who" class="who"></div>
       <datalist id="note-list"></datalist>
       <p id="tx-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
@@ -152,6 +154,7 @@
         </div>
         <p class="tiny muted">Die App erinnert, bevor die Frist abläuft. Verlängert sich der Vertrag, rechnet sie mit dem nächsten Vertragsjahr weiter.</p>
       </details>
+      <div id="rec-who" class="who"></div>
       <p class="tiny muted" id="rec-hint"></p>
       <p id="rec-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
@@ -196,6 +199,7 @@
         <div id="pol-progress" class="progress hidden" role="progressbar" aria-label="Police wird gelesen"><span></span></div>
         <p id="pol-file-msg" class="tiny" role="status"></p>
       </fieldset>
+      <div id="pol-who" class="who"></div>
       <p id="pol-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
         <button type="button" class="btn danger hidden" id="pol-delete">Löschen</button>
@@ -221,6 +225,7 @@
       </div>
       <label class="field" id="pot-start-wrap">Schon drauf (€)<input id="pot-start" inputmode="decimal" placeholder="0,00"></label>
       <label class="check"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
+      <div id="pot-who" class="who"></div>
       <p id="pot-hint" class="tiny muted"></p>
       <p id="pot-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">

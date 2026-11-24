@@ -202,6 +202,63 @@ await page.click('#view-home .suggest [data-act=pantry-take] >> nth=0');
 await page.waitForFunction(() => window.__budget.state.tx.some(t => t.source === 'pantry'));
 await page.waitForFunction(n => document.querySelectorAll('#view-home .suggest').length === n - 1, sugg, { timeout: 5000 }); // übernommener Einkauf verschwindet aus den Vorschlägen
 
+// ---------- Personen, Konten, Freigabe ----------
+await page.click('.tabs [data-view=home]');
+await page.waitForSelector('#scope-bar:not(.hidden) [data-scope=shared]');
+await shot(page, '16-ansicht');
+// Private Ausgabe vom eigenen Konto
+await page.click('#fab');
+await page.fill('#tx-amount', '23,40');
+await page.click('#tx-groups [data-g=kleidung]');
+await page.fill('#tx-note', 'Privat-Test');
+const myAcc = await page.evaluate(() => window.__budget.state.accounts.find(a => a.owner === 'demo').id);
+await page.click(`#tx-who [data-acc="${myAcc}"]`);
+await page.check('#tx-who [value=me]');
+await page.waitForTimeout(150);
+await shot(page, '17-erfassen-konto', false);
+await page.click('#tx-save');
+await page.waitForFunction(() => window.__budget.state.tx.some(t => t.note === 'Privat-Test'));
+const pt = await page.evaluate(() => window.__budget.state.tx.find(t => t.note === 'Privat-Test'));
+assert.equal(pt.owner, 'demo'); assert.ok(pt.accountId, 'Konto gespeichert');
+// Vom Gemeinschaftskonto ist die Vorgabe „gemeinsam“
+await page.click('#fab');
+const joint = await page.evaluate(() => window.__budget.state.accounts.find(a => a.owner == null).id);
+await page.click(`#tx-who [data-acc="${joint}"]`);
+assert.ok(await page.isChecked('#tx-who [value=shared]'), 'Gemeinschaftskonto → gemeinsam');
+await page.keyboard.press('Escape');
+// Ansicht „Gemeinsam“ blendet Privates aus, „Nur ich“ zeigt es
+await page.click('.tabs [data-view=tx]');
+await page.click('#scope-bar [data-scope=shared]');
+await page.fill('#tx-q', 'Privat-Test');
+await page.waitForTimeout(100);
+assert.equal(await page.$$eval('#view-tx .item', e => e.length), 0, 'in „Gemeinsam“ unsichtbar');
+await page.click('#scope-bar [data-scope=mine]');
+await page.waitForTimeout(100);
+assert.equal(await page.$$eval('#view-tx .item', e => e.length), 1, 'in „Nur ich“ sichtbar');
+await page.fill('#tx-q', '');
+// Lea gibt nur Summen frei: eine Summen-Zeile, keine Einzelbuchungen
+await page.click('#scope-bar [data-scope=lea]');
+await page.waitForFunction(() => /Lea[\s\S]*private Ausgaben/.test(document.querySelector('#view-tx').textContent));
+assert.equal(await page.$$eval('#view-tx .item', e => e.length), 0, 'keine Einzelbuchungen von Lea');
+await shot(page, '18-lea-summen');
+await page.click('#scope-bar [data-scope=all]');
+// Fixkosten: Abbuchungen je Konto
+await page.click('.tabs [data-view=fixed]');
+await page.waitForFunction(() => /Abbuchungen je Konto[\s\S]*Gemeinschaftskonto/.test(document.querySelector('#view-fixed').textContent));
+// Freigabe ändern und Name
+await page.click('#btn-settings');
+await page.check('[name=share-tx][value=sums]');
+await page.fill('#me-name', 'Alexandra');
+await page.waitForTimeout(900);
+const meRow = await page.evaluate(() => window.__budget.state.members.find(m => m.userId === 'demo'));
+assert.equal(meRow.share.tx, 'sums'); assert.equal(meRow.displayName, 'Alexandra');
+// Konto anlegen
+await page.fill('#acc-name', 'Kreditkarte');
+await page.click('#form-acc button');
+await page.waitForFunction(() => window.__budget.state.accounts.some(a => a.name === 'Kreditkarte' && a.owner === 'demo'));
+await shot(page, '19-einstellungen-freigabe', false);
+await page.keyboard.press('Escape');
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');

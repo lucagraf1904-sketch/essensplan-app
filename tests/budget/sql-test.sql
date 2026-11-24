@@ -69,3 +69,56 @@ do $$ begin
   exception when insufficient_privilege then raise notice 'ok: fremder Ordner gesperrt'; end;
 end $$;
 select budget_book_due() = 0 as b_books_nothing;
+
+-- ---------- Version 3: Privat und Freigabe im selben Haushalt ----------
+reset role;
+insert into auth.users values ('00000000-0000-0000-0000-00000000000c');
+select set_config('test.code', (select join_code from households where name = 'A'), false);
+set role authenticated;
+-- A legt Mitgliedschaft, Konten und Einträge an
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+
+insert into budget_members(household_id, display_name) values (my_household(), 'Anna');
+insert into budget_accounts(household_id, name, owner) values (my_household(), 'Annas Konto', auth.uid());
+insert into budget_accounts(household_id, name) values (my_household(), 'Gemeinschaftskonto');
+insert into budget_tx(household_id, date, amount, category, note, owner) values (my_household(), current_date, 42, 'li-date', 'privat A', auth.uid());
+insert into budget_tx(household_id, date, amount, category, note) values (my_household(), current_date, 10, 'lm-supermarkt', 'gemeinsam');
+insert into budget_policies(household_id, name, owner, pages) values (my_household(), 'Privat-Police', auth.uid(), '["geheim"]');
+insert into storage.objects(bucket_id, name) select 'budget-policies', my_household()::text || '/' || id::text || '/p.pdf' from budget_policies where name = 'Privat-Police';
+insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner)
+  values (my_household(), 'Privat-Abo', 9, 'ab-streaming', 'monthly', current_date - 1, current_date - 1, auth.uid());
+-- C tritt bei
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select (join_household(current_setting('test.code'))).name = 'A' as c_joined;
+insert into budget_members(household_id, display_name) values (my_household(), 'Chris');
+select count(*) = 0 as c_no_private_tx from budget_tx where note = 'privat A';
+select count(*) = 1 as c_sees_shared_tx from budget_tx where note = 'gemeinsam';
+select count(*) = 0 as c_no_private_policy from budget_policies where name = 'Privat-Police';
+select count(*) = 0 as c_no_private_file from storage.objects where name like '%/p.pdf';
+select count(*) = 2 as c_sees_account_names from budget_accounts;
+-- C öffnet die App: As private Fixkosten werden trotzdem gebucht (C sieht sie nicht)
+select budget_book_due() >= 1 as c_books_private_of_a;
+-- C darf nichts in As Namen anlegen
+do $$ begin
+  begin insert into budget_tx(household_id, date, amount, category, owner) values (my_household(), current_date, 1, 'x', '00000000-0000-0000-0000-00000000000a'); raise exception 'FEHLER: im fremden Namen gebucht';
+  exception when insufficient_privilege then raise notice 'ok: nicht im fremden Namen'; end;
+end $$;
+-- A gibt Buchungen nur als Summe frei
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"tx":"sums"}' where user_id = auth.uid();
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 0 as sums_hides_rows from budget_tx where note = 'privat A';
+select (select total from budget_shared_sums(current_date - 400) where area = 'tx' and category = 'li-date') = 42 as sums_visible;
+-- A gibt alles frei: C sieht die Zeile, darf sie aber nicht ändern
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"tx":"all","policies":"all"}' where user_id = auth.uid();
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 1 as all_shows_rows from budget_tx where note = 'privat A';
+update budget_tx set amount = 0 where note = 'privat A';
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+select amount = 42 as c_cannot_change from budget_tx where note = 'privat A';
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 1 as c_sees_shared_policy_file from storage.objects where name like '%/p.pdf';
+-- C kann As Freigabe nicht ändern
+update budget_members set share = '{}' where user_id = '00000000-0000-0000-0000-00000000000a';
+select share->>'tx' = 'all' as c_cannot_change_share from budget_members where user_id = '00000000-0000-0000-0000-00000000000a';

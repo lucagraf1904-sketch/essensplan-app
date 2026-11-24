@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -160,4 +160,20 @@ test('Speisekammer-Einkäufe: Artikel zu Einkäufen bündeln, Doppelbuchung erke
   const tx = [{ kind: 'expense', date: g[0].date, category: 'lm-supermarkt', amount: 780 }];
   assert.ok(similarTx(tx, g[0], () => 'lebensmittel'));
   assert.equal(similarTx(tx, g[1], () => 'lebensmittel'), null); // 2,99 € ist nicht ähnlich zu 7,80 €
+});
+
+test('Personen: Ansicht, Vorgabe privat/gemeinsam, Summen, Konten', () => {
+  assert.ok(inScope(null, 'shared', 'me')); assert.ok(!inScope('me', 'shared', 'me'));
+  assert.ok(inScope('me', 'mine', 'me')); assert.ok(!inScope(null, 'mine', 'me'));
+  assert.ok(inScope('lea', 'lea', 'me')); assert.ok(inScope('lea', 'all', 'me'));
+  const joint = { owner: null }, mineAcc = { owner: 'me' }, leaAcc = { owner: 'lea' };
+  assert.equal(defaultOwner(joint, 'me', true), null);
+  assert.equal(defaultOwner(mineAcc, 'me', true), 'me'); assert.equal(defaultOwner(mineAcc, 'me', false), null);
+  assert.equal(defaultOwner(leaAcc, 'me', true), null);
+  assert.equal(defaultOwner(null, 'me', true), 'me');
+  const tx = sumsToTx([{ owner: 'lea', area: 'tx', month: '2026-11', kind: 'expense', category: 'kl-kleidung', total: 6000 }, { owner: 'lea', area: 'potbal', total: 9 }]);
+  assert.equal(tx.length, 1); assert.equal(tx[0].date, '2026-11-01'); assert.ok(tx[0].synthetic);
+  const acc = byAccount([{ date: '2026-11-02', amount: 100, kind: 'expense', accountId: 'a' }, { date: '2026-11-03', amount: 50, kind: 'save', accountId: 'a' },
+    { date: '2026-11-03', amount: 70, kind: 'expense' }, { date: '2026-11-03', amount: 999, kind: 'income', accountId: 'a' }, ...tx], '2026-11-01', '2026-11-30');
+  assert.equal(acc.get('a'), 150); assert.equal(acc.get(''), 70); assert.equal(acc.size, 2);
 });

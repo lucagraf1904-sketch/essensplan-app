@@ -218,6 +218,17 @@ label { cursor: pointer; }
 .budget-note.warn { color: var(--warn); font-weight: 700; }
 .budget-note.over { color: var(--bad); font-weight: 700; }
 
+/* Personen und Konten */
+.scope-bar { max-width: 720px; margin: 0 auto 4px; padding: 0 14px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.scope-bar .chip { flex: none; }
+.who { display: grid; gap: 10px; }
+.who:empty { display: none; }
+.who .lbl { font-size: .9rem; color: var(--ink-2); font-weight: 700; }
+.ro { padding: 10px 12px; border-radius: 12px; background: var(--line-2); font-size: .9rem; }
+.owner-tag { font-size: .78rem; color: var(--muted); }
+.acc-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-2); }
+.share-row { display: grid; gap: 6px; }
+
 /* Spartöpfe */
 .pot { display: grid; grid-template-columns: 44px 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 14px; width: 100%; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
 .pot:hover { background: color-mix(in srgb, var(--line-2) 50%, transparent); }
