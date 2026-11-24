@@ -11,7 +11,7 @@ import {
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v6';
+const VERSION = 'v6.1';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1346,9 +1346,10 @@ function bindAuth() {
   $('#form-code').onsubmit = async e => { e.preventDefault(); try { await store.verifyCode(email, $('#login-code').value.trim()); await start(); } catch (err) { authMsg(err.message); } };
   $('#form-create').onsubmit = async e => { e.preventDefault(); try { await store.createHousehold($('#hh-name').value.trim()); await start(); } catch (err) { authMsg(err.message); } };
   $('#form-join').onsubmit = async e => { e.preventDefault(); try { await store.joinHousehold($('#hh-code').value.trim()); await start(); } catch (err) { authMsg(err.message); } };
-  $('#btn-demo').onclick = () => { localStorage.setItem('haushaltskasse.mode', 'demo'); location.reload(); };
+  // Demo nur über den Link mit ?demo=1 (nichts wird dauerhaft gemerkt, der normale Link führt immer zur echten App)
+  $('#btn-demo').onclick = () => { location.href = location.pathname + '?demo=1'; };
 }
-function exitDemo() { localStorage.removeItem('haushaltskasse.mode'); localStorage.removeItem('haushaltskasse.demo'); location.href = location.pathname; }
+function exitDemo() { localStorage.removeItem('haushaltskasse.demo'); location.href = location.pathname; }
 
 async function start() {
   const r = await store.init();
@@ -1378,8 +1379,8 @@ function startOffline(snap) {
 
 async function boot() {
   const params = new URLSearchParams(location.search);
-  if (params.has('demo')) localStorage.setItem('haushaltskasse.mode', 'demo');
-  const demo = localStorage.getItem('haushaltskasse.mode') === 'demo' || !SUPABASE_URL;
+  localStorage.removeItem('haushaltskasse.mode'); // alter Schalter aus v1–v6: Demo blieb sonst auch über den normalen Link hängen
+  const demo = params.has('demo') || !SUPABASE_URL;
   try { store = demo ? createDemoStore() : await createSupabaseStore(); }
   catch { store = null; }
   chat = initChat({ state: V, store, toast, ask });

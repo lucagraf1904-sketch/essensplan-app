@@ -1,8 +1,8 @@
 // Haushaltskasse: Offline-Cache (Network-first, damit Updates sofort ankommen; ohne Netz kommt der letzte Stand).
 // Die Supabase-Bibliothek (esm.sh) wird mit zwischengespeichert, damit die App auch ohne Netz startet.
-const CACHE = 'haushaltskasse-v6';
+const CACHE = 'haushaltskasse-v6-1';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'logic.js', 'categories.js', 'charts.js', 'policies.js', 'retrieval.js', '../config.js',
-  'manifest.webmanifest', 'icon.svg', 'vendor/fonts/atkinson-hyperlegible-next-latin-400-normal.woff2', 'vendor/fonts/atkinson-hyperlegible-next-latin-700-normal.woff2'];
+  'manifest.webmanifest', 'icon.svg', 'apple-touch-icon.png', 'icon-512.png', 'vendor/fonts/atkinson-hyperlegible-next-latin-400-normal.woff2', 'vendor/fonts/atkinson-hyperlegible-next-latin-700-normal.woff2'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
