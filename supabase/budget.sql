@@ -192,7 +192,9 @@ alter table budget_recurring add column if not exists cash_id uuid references bu
 alter table budget_cash add column if not exists freq text not null default 'monthly';
 alter table budget_cash drop constraint if exists budget_cash_freq_check;
 alter table budget_cash add constraint budget_cash_freq_check check (freq in ('monthly', 'quarterly', 'halfyearly', 'yearly'));
-alter table budget_cash add column if not exists start_month text check (start_month is null or start_month ~ '^[0-9]{4}-[0-9]{2}$');
+alter table budget_cash add column if not exists start_month text;
+alter table budget_cash drop constraint if exists budget_cash_start_month_check;
+alter table budget_cash add constraint budget_cash_start_month_check check (start_month is null or start_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
 alter table budget_cash add column if not exists withdraw_day int check (withdraw_day is null or withdraw_day between 1 and 28);
 alter table budget_cash add column if not exists overrides jsonb not null default '{}'::jsonb;  -- {"2026-12": 80.00}
 -- Ist ein Umschlag im Monat p_month (YYYY-MM) dran, und mit welchem Betrag?

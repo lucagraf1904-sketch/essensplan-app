@@ -274,7 +274,10 @@ await page.click('#form-cash [type=submit]');
 await page.waitForFunction(() => /abheben\s*195,00/.test(document.querySelector('#view-home').textContent));
 assert.notEqual(await page.textContent('.band-value'), freeBefore, 'Noch frei berücksichtigt das Bargeld');
 await shot(page, '20-bargeld');
-await page.click('#view-home [data-act=cash-withdraw]');
+// Hinweis „Bargeld abheben“ nennt nur die Umschläge, deren Abhebetag erreicht ist
+const alertIds = await page.$eval('#view-home .alert [data-act=cash-withdraw]', b => b.dataset.only.split(','));
+assert.ok(alertIds.length >= 1 && alertIds.length < 5, 'nur fällige Umschläge im Hinweis');
+await page.click('#view-home [data-act=cash-withdraw]:not([data-only])');
 await page.click('#ask-btns button[value=ok]');
 await page.waitForFunction(() => /Abgehoben im/.test(document.querySelector('#view-home').textContent));
 const cashTx = await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'));

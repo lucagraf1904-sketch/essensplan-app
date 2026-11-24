@@ -317,21 +317,27 @@ export function cashDueAmount(e, key) {
 export function nextWithdrawals(e, today, n = 4, horizon = 36) {
   const out = [], start = today.slice(0, 7);
   for (let k = 0; k < horizon && out.length < n; k++) {
-    const key = addMonths(start + '-01', k).slice(0, 7), amount = cashDueAmount(e, key);
-    if (!amount) continue;
+    const key = addMonths(start + '-01', k).slice(0, 7);
+    // Termin nach Rhythmus (unabhängig von abweichenden Beträgen); 0 als abweichender Betrag = diesmal aussetzen
+    if (!cashDueAmount({ ...e, overrides: {} }, key)) continue;
+    const amount = cashDueAmount(e, key);
     const day = Math.min(e.withdrawDay ?? 1, daysInMonth(+key.slice(0, 4), +key.slice(5, 7) - 1));
-    out.push({ key, date: `${key}-${String(day).padStart(2, '0')}`, amount, override: e.overrides?.[key] != null });
+    out.push({ key, date: `${key}-${String(day).padStart(2, '0')}`, amount, override: e.overrides?.[key] != null, skipped: amount === 0 });
   }
   return out;
 }
 // Wiederkehrender Kalendertermin (iCalendar) mit Erinnerung, zum Eintragen in den Handy-Kalender
-export function cashIcs(e, firstDate, uidSeed) {
+export function cashIcs(e, firstDate, uidSeed, now = new Date()) {
   const step = CASH_FREQ[e.freq ?? 'monthly']?.step ?? 1;
   const d = firstDate.replace(/-/g, ''), day = +firstDate.slice(8, 10);
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); // DTSTAMP muss UTC sein
+  // ausgesetzte Abhebungen (abweichender Betrag 0) als Ausnahme
+  const skips = Object.entries(e.overrides ?? {}).filter(([k, v]) => v === 0 && k >= firstDate.slice(0, 7))
+    .map(([k]) => `EXDATE:${k.replace('-', '')}${String(Math.min(day, daysInMonth(+k.slice(0, 4), +k.slice(5, 7) - 1))).padStart(2, '0')}T090000`);
   const esc = t => String(t).replace(/[\\,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Haushaltskasse//DE', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
-    `UID:${uidSeed}@haushaltskasse`, `DTSTAMP:${d}T080000`, `DTSTART:${d}T090000`, `DTEND:${d}T091500`,
-    `RRULE:FREQ=MONTHLY;INTERVAL=${step};BYMONTHDAY=${day}`,
+    `UID:${uidSeed}@haushaltskasse`, `DTSTAMP:${stamp}`, `DTSTART:${d}T090000`, `DTEND:${d}T091500`,
+    `RRULE:FREQ=MONTHLY;INTERVAL=${step};BYMONTHDAY=${day}`, ...skips,
     `SUMMARY:${esc(`Bargeld abheben: ${e.name}`)}`, `DESCRIPTION:${esc('Betrag siehe Haushaltskasse (Übersicht → Bargeld).')}`,
     'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(`Bargeld abheben: ${e.name}`)}`, 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n') + '\r\n';
 }
@@ -360,16 +366,19 @@ export function cashPending(envelopes, tx, key, today, groupOf) {
 // Annahme: Der Monatsbetrag wird zu Monatsbeginn abgehoben (im laufenden Monat nur, wenn noch nicht geschehen).
 // dues: [{ date, amount, name }] aufsteigend. Ergebnis: ok, oder erster Engpass mit Datum, Name und Fehlbetrag.
 // deposit(monthKey) liefert den Abhebe-Betrag des Monats (Rhythmus, abweichende Beträge); monthly geht weiter für feste Beträge.
-export function reserveForecast({ balance, monthly = 0, deposit = null, withdrawnThisMonth, dues, today, months = 12 }) {
+// withdrawDay: Tag der Abhebung; Fälligkeiten vor diesem Tag im selben Monat werden vor der Abhebung gerechnet.
+export function reserveForecast({ balance, monthly = 0, deposit = null, withdrawnThisMonth, dues, today, months = 12, withdrawDay = 1 }) {
   let cash = balance;
   const start = today.slice(0, 7);
   for (let k = 0; k < months; k++) {
     const m = addMonths(start + '-01', k).slice(0, 7);
-    if (k > 0 || !withdrawnThisMonth) cash += deposit ? deposit(m) : monthly;
+    let pending = (k > 0 || !withdrawnThisMonth) ? (deposit ? deposit(m) : monthly) : 0;
     for (const d of dues.filter(x => x.date.slice(0, 7) === m)) {
+      if (pending && +d.date.slice(8, 10) >= (withdrawDay ?? 1)) { cash += pending; pending = 0; }
       cash -= d.amount;
       if (cash < 0) return { ok: false, date: d.date, name: d.name, missing: -cash };
     }
+    cash += pending;
   }
   const next = dues[0] ?? null;
   return { ok: true, next };

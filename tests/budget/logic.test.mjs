@@ -247,3 +247,16 @@ test('Umschlag: Rhythmus, abweichende Beträge, nächste Abhebungen, Kalenderter
   const f = reserveForecast({ balance: 0, deposit: k => cashDueAmount({ amount: 15000, freq: 'quarterly', startMonth: '2026-11' }, k), withdrawnThisMonth: false, dues: [{ date: '2027-01-01', amount: 20000, name: 'Kfz' }], today: '2026-11-24' });
   assert.equal(f.ok, false); assert.equal(f.missing, 5000);
 });
+
+test('Umschlag: aussetzen bleibt sichtbar, Kalender UTC und Ausnahme, Abhebetag in der Prognose', () => {
+  const e = { id: 'x', name: 'Test', amount: 5000, freq: 'monthly', startMonth: '2026-11', withdrawDay: 20, overrides: { '2026-12': 0 } };
+  const w = nextWithdrawals(e, '2026-11-24', 3);
+  assert.deepEqual(w.map(x => [x.key, x.amount, x.skipped]), [['2026-11', 5000, false], ['2026-12', 0, true], ['2027-01', 5000, false]]);
+  const ics = cashIcs(e, '2026-12-20', 'x', new Date('2026-11-24T10:00:00Z'));
+  assert.match(ics, /DTSTAMP:20261124T100000Z/); assert.match(ics, /EXDATE:20261220T090000/);
+  // Zahlung am 5., Abhebung erst am 20.: reicht nicht
+  const f = reserveForecast({ balance: 0, monthly: 15000, withdrawnThisMonth: false, withdrawDay: 20, dues: [{ date: '2027-01-05', amount: 15000, name: 'Vers' }], today: '2027-01-01', months: 2 });
+  assert.equal(f.ok, false);
+  const g = reserveForecast({ balance: 0, monthly: 15000, withdrawnThisMonth: false, withdrawDay: 1, dues: [{ date: '2027-01-05', amount: 15000, name: 'Vers' }], today: '2027-01-01', months: 2 });
+  assert.equal(g.ok, true);
+});

@@ -290,7 +290,7 @@ function demoSeed() {
   const resPot = uid(), resEnv = uid();
   pots.push({ id: resPot, name: 'Umschlag Rücklage Versicherungen', icon: '🛡️', kind: 'reserve', goal: null, targetDate: null, startBalance: 32000, autoRest: false, archived: false, owner: ME });
   cash.push({ id: resEnv, name: 'Rücklage Versicherungen', icon: '🛡️', amount: 5000, category: 'versicherung', owner: ME, active: true, potId: resPot, freq: 'monthly', startMonth: t.slice(0, 7), withdrawDay: 1, overrides: { [addMonths(m0, 1).slice(0, 7)]: 8000 } });
-  for (const x of rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = resEnv;
+  for (const x of rec) if (x.name === 'Autoversicherung Golf' && x.owner === ME) x.cashId = resEnv; // gleicher Besitzer wie der Umschlag
   return { tx, rec, pol, config, pots, pantry, accounts, members, sums, cash, files: {} };
 }
 
@@ -298,7 +298,7 @@ export function createDemoStore() {
   let db = null;
   const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf') || !db.pots.some(p => p.kind === 'reserve')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); }
       if (!db.pots.some(p => p.kind === 'reserve')) { const rp = fresh.pots.find(p => p.kind === 'reserve'), re = fresh.cash.find(e => e.potId === rp.id); db.pots.push(rp); if (!db.cash.some(e => e.id === re.id)) db.cash.push(re);
-        for (const x of db.rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = re.id; }
+        for (const x of db.rec) if (x.name === 'Autoversicherung Golf' && x.owner === 'demo') x.cashId = re.id; }
       save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)

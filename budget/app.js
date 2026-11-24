@@ -221,7 +221,7 @@ function reserveInfo(e) {
   const until = addMonths(state.today.slice(0, 7) + '-01', 12);
   const dues = linked.flatMap(r => occurrences(r, state.today, until).map(d => ({ date: d, amount: r.amount, name: r.name }))).sort((a, b) => a.date.localeCompare(b.date));
   const withdrawnThisMonth = state.tx.some(t => t.extRef === cashRef(state.today.slice(0, 7), e.id));
-  return { pot, balance, linked, dues, forecast: reserveForecast({ balance, deposit: k => cashDueAmount(e, k), withdrawnThisMonth, dues, today: state.today }) };
+  return { pot, balance, linked, dues, forecast: reserveForecast({ balance, deposit: k => cashDueAmount(e, k), withdrawnThisMonth, dues, today: state.today, withdrawDay: e.withdrawDay ?? 1 }) };
 }
 
 // ---------- Übersicht ----------
@@ -293,7 +293,7 @@ function renderHome() {
   // Fristen
   const dl = deadlines();
   const cashTodo = state.month === state.today.slice(0, 7) ? cashPending(cashList(), state.tx, state.month, state.today, groupOf).open.filter(e => canWrite(e.owner) && e.withdrawDay && +state.today.slice(8) >= e.withdrawDay) : [];
-  const cashAlert = cashTodo.length ? `<div class="alert"><span aria-hidden="true">💶</span><span><b>Bargeld abheben: ${eur(cashTodo.reduce((a, e) => a + e.due, 0))}</b><span class="tiny">${cashTodo.map(e => esc(e.name)).join(', ')} · fällig seit dem ${Math.min(...cashTodo.map(e => e.withdrawDay))}.</span></span><button class="btn small" data-act="cash-withdraw">Abgehoben</button></div>` : '';
+  const cashAlert = cashTodo.length ? `<div class="alert"><span aria-hidden="true">💶</span><span><b>Bargeld abheben: ${eur(cashTodo.reduce((a, e) => a + e.due, 0))}</b><span class="tiny">${cashTodo.map(e => esc(e.name)).join(', ')} · fällig seit dem ${Math.min(...cashTodo.map(e => e.withdrawDay))}.</span></span><button class="btn small" data-act="cash-withdraw" data-only="${esc(cashTodo.map(e => e.id).join(','))}">Abgehoben</button></div>` : '';
   const alerts = dl.map((d, i) => `<div class="alert ${d.daysLeft <= 14 ? 'bad' : ''}"><span aria-hidden="true">${d.icon}</span>
     <span><b>${esc(d.name)}: kündbar bis ${dateShort(d.deadline)}</b><span class="tiny">${d.daysLeft === 0 ? 'Heute ist der letzte Tag.' : `Noch ${d.daysLeft} ${d.daysLeft === 1 ? 'Tag' : 'Tage'}`}. Vertrag läuft bis ${dateShort(d.end)}.</span></span>
     <button class="btn small" data-deadline="${i}">Ansehen</button></div>`).join('');
@@ -851,7 +851,7 @@ function cashSection() {
 let cashEditing = null;
 // Häkchenliste der Fixkosten; nur gleicher Besitzer (beide gemeinsam oder beide privat) wählbar. Mit Betragsvorschlag.
 function drawCashLinks(e) {
-  const owner = e ? e.owner ?? null : ($('#cash-who').dataset.owner || null);
+  const owner = $('#cash-who').dataset.owner || null; // aktueller Stand im Formular
   const list = state.recurring.filter(r => r.active && r.kind === 'expense' && canWrite(r.owner))
     .sort((a, b) => ((a.owner ?? null) === owner ? 0 : 1) - ((b.owner ?? null) === owner ? 0 : 1) || monthlyCents(b) - monthlyCents(a)); // wählbare zuerst
   $('#cash-links-wrap').open = !!(e && list.some(r => r.cashId === e.id));
@@ -868,16 +868,18 @@ function drawCashLinks(e) {
     if ($('#cash-take')) $('#cash-take').onclick = () => { $('#cash-amount').value = amountInput(sum); drawCashNext(cashEditing); };
   };
   $$('[data-link]').forEach(x => x.onchange = suggest);
-  $('#cash-freq').onchange = () => { suggest(); };
+  const redrawNext = () => { if (cashEditing) drawCashNext({ ...cashEditing, freq: $('#cash-freq').value, startMonth: $('#cash-start').value || cashEditing.startMonth, withdrawDay: $('#cash-day').value ? +$('#cash-day').value : null }); };
+  $('#cash-freq').onchange = () => { suggest(); redrawNext(); };
+  $('#cash-start').onchange = redrawNext; $('#cash-day').onchange = redrawNext;
   suggest();
 }
 // Nächste Abhebungen mit eigenem Betrag (leer = normaler Betrag)
 function drawCashNext(e) {
   if (!e) { $('#cash-next').innerHTML = '<p class="tiny muted">Nach dem Speichern kannst du einzelne Abhebungen anpassen.</p>'; return; }
   const list = nextWithdrawals(e, state.today, 6);
-  $('#cash-next').innerHTML = list.map(w => `<label class="limit-row"><span>${esc(monthName(w.key))}${e.withdrawDay ? `, ${dateShortNoYear(w.date)}` : ''}</span>
+  $('#cash-next').innerHTML = list.map(w => `<label class="limit-row"><span>${esc(monthName(w.key))}${e.withdrawDay ? `, ${dateShortNoYear(w.date)}` : ''}${w.skipped ? ' · ausgesetzt' : ''}</span>
     <input inputmode="decimal" data-ov="${w.key}" value="${w.override ? amountInput(w.amount) : ''}" placeholder="${amountInput(e.amount)}" aria-label="Betrag ${esc(monthName(w.key))}"></label>`).join('')
-    + '<p class="tiny muted">Leer lassen = normaler Betrag.</p>';
+    + '<p class="tiny muted">Leer lassen = normaler Betrag, 0 = diesmal aussetzen.</p>';
 }
 // Stand eines Rücklage-Umschlags anpassen: dazulegen, entnehmen oder direkt korrigieren
 async function cashMove(e, mode) {
@@ -915,7 +917,6 @@ function openCash(e = null) {
   $('#cash-freq').innerHTML = Object.entries(CASH_FREQ).map(([k, v]) => `<option value="${k}" ${k === (e?.freq ?? 'monthly') ? 'selected' : ''}>${v.label}</option>`).join('');
   $('#cash-start').value = e?.startMonth ?? state.today.slice(0, 7);
   $('#cash-day').innerHTML = `<option value="">kein fester Tag</option>` + Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}" ${e?.withdrawDay === i + 1 ? 'selected' : ''}>${i + 1}.</option>`).join('');
-  drawCashLinks(e); drawCashNext(e);
   $('#cash-cal').innerHTML = e?.withdrawDay ? '<button type="button" class="btn" id="cash-ics">📅 Erinnerung in den Kalender eintragen</button><p class="tiny muted" style="margin-top:4px">Legt einen wiederkehrenden Termin mit Erinnerung in deinem Handy-Kalender an.</p>' : e ? '<p class="tiny muted">Mit einem Abhebetag kannst du dir eine Erinnerung in den Kalender legen.</p>' : '';
   if ($('#cash-ics')) $('#cash-ics').onclick = () => downloadCashIcs(e);
   $('#cash-cat').innerHTML = catOptions('expense', e?.category ?? 'sonstiges');
@@ -932,6 +933,8 @@ function openCash(e = null) {
     : 'Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.';
   const ro = whoWidget($('#cash-who'), { account: undefined, owner: e ? e.owner : (myMember().defaultPrivate ? me() : null), editing: !!e, accounts: false, hint: 'Ein privater Umschlag zählt nur zu deiner Abhebesumme.' });
   $('#form-cash [type=submit]').classList.toggle('hidden', ro);
+  drawCashLinks(e); drawCashNext(e);
+  $('#cash-who').onchange = () => drawCashLinks(e);
   $('#cash-delete').classList.toggle('hidden', !e || ro);
   $('#cash-err').textContent = '';
   $('#dlg-cash').showModal();
@@ -955,20 +958,27 @@ async function saveCashForm() {
       if (c == null || c === amount) delete overrides[inp.dataset.ov]; else overrides[inp.dataset.ov] = c;
     }
     const owner = keepOwner(old, who.owner);
+    const wrong = $$('[data-link]').filter(x => x.checked).map(x => state.recurring.find(r => r.id === x.dataset.link)).filter(r => r && (r.owner ?? null) !== (owner ?? null));
+    if (wrong.length) return err(`„${wrong[0].name}“ ist ${wrong[0].owner ? 'privat' : 'gemeinsam'}, der Umschlag ${owner ? 'privat' : 'gemeinsam'}. Häkchen entfernen oder „Wer sieht das?“ anpassen.`);
     let saved = await store.saveCash({ ...(old ?? {}), name, amount, freq, startMonth, withdrawDay, overrides, icon: $$('[name=cash-icon]').find(x => x.checked)?.value ?? '💶', category: $('#cash-cat').value, owner, active: true });
     // Fixkosten per Häkchen: angehakte zuordnen (Umschlag wird dann Rücklage), abgehakte lösen
-    const want = new Set($$('[data-link]').filter(x => x.checked).map(x => x.dataset.link));
-    if (want.size) await ensureReserve(saved.id, owner, 0);
-    for (const r of state.recurring.filter(r => canWrite(r.owner) && r.kind === 'expense')) {
+    const boxes = $$('[data-link]'), want = new Set(boxes.filter(x => x.checked).map(x => x.dataset.link));
+    if (want.size && !saved.potId) {
+      const pot = await store.savePot({ name: `Umschlag ${saved.name}`, icon: saved.icon, kind: 'reserve', goal: null, targetDate: null, startBalance: 0, autoRest: false, archived: false, owner: saved.owner ?? null });
+      saved = await store.saveCash({ ...saved, potId: pot.id });
+    }
+    // Nur die angezeigten Fixkosten ändern (pausierte bleiben, wie sie sind)
+    for (const box of boxes) {
+      const r = state.recurring.find(x => x.id === box.dataset.link); if (!r) continue;
       const should = want.has(r.id) ? saved.id : r.cashId === saved.id ? null : r.cashId;
       if ((should ?? null) !== (r.cashId ?? null)) await store.saveRecurring({ ...r, cashId: should });
     }
     $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast(old ? 'Umschlag gespeichert' : `Umschlag „${name}“ angelegt`);
   } catch (e) { err(e.message); }
 }
-async function withdrawCash() {
+async function withdrawCash(only = null) {
   const key = state.today.slice(0, 7);
-  const open = cashPending(cashList(), state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
+  const open = cashPending(cashList(), state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner) && (!only || only.includes(e.id)));
   if (!open.length) return;
   const total = open.reduce((a, e) => a + (e.due ?? e.amount), 0);
   // Gemeinsames Bargeld nur von gemeinsamen Konten, eigenes nur von eigenen (und keine fremden privaten Konten)
@@ -1382,7 +1392,7 @@ function bindEvents() {
     else if (act === 'add-pot') openPot();
     else if (act === 'add-etf') openPot(null, 'etf');
     else if (act === 'add-cash') openCash();
-    else if (act === 'cash-withdraw') withdrawCash();
+    else if (act === 'cash-withdraw') withdrawCash(el.dataset.only ? el.dataset.only.split(',') : null);
     else if (act === 'rest-book') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId), pot = c && potOf($(`#rest-pot-${CSS.escape(c.sc.id)}`).value); if (pot) bookRest(c, pot); }
     else if (act === 'rest-keep') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId); if (c) { state.config.closed = { ...(state.config.closed ?? {}), [closedKey(c.month, c.sc)]: 'keep' }; saveConfigSoon(0); render(); } }
     else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
