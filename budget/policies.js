@@ -129,7 +129,10 @@ export function initChat(ctx) {
       : `<div class="msg-a">${m.error ? `<p>${esc(m.content)}</p>` : fmt(m.content)}${sourcesHtml(m.excerpts, m.error)}</div>`).join('')
       + (busy ? '<div class="msg-a typing">Ich lese im Dokument nach</div>' : '');
     $('#chat-msgs').scrollTop = $('#chat-msgs').scrollHeight;
-    const qs = POLICY_QUESTIONS[pol?.category] ?? (pol && contractType(pol.category).id !== 'ins' ? POLICY_QUESTIONS.defaultContract : POLICY_QUESTIONS.default);
+    const qFor = c => POLICY_QUESTIONS[c] ?? (contractType(c).id !== 'ins' ? POLICY_QUESTIONS.defaultContract : POLICY_QUESTIONS.default);
+    // Ein Vertrag gewählt: dessen Fragen. Alle: je vorhandener Art zwei Fragen
+    const kinds = [...new Map(withText.map(p => [contractType(p.category).id, p.category])).values()];
+    const qs = pol ? qFor(pol.category) : kinds.length === 1 ? qFor(kinds[0]) : [...new Set(kinds.flatMap(c => qFor(c).slice(0, 2)))].slice(0, 6);
     $('#chat-chips').innerHTML = !history.length && withText.length ? qs.map(q => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('') : '';
     $('#chat-input').disabled = !withText.length;
     const ty = pol ? contractType(pol.category).id : null;

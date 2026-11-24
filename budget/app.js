@@ -640,7 +640,7 @@ function contractLabels(category, fresh = false) {
   $('#pol-no-label').textContent = t.number; $('#pol-doc-label').textContent = t.doc;
   $('#pol-amount-hint').textContent = t.income ? 'Mit Nettogehalt und Zahltag entsteht automatisch die regelmäßige Einnahme. Gibt es schon eine, kannst du sie verknüpfen.'
     : `Mit ${t.id === 'ins' ? 'Beitrag' : 'Kosten'} und Abbuchung wird der Vertrag automatisch als Fixkosten gebucht.`;
-  if (fresh) { $('#pol-freq').value = t.freq; if (t.notice != null && $('#pol-notice').value === '') $('#pol-notice').value = String(t.notice); }
+  if (fresh) { $('#pol-freq').value = t.freq; $('#pol-notice').value = t.notice == null ? '' : String(t.notice); }
   return t;
 }
 function openPolicy(p = null, presetCat = null) {
@@ -713,15 +713,20 @@ async function savePolicyForm() {
     // Beitrag als Fixkosten
     let r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
     const freq = $('#pol-freq').value, kind = ctype.income ? 'income' : 'expense';
-    // Arbeitsvertrag: vorhandenes Gehalt verknüpfen statt ein zweites anzulegen
+    // Art gewechselt (Ausgabe ↔ Einnahme): alte Buchung beenden statt umzudrehen, sonst passen bisherige Monate nicht mehr dazu
+    if (r && r.kind !== kind) { if (r.active) await store.saveRecurring({ ...r, active: false, endDate: state.today < r.startDate ? r.startDate : state.today }); r = null; }
+    let linked = false;
+    // Arbeitsvertrag: vorhandenes Gehalt verknüpfen statt ein zweites anzulegen (gleiche Kategorie zuerst, sonst jede Einnahme ohne Vertrag)
     if (amount && !r && ctype.income) {
-      const cand = state.recurring.find(x => x.active && x.kind === 'income' && !x.policyId && x.category === p.category && canWrite(x.owner));
+      const free = state.recurring.filter(x => x.active && x.kind === 'income' && !x.policyId && canWrite(x.owner));
+      const cand = free.find(x => x.category === p.category) ?? free.find(x => groupOf(x.category) === 'einkommen');
       if (cand && (await ask('Vorhandenes Gehalt verknüpfen?', `<p>Es gibt schon die Einnahme „${esc(cand.name)}“ über ${eur(cand.amount)}. Mit diesem Vertrag verknüpfen (und auf ${eur(amount)} setzen), statt eine zweite anzulegen?</p>`,
-        [{ value: 'new', label: 'Zweite anlegen' }, { value: 'link', label: 'Verknüpfen', cls: 'primary' }])) === 'link') r = cand;
+        [{ value: 'new', label: 'Zweite anlegen' }, { value: 'link', label: 'Verknüpfen', cls: 'primary' }])) === 'link') { r = cand; linked = true; }
     }
     if (amount) {
       const changed = !r || r.freq !== freq || r.nextDue !== next || !r.active;
-      await store.saveRecurring({ ...(r ?? {}), owner: p.owner, accountId: r?.accountId ?? lastAccount(), name: r?.policyId || !r ? name : r.name, amount, kind, category: p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
+      // Verknüpftes Gehalt behält, wer es sieht (sonst würde ein gemeinsames Gehalt durch einen privaten Vertrag unbemerkt privat)
+      await store.saveRecurring({ ...(r ?? {}), owner: linked ? r.owner : p.owner, accountId: r?.accountId ?? lastAccount(), name: r?.policyId || !r ? name : r.name, amount, kind, category: linked ? r.category : p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
         contractEnd: null, noticeMonths: null, ...(changed ? { startDate: next, nextDue: next, n: 0 } : {}) });
     } else if (r && (await ask(ctype.income ? 'Gehalt entfernen?' : 'Betrag entfernen?', `<p>„${esc(r.name)}“ gehört zu diesem Vertrag. ${ctype.income ? 'Die regelmäßige Einnahme' : 'Die Fixkosten'} löschen? Bisherige Buchungen bleiben.</p>`, [{ value: '', label: 'Behalten' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes') {
       await store.deleteRecurring(r.id);
@@ -1103,7 +1108,7 @@ let cfgTimer = null, cfgDirty = false;
 function saveConfigSoon(delay = 600) { cfgDirty = true; clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); cfgDirty = false; } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, delay); }
 function openSettings(focus) {
   const hh = store.household(), limits = state.config.limits ?? {};
-  const mm = myMember(), share = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', ...mm.share };
+  const mm = myMember(), share = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', contracts: 'none', ...mm.share };
   const partner = others().map(m => m.displayName || 'Partner').join(' und ') || 'Dein Partner';
   const shareRow = (area, label, levels) => `<div class="share-row"><span>${label}</span><div class="seg small" role="radiogroup" aria-label="${label}">${levels.map(([v, l]) =>
     `<label><input type="radio" name="share-${area}" value="${v}" ${share[area] === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>`;
@@ -1117,7 +1122,8 @@ function openSettings(focus) {
       ${shareRow('tx', 'Buchungen', [['none', 'Nichts'], ['sums', 'Nur Summen'], ['all', 'Alles']])}
       ${shareRow('fixed', 'Fixkosten', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
       ${shareRow('pots', 'Spartöpfe', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
-      ${shareRow('policies', 'Verträge & Versicherungen', [['none', 'Nichts'], ['all', 'Alles']])}
+      ${shareRow('policies', 'Versicherungen', [['none', 'Nichts'], ['all', 'Alles']])}
+      ${shareRow('contracts', 'Andere Verträge (Arbeit, Miete, Handy …)', [['none', 'Nichts'], ['all', 'Alles']])}
       <p class="tiny muted">„Nur Summen“: Monatssummen je Kategorie bzw. Gesamtstand, keine einzelnen Buchungen, Notizen oder Namen. Gemeinsame Einträge sehen immer alle. Ansehen heißt nicht ändern: Private Einträge kann nur ihr Besitzer bearbeiten.</p>
     </section>
     <section class="set-group"><h3>Konten</h3>
@@ -1157,7 +1163,7 @@ function openSettings(focus) {
   };
   $('#me-name').oninput = e => saveMe({ displayName: e.target.value.trim() }, 700);
   $$('[name=me-default]').forEach(r => r.onchange = () => saveMe({ defaultPrivate: r.value === 'private' }));
-  for (const area of ['tx', 'fixed', 'pots', 'policies']) $$(`[name=share-${area}]`).forEach(r => r.onchange = () => { saveMe({ share: { [area]: r.value } }); toast('Freigabe gespeichert'); });
+  for (const area of ['tx', 'fixed', 'pots', 'policies', 'contracts']) $$(`[name=share-${area}]`).forEach(r => r.onchange = () => { saveMe({ share: { [area]: r.value } }); toast('Freigabe gespeichert'); });
   $('#form-acc').onsubmit = async e => {
     e.preventDefault(); const name = $('#acc-name').value.trim(); if (!name) return;
     try { await store.saveAccount({ name, owner: $('#acc-owner').value === 'me' ? me() : null, icon: $('#acc-owner').value === 'me' ? '💳' : '🏦' }); state.accounts = await store.listAccounts(); openSettings(); }
@@ -1287,12 +1293,18 @@ function bindEvents() {
 
   // Versicherung
   $('#form-pol').onsubmit = e => { e.preventDefault(); savePolicyForm(); };
-  $('#pol-cat').onchange = e => { contractLabels(e.target.value, !polEditing); if (!polEditing) $('#pol-title').textContent = `Neu: ${contractLabel(e.target.value)}`; };
+  $('#pol-cat').onchange = e => {
+    contractLabels(e.target.value, !polEditing);
+    if (polEditing) return;
+    $('#pol-title').textContent = `Neu: ${contractLabel(e.target.value)}`;
+    if ($('#pol-who').dataset.touched !== '1') whoWidget($('#pol-who'), { account: undefined, owner: myMember().defaultPrivate || contractType(e.target.value).private ? me() : null, editing: false, accounts: false, hint: 'Einen privaten Vertrag (auch die Datei) sieht dein Partner nur, wenn du Verträge freigibst.' });
+  };
   $('#pol-file').onchange = e => polFileChosen(e.target.files?.[0]);
   $('#pol-delete').onclick = async () => {
-    const p = polEditing, r = state.recurring.find(x => x.policyId === p.id);
-    const v = await ask(`„${p.name}“ löschen?`, `<p>Das Dokument und der ausgelesene Text werden gelöscht.${r ? ' Die zugehörigen Fixkosten auch löschen? Bisherige Buchungen bleiben in jedem Fall.' : ''}</p>`,
-      [{ value: '', label: 'Abbrechen' }, ...(r ? [{ value: 'keep', label: 'Nur Versicherung' }] : []), { value: 'all', label: r ? 'Beides löschen' : 'Löschen', cls: 'danger' }]);
+    const p = polEditing, r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
+    const what = r?.kind === 'income' ? 'die zugehörige regelmäßige Einnahme' : 'die zugehörigen Fixkosten', doc = contractType(p.category).id === 'ins' ? 'Versicherung' : 'Vertrag';
+    const v = await ask(`„${p.name}“ löschen?`, `<p>Das Dokument und der ausgelesene Text werden gelöscht.${r ? ` Auch ${what} „${esc(r.name)}“ löschen? Bisherige Buchungen bleiben in jedem Fall.` : ''}</p>`,
+      [{ value: '', label: 'Abbrechen' }, ...(r ? [{ value: 'keep', label: `Nur ${doc}` }] : []), { value: 'all', label: r ? 'Beides löschen' : 'Löschen', cls: 'danger' }]);
     if (!v) return;
     try { if (r && v === 'all') await store.deleteRecurring(r.id); await store.deletePolicy(p); $('#dlg-pol').close(); await loadAll({ book: false }); render(); toast('Vertrag gelöscht'); }
     catch (e) { $('#pol-err').textContent = e.message; }

@@ -183,3 +183,15 @@ insert into budget_pots(household_id, name, kind, owner, start_balance) values (
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 select (select sum(total) from budget_shared_sums(current_date - 40) where area = 'etfbal') = 500 as etf_sum_separate;
 select coalesce((select sum(total) from budget_shared_sums(current_date - 40) where area = 'potbal'), 0) <> 500 as potbal_without_etf;
+-- ---------- Version 6: getrennte Freigabe für andere Verträge ----------
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"policies":"all","contracts":"none"}' where user_id = auth.uid();
+insert into budget_policies(household_id, name, category, owner) values (my_household(), 'Arbeitsvertrag A', 'ei-gehalt', auth.uid());
+insert into budget_policies(household_id, name, category, owner) values (my_household(), 'Hausrat A', 'vers-hausrat', auth.uid());
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 0 as work_contract_hidden from budget_policies where name = 'Arbeitsvertrag A';
+select count(*) = 1 as insurance_shared from budget_policies where name = 'Hausrat A';
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"contracts":"all"}' where user_id = auth.uid();
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 1 as work_contract_after_share from budget_policies where name = 'Arbeitsvertrag A';
