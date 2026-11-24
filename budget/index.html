@@ -154,6 +154,7 @@
         </div>
         <p class="tiny muted">Die App erinnert, bevor die Frist abläuft. Verlängert sich der Vertrag, rechnet sie mit dem nächsten Vertragsjahr weiter.</p>
       </details>
+      <label class="field">Aus Bargeld-Umschlag bezahlen<select id="rec-cash"></select></label>
       <div id="rec-who" class="who"></div>
       <p class="tiny muted" id="rec-hint"></p>
       <p id="rec-err" class="msg" role="alert"></p>
@@ -178,6 +179,7 @@
         <label class="field">Zahlweise<select id="pol-freq"></select></label>
       </div>
       <label class="field"><span id="pol-next-label">Nächste Abbuchung</span><input type="date" id="pol-next"></label>
+      <label class="field" id="pol-cash-wrap">Aus Bargeld-Umschlag bezahlen<select id="pol-cash"></select></label>
       <p class="tiny muted" id="pol-amount-hint">Mit Beitrag und Abbuchung wird die Versicherung automatisch als Fixkosten gebucht.</p>
       <details class="more">
         <summary>Vertragsdaten</summary>
@@ -249,8 +251,9 @@
         <label class="field">Pro Monat (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
         <label class="field">Kategorie<select id="cash-cat"></select></label>
       </div>
+      <div id="cash-reserve"></div>
       <div id="cash-who" class="who"></div>
-      <p class="tiny muted">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
+      <p class="tiny muted" id="cash-hint">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
       <p id="cash-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
         <button type="button" class="btn danger hidden" id="cash-delete">Löschen</button>

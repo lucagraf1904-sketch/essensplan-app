@@ -114,7 +114,7 @@ create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is no
 -- den aktuellen Depotwert trägt man selbst ein (market_value, Stand market_value_at). Keine Kursabfrage.
 alter table budget_pots add column if not exists kind text not null default 'pot';
 alter table budget_pots drop constraint if exists budget_pots_kind_check;
-alter table budget_pots add constraint budget_pots_kind_check check (kind in ('pot', 'etf'));
+alter table budget_pots add constraint budget_pots_kind_check check (kind in ('pot', 'etf', 'reserve'));  -- reserve: Geld in einem Bargeld-Umschlag mit Fixkosten (Version 7)
 alter table budget_pots add column if not exists isin text check (isin is null or isin ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$');
 alter table budget_pots add column if not exists market_value numeric(14,2) check (market_value is null or market_value >= 0);
 alter table budget_pots add column if not exists market_value_at date;
@@ -184,6 +184,10 @@ create table if not exists budget_cash (
   updated_at timestamptz not null default now()
 );
 create index if not exists budget_cash_household on budget_cash(household_id);
+-- Version 7: Rücklage-Umschläge. Ein Umschlag mit zugeordneten Fixkosten sammelt sein Geld in einem verdeckten Topf (kind 'reserve'):
+-- Abheben = Einzahlung in diesen Topf, Fälligkeit der Fixkosten = Ausgabe wie bisher + Entnahme aus dem Topf (bucht budget_book_due).
+alter table budget_cash add column if not exists pot_id uuid references budget_pots(id) on delete set null;
+alter table budget_recurring add column if not exists cash_id uuid references budget_cash(id) on delete set null;
 
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
@@ -240,6 +244,11 @@ begin
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
      and not exists (select 1 from budget_pots where id = new.pot_id and household_id = new.household_id) then
     raise exception 'Spartopf gehört nicht zu diesem Haushalt';
+  end if;
+  if tg_table_name = 'budget_recurring' then
+    if new.cash_id is not null and not exists (select 1 from budget_cash where id = new.cash_id and household_id = new.household_id) then
+      raise exception 'Umschlag gehört nicht zu diesem Haushalt';
+    end if;
   end if;
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.account_id is not null
      and not exists (select 1 from budget_accounts where id = new.account_id and household_id = new.household_id) then
@@ -305,7 +314,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   r budget_recurring;
   today date := (now() at time zone 'Europe/Berlin')::date;
-  d date; k int; guard int; cnt int := 0; hh uuid := my_household();
+  d date; k int; guard int; cnt int := 0; hh uuid := my_household(); cp uuid; co uuid;
 begin
   if hh is null then raise exception 'Kein Haushalt'; end if;
   for r in select * from budget_recurring where household_id = hh and active and next_due <= today for update skip locked loop
@@ -317,7 +326,20 @@ begin
           values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, r.account_id)
           on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
         -- nur mitzählen, was die aufrufende Person sehen darf (sonst verrät die Zahl private Buchungen anderer)
-        if found and (r.owner is null or r.owner = auth.uid()) then cnt := cnt + 1; end if;
+        if found then
+          if r.owner is null or r.owner = auth.uid() then cnt := cnt + 1; end if;
+          -- Aus Rücklage-Umschlag bezahlt: gleichen Betrag aus dem Umschlag-Topf nehmen (zählt dann nicht noch einmal gegen „Noch frei“)
+          if r.cash_id is not null and r.kind = 'expense' then
+            cp := null; co := null;
+            select c.pot_id, p.owner into cp, co from budget_cash c join budget_pots p on p.id = c.pot_id
+             where c.id = r.cash_id and c.household_id = hh and not p.archived;
+            if cp is not null then
+              insert into budget_tx(household_id, date, amount, kind, category, note, source, pot_id, owner, ext_ref)
+                values (hh, d, r.amount, 'unsave', 'fi-sparen', 'Aus Umschlag: ' || r.name, 'recurring', cp, co, 'cover:' || r.id::text || ':' || d::text)
+                on conflict on constraint budget_tx_ext_ref do nothing;
+            end if;
+          end if;
+        end if;
         k := k + 1; guard := guard + 1;
         d := budget_nth_due(r.start_date, r.freq, k);
       end loop;
@@ -378,7 +400,7 @@ language sql stable security definer set search_path = public as $$
   union all
   select c.owner, 'cash', to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM'), 'expense', c.category, sum(c.amount)
     from budget_cash c join m on m.user_id = c.owner
-   where c.household_id = my_household() and c.active and m.share->>'tx' = 'sums'
+   where c.household_id = my_household() and c.active and c.pot_id is null and m.share->>'tx' = 'sums'
      and not exists (select 1 from budget_tx t where t.household_id = c.household_id
                      and t.ext_ref = 'cash:' || to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM') || ':' || c.id::text)
    group by c.owner, c.category

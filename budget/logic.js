@@ -305,17 +305,38 @@ export function isValidIsin(isin) {
 export const cashRef = (month, id) => `cash:${month}:${id}`;
 // Was im Monat noch abzuheben ist: aktive Umschläge ohne „Abgehoben“-Buchung in diesem Monat.
 // Nur für den laufenden und künftige Monate (was in einem vergangenen Monat nicht abgehoben wurde, wurde nicht ausgegeben).
+// total: normale Umschläge (zählen als Ausgabe je Kategorie), reserve: Rücklage-Umschläge (zählen als Sparen, die Ausgabe kommt erst am Zahltag)
 export function cashPending(envelopes, tx, key, today, groupOf) {
-  const out = { total: 0, byGroup: {}, open: [], done: [] };
+  const out = { total: 0, reserve: 0, byGroup: {}, open: [], done: [] };
   if (key < today.slice(0, 7)) return out;
   const refs = new Set(tx.map(t => t.extRef).filter(Boolean));
   for (const e of envelopes) {
     if (!e.active) continue;
     if (refs.has(cashRef(key, e.id))) { out.done.push(e); continue; }
-    out.total += e.amount; out.open.push(e);
+    out.open.push(e);
+    if (e.potId) { out.reserve += e.amount; continue; }
+    out.total += e.amount;
     const g = groupOf(e.category); out.byGroup[g] = (out.byGroup[g] ?? 0) + e.amount;
   }
   return out;
+}
+
+// Rücklage-Umschlag: Reicht das Geld bis zu den nächsten Fälligkeiten?
+// Annahme: Der Monatsbetrag wird zu Monatsbeginn abgehoben (im laufenden Monat nur, wenn noch nicht geschehen).
+// dues: [{ date, amount, name }] aufsteigend. Ergebnis: ok, oder erster Engpass mit Datum, Name und Fehlbetrag.
+export function reserveForecast({ balance, monthly, withdrawnThisMonth, dues, today, months = 12 }) {
+  let cash = balance;
+  const start = today.slice(0, 7);
+  for (let k = 0; k < months; k++) {
+    const m = addMonths(start + '-01', k).slice(0, 7);
+    if (k > 0 || !withdrawnThisMonth) cash += monthly;
+    for (const d of dues.filter(x => x.date.slice(0, 7) === m)) {
+      cash -= d.amount;
+      if (cash < 0) return { ok: false, date: d.date, name: d.name, missing: -cash };
+    }
+  }
+  const next = dues[0] ?? null;
+  return { ok: true, next };
 }
 
 // ---------- Suche ----------

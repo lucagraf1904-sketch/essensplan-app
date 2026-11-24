@@ -195,3 +195,15 @@ select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
 update budget_members set share = share || '{"contracts":"all"}' where user_id = auth.uid();
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 select count(*) = 1 as work_contract_after_share from budget_policies where name = 'Arbeitsvertrag A';
+-- ---------- Version 7: Rücklage-Umschlag bezahlt Fixkosten ----------
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+insert into budget_pots(household_id, name, kind, owner) values (my_household(), 'Umschlag Rücklagen', 'reserve', auth.uid());
+insert into budget_cash(household_id, name, amount, owner, pot_id) select my_household(), 'Rücklagen', 50, auth.uid(), id from budget_pots where name = 'Umschlag Rücklagen';
+insert into budget_tx(household_id, date, amount, kind, category, pot_id, owner, source, ext_ref)
+  select my_household(), current_date - 30, 50, 'save', 'fi-sparen', id, auth.uid(), 'cash', 'cash:x:1' from budget_pots where name = 'Umschlag Rücklagen';
+insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, cash_id)
+  select my_household(), 'Kfz jährlich', 40, 'vers-kfz', 'yearly', current_date, current_date, id from budget_cash where name = 'Rücklagen';
+select budget_book_due() >= 1 as reserve_due_booked;
+select count(*) = 1 as cover_unsave_booked from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich' and amount = 40 and owner = auth.uid();
+select budget_book_due() = 0 as cover_not_twice;
+select count(*) = 1 as cover_once from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich';

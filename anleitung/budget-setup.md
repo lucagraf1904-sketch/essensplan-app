@@ -45,6 +45,13 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - **Fragen:** z. B. „Wie viele Urlaubstage habe ich?“, „Wie lang ist die Kündigungsfrist?“, „Darf ich Haustiere halten?“.
 - **Empfohlen:** Edge Function `ai` noch einmal mit dem aktuellen `supabase/functions/ai/index.ts` deployen. Der Prompt ist jetzt auf Verträge allgemein ausgelegt und weist auf gesetzliche Mindestregeln hin (z. B. Mindesturlaub). Ohne Update funktioniert es auch, die KI denkt dann aber „Versicherung“.
 
+## Update: Rücklage-Umschläge für Fixkosten (Version 7)
+`supabase/budget.sql` noch einmal ausführen. Bei jeder Fixkosten-Position und jedem Vertrag gibt es „Aus Bargeld-Umschlag bezahlen“.
+- Wählst du einen Umschlag (oder „+ Neuer Umschlag „Rücklagen““), wird er zur **Rücklage**: Den Monatsbetrag legst du selbst fest, „Abgehoben“ bucht ihn als zurückgelegt (mindert „Noch frei“, keine Ausgabe), das Geld bleibt im Umschlag.
+- Am Zahltag bucht die App die Fixkosten wie bisher als Ausgabe und nimmt den gleichen Betrag automatisch aus dem Umschlag. „Noch frei“ wird dadurch nicht noch einmal belastet.
+- Der Umschlag zeigt, wie viel drin ist, welche Fixkosten daraus bezahlt werden und ob das Geld bis zur nächsten Fälligkeit reicht (Annahme: Abheben jeweils zu Monatsbeginn).
+- Normale Umschläge (ohne Fixkosten) verfallen weiter jeden Monat.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

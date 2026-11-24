@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { reserveForecast, etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -220,4 +220,15 @@ test('Arbeitsvertrag: Suche findet Urlaub, Überstunden, Sonderzahlung', () => {
   assert.equal(rank(chunks, 'Gibt es Weihnachtsgeld?')[0].page, 3);
   assert.equal(rank(chunks, 'Wie lange ist die Probezeit?')[0].page, 1);
   assert.equal(rank(chunks, 'Wie viele Stunden muss ich arbeiten?')[0].page, 2);
+});
+
+test('Rücklage-Umschlag: Abhebesumme als Sparen, Prognose bis zur Fälligkeit', () => {
+  const env = [{ id: 'r', amount: 5000, category: 'x', active: true, potId: 'p' }, { id: 'm', amount: 6000, category: 'lm-markt', active: true }];
+  const p = cashPending(env, [], '2026-11', '2026-11-24', () => 'lebensmittel');
+  assert.equal(p.total, 6000); assert.equal(p.reserve, 5000); assert.deepEqual(p.byGroup, { lebensmittel: 6000 });
+  // 300 € drin, 50 €/Monat, Kfz 486 € am 1.1.: Nov 350, Dez 400, Jan 450 → fehlen 36 €
+  const f = reserveForecast({ balance: 30000, monthly: 5000, withdrawnThisMonth: false, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }], today: '2026-11-24' });
+  assert.equal(f.ok, false); assert.equal(f.missing, 3600); assert.equal(f.name, 'Kfz');
+  const g = reserveForecast({ balance: 40000, monthly: 5000, withdrawnThisMonth: true, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }], today: '2026-11-24' });
+  assert.equal(g.ok, true); assert.equal(g.next.name, 'Kfz');
 });
