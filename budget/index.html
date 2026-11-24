@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Haushaltskasse</title>
+  <meta name="theme-color" content="#0b5c63" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1a1d" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Kasse">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preload" href="vendor/fonts/atkinson-hyperlegible-next-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Anmeldung -->
+  <main id="auth" class="auth hidden" aria-labelledby="auth-title">
+    <div class="auth-box">
+      <img src="icon.svg" alt="" width="64" height="64">
+      <h1 id="auth-title">Haushaltskasse</h1>
+      <p class="muted">Alle Ausgaben des Haushalts an einem Ort. Gleiche Anmeldung wie in der Speisekammer.</p>
+      <div id="auth-step-login">
+        <form id="form-login" class="stack">
+          <label>E-Mail<input type="email" id="login-email" autocomplete="email" required></label>
+          <label>Passwort<input type="password" id="login-pass" autocomplete="current-password" minlength="6"></label>
+          <div class="row">
+            <button class="btn primary grow" type="submit" data-mode="signin">Anmelden</button>
+            <button class="btn grow" type="submit" data-mode="signup">Konto anlegen</button>
+          </div>
+          <button class="btn link" type="button" id="btn-code">Stattdessen Code per E-Mail schicken</button>
+        </form>
+        <form id="form-code" class="stack hidden">
+          <label>Code aus der E-Mail<input id="login-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,8}" required></label>
+          <button class="btn primary" type="submit">Code prüfen</button>
+        </form>
+      </div>
+      <div id="auth-step-household" class="stack hidden">
+        <p>Lege einen Haushalt an oder tritt mit dem Code deines Partners bzw. deiner Partnerin bei. Wer die Speisekammer nutzt, ist schon in einem Haushalt.</p>
+        <form id="form-create" class="row"><input id="hh-name" placeholder="Name, z. B. Wir zwei" aria-label="Name des Haushalts"><button class="btn primary">Anlegen</button></form>
+        <form id="form-join" class="row"><input id="hh-code" placeholder="Beitrittscode" aria-label="Beitrittscode" autocapitalize="characters"><button class="btn">Beitreten</button></form>
+      </div>
+      <p id="auth-msg" class="msg" role="alert"></p>
+      <button class="btn link" type="button" id="btn-demo">Ohne Konto ausprobieren (Beispieldaten, nur auf diesem Gerät)</button>
+    </div>
+  </main>
+
+  <!-- App -->
+  <div id="app" class="hidden">
+    <header class="top">
+      <div class="month-switch" role="group" aria-label="Monat wählen">
+        <button class="icon-btn" id="m-prev" aria-label="Vorheriger Monat">‹</button>
+        <button class="month-label" id="m-label" title="Zum aktuellen Monat"></button>
+        <button class="icon-btn" id="m-next" aria-label="Nächster Monat">›</button>
+      </div>
+      <span id="sync" class="sync" role="status" aria-live="polite"></span>
+      <button class="icon-btn" id="btn-settings" aria-label="Einstellungen">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="m19.4 13.5.1-1.5-.1-1.5 2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.4h-4l-.4 2.5A7.6 7.6 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6-.1 1.5.1 1.5-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"/></svg>
+      </button>
+    </header>
+
+    <div id="demo-bar" class="demo-bar hidden">Demo mit Beispieldaten, nur auf diesem Gerät. <button class="btn link" id="btn-demo-exit">Beenden</button></div>
+
+    <main id="views">
+      <section id="view-home" class="view" aria-label="Übersicht"></section>
+      <section id="view-tx" class="view hidden" aria-label="Buchungen"></section>
+      <section id="view-fixed" class="view hidden" aria-label="Fixkosten"></section>
+      <section id="view-ins" class="view hidden" aria-label="Versicherungen"></section>
+      <section id="view-stats" class="view hidden" aria-label="Auswertung"></section>
+    </main>
+
+    <button class="fab" id="fab" aria-label="Ausgabe erfassen"><span aria-hidden="true">+</span> Ausgabe</button>
+
+    <nav class="tabs" aria-label="Bereiche">
+      <button data-view="home" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Übersicht</button>
+      <button data-view="tx"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>Buchungen</button>
+      <button data-view="fixed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 9M20 4v5h-5M20 12a8 8 0 0 1-13.7 5.6L4 15M4 20v-5h5"/></svg>Fixkosten</button>
+      <button data-view="ins"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z"/></svg>Versicherung</button>
+      <button data-view="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-7"/></svg>Auswertung</button>
+    </nav>
+  </div>
+
+  <!-- Schnellerfassung / Buchung bearbeiten -->
+  <dialog id="dlg-tx" class="sheet" aria-labelledby="tx-title">
+    <form id="form-tx" method="dialog" novalidate>
+      <header class="sheet-head">
+        <div class="seg" role="radiogroup" aria-label="Art">
+          <label><input type="radio" name="kind" value="expense" checked><span>Ausgabe</span></label>
+          <label><input type="radio" name="kind" value="income"><span>Einnahme</span></label>
+        </div>
+        <h2 id="tx-title" class="sr-only">Buchung</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button>
+      </header>
+      <div class="amount-row">
+        <input id="tx-amount" class="amount-input" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Betrag in Euro" enterkeyhint="done">
+        <span class="amount-cur" aria-hidden="true">€</span>
+        <label class="photo-btn" title="Kassenbon fotografieren">
+          <input type="file" id="tx-photo" accept="image/*" capture="environment" class="sr-only">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>Bon</span>
+        </label>
+      </div>
+      <p id="tx-photo-msg" class="tiny muted" role="status"></p>
+      <div id="tx-recent" class="chips" aria-label="Zuletzt genutzt"></div>
+      <div id="tx-groups" class="cat-grid" role="radiogroup" aria-label="Kategorie"></div>
+      <div id="tx-subs" class="chips" aria-label="Unterkategorie"></div>
+      <div class="row wrap">
+        <div class="seg small" role="radiogroup" aria-label="Datum">
+          <label><input type="radio" name="when" value="today" checked><span>Heute</span></label>
+          <label><input type="radio" name="when" value="yesterday"><span>Gestern</span></label>
+          <label><input type="radio" name="when" value="other"><span>Datum</span></label>
+        </div>
+        <input type="date" id="tx-date" class="hidden" aria-label="Datum">
+      </div>
+      <label class="field">Notiz <span class="muted">(optional, z. B. Laden oder Anlass)</span><input id="tx-note" list="note-list" autocomplete="off" maxlength="120"></label>
+      <datalist id="note-list"></datalist>
+      <p id="tx-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="tx-delete">Löschen</button>
+        <button type="submit" class="btn primary grow" id="tx-save">Ausgabe speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Fixkosten bearbeiten -->
+  <dialog id="dlg-rec" class="sheet" aria-labelledby="rec-title">
+    <form id="form-rec" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="rec-title">Fixkosten</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <div class="seg" role="radiogroup" aria-label="Art">
+        <label><input type="radio" name="rkind" value="expense" checked><span>Ausgabe</span></label>
+        <label><input type="radio" name="rkind" value="income"><span>Einnahme</span></label>
+      </div>
+      <label class="field">Bezeichnung<input id="rec-name" required maxlength="80" placeholder="z. B. Miete, Gehalt, Streaming"></label>
+      <div class="grid2">
+        <label class="field">Betrag (€)<input id="rec-amount" inputmode="decimal" required placeholder="0,00"></label>
+        <label class="field">Rhythmus<select id="rec-freq"></select></label>
+      </div>
+      <label class="field">Kategorie<select id="rec-cat"></select></label>
+      <div class="grid2">
+        <label class="field">Nächste Abbuchung<input type="date" id="rec-next" required></label>
+        <label class="field">Letzte Abbuchung <span class="muted">(optional)</span><input type="date" id="rec-end"></label>
+      </div>
+      <details class="more" id="rec-contract">
+        <summary>Vertrag und Kündigung</summary>
+        <div class="grid2">
+          <label class="field">Vertrag läuft bis<input type="date" id="rec-cend"></label>
+          <label class="field">Kündigungsfrist<select id="rec-notice"></select></label>
+        </div>
+        <p class="tiny muted">Die App erinnert, bevor die Frist abläuft. Verlängert sich der Vertrag, rechnet sie mit dem nächsten Vertragsjahr weiter.</p>
+      </details>
+      <p class="tiny muted" id="rec-hint"></p>
+      <p id="rec-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="rec-delete">Löschen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Versicherung bearbeiten -->
+  <dialog id="dlg-pol" class="sheet" aria-labelledby="pol-title">
+    <form id="form-pol" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="pol-title">Versicherung</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <label class="field">Bezeichnung<input id="pol-name" required maxlength="80" placeholder="z. B. Autoversicherung Golf"></label>
+      <div class="grid2">
+        <label class="field">Art<select id="pol-cat"></select></label>
+        <label class="field">Versicherer<input id="pol-insurer" maxlength="80"></label>
+      </div>
+      <div class="grid2">
+        <label class="field">Beitrag (€)<input id="pol-amount" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Zahlweise<select id="pol-freq"></select></label>
+      </div>
+      <label class="field">Nächste Abbuchung<input type="date" id="pol-next"></label>
+      <p class="tiny muted">Mit Beitrag und Abbuchung wird die Versicherung automatisch als Fixkosten gebucht.</p>
+      <details class="more">
+        <summary>Vertragsdaten</summary>
+        <div class="grid2">
+          <label class="field">Versicherungsnummer<input id="pol-no" maxlength="40" autocomplete="off"></label>
+          <label class="field">Vertrag läuft bis<input type="date" id="pol-cend"></label>
+        </div>
+        <label class="field">Kündigungsfrist<select id="pol-notice"></select></label>
+        <label class="field">Notizen <span class="muted">(z. B. Selbstbeteiligung, Ansprechpartner)</span><textarea id="pol-notes" rows="2" maxlength="600"></textarea></label>
+      </details>
+      <fieldset class="upload">
+        <legend>Police</legend>
+        <p class="tiny muted" id="pol-file-state">Noch keine Police hinterlegt.</p>
+        <label class="btn"><input type="file" id="pol-file" accept="application/pdf,image/*" class="sr-only">PDF oder Foto wählen</label>
+        <details class="more">
+          <summary>Text selbst einfügen</summary>
+          <textarea id="pol-text" rows="5" placeholder="Text der Police hier einfügen (z. B. aus dem Kundenportal kopiert). Seiten mit einer Leerzeile und ---- trennen."></textarea>
+        </details>
+        <div id="pol-progress" class="progress hidden" role="progressbar" aria-label="Police wird gelesen"><span></span></div>
+        <p id="pol-file-msg" class="tiny" role="status"></p>
+      </fieldset>
+      <p id="pol-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="pol-delete">Löschen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Police fragen -->
+  <dialog id="dlg-chat" class="sheet tall" aria-labelledby="chat-title">
+    <div class="chat">
+      <header class="sheet-head">
+        <h2 id="chat-title">Police fragen</h2>
+        <button type="button" class="btn link" id="chat-new">Neu</button>
+        <button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button>
+      </header>
+      <label class="field inline">Frage an<select id="chat-scope"></select></label>
+      <div id="chat-msgs" class="chat-msgs" aria-live="polite"></div>
+      <div id="chat-chips" class="chips"></div>
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" placeholder="z. B. Ist Marderbiss abgedeckt?" autocomplete="off" maxlength="500" aria-label="Frage">
+        <button class="btn primary" type="submit">Fragen</button>
+      </form>
+      <p class="tiny muted chat-note">Die passenden Stellen aus der Police werden an einen KI-Dienst (Cloudflare) geschickt. Antworten ohne Gewähr und keine Rechtsberatung: Im Schadensfall gelten die vollständigen Bedingungen.</p>
+    </div>
+  </dialog>
+
+  <!-- Einstellungen -->
+  <dialog id="dlg-settings" class="sheet tall" aria-labelledby="set-title">
+    <div>
+      <header class="sheet-head"><h2 id="set-title">Einstellungen</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <div id="settings-body"></div>
+    </div>
+  </dialog>
+
+  <!-- Rückfrage -->
+  <dialog id="dlg-ask" class="ask" aria-labelledby="ask-title">
+    <form method="dialog">
+      <h2 id="ask-title"></h2>
+      <div id="ask-body"></div>
+      <div id="ask-btns" class="row end"></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
