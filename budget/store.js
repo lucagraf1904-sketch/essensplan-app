@@ -12,10 +12,10 @@ const toTx = r => ({ id: r.id, date: r.date, amount: toCents(r.amount), kind: r.
 const fromTx = (t, hh) => ({ id: t.id, household_id: hh, date: t.date, amount: fromCents(t.amount), kind: t.kind, category: t.category, note: t.note || null,
   source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, owner: t.owner || null, account_id: t.accountId || null, ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
 const toRec = r => ({ id: r.id, name: r.name, amount: toCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, startDate: r.start_date, nextDue: r.next_due,
-  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null });
+  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null, cashId: r.cash_id ?? null });
 const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: fromCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, start_date: r.startDate,
   next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
-  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null });
+  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null, cash_id: r.cashId || null });
 const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.goal == null ? null : toCents(r.goal), targetDate: r.target_date ?? null,
   startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived, owner: r.owner ?? null,
   kind: r.kind || 'pot', isin: r.isin ?? '', marketValue: r.market_value == null ? null : toCents(r.market_value), marketValueAt: r.market_value_at ?? null });
@@ -27,7 +27,7 @@ const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', s
 const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
 // Summen-Zeilen (Freigabe „nur Summen“) in Cent
 const toSum = r => ({ owner: r.owner, area: r.area, month: r.month, kind: r.kind, category: r.category, total: toCents(r.total) });
-const toCash = r => ({ id: r.id, name: r.name, icon: r.icon || '💶', amount: toCents(r.amount), category: r.category, owner: r.owner ?? null, active: r.active !== false });
+const toCash = r => ({ id: r.id, name: r.name, icon: r.icon || '💶', amount: toCents(r.amount), category: r.category, owner: r.owner ?? null, active: r.active !== false, potId: r.pot_id ?? null });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
   noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
   pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null, owner: r.owner ?? null });
@@ -142,7 +142,7 @@ export async function createSupabaseStore() {
       return toAcc(must(r));
     },
     async listCash() { return must(await sb.from('budget_cash').select('*').order('created_at')).map(toCash); },
-    async saveCash(e) { return toCash(must(await sb.from('budget_cash').upsert({ id: e.id ?? uid(), household_id: hh(), name: e.name, icon: e.icon || '💶', amount: fromCents(e.amount), category: e.category, owner: e.owner || null, active: e.active !== false, updated_at: new Date().toISOString() }).select().single())); },
+    async saveCash(e) { return toCash(must(await sb.from('budget_cash').upsert({ id: e.id ?? uid(), household_id: hh(), name: e.name, icon: e.icon || '💶', amount: fromCents(e.amount), category: e.category, owner: e.owner || null, active: e.active !== false, pot_id: e.potId || null, updated_at: new Date().toISOString() }).select().single())); },
     async deleteCash(id) { must(await sb.from('budget_cash').delete().eq('id', id)); },
     async sharedSums(sinceIso) { return must(await sb.rpc('budget_shared_sums', { p_since: sinceIso })).map(toSum); },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
@@ -284,12 +284,20 @@ function demoSeed() {
   const cash = [{ id: uid(), name: 'Wochenmarkt', icon: '🥕', amount: 6000, category: 'lm-markt', owner: null, active: true },
     { id: uid(), name: 'Friseur', icon: '💇', amount: 2500, category: 'kl-friseur', owner: ME, active: true },
     { id: uid(), name: 'Kleinkram', icon: '🪙', amount: 4000, category: 'sonstiges', owner: ME, active: true }];
+  // Rücklage für Versicherungen: monatlich bar zurücklegen, am Zahltag wird es aus dem Umschlag genommen
+  const resPot = uid(), resEnv = uid();
+  pots.push({ id: resPot, name: 'Umschlag Rücklage Versicherungen', icon: '🛡️', kind: 'reserve', goal: null, targetDate: null, startBalance: 32000, autoRest: false, archived: false, owner: ME });
+  cash.push({ id: resEnv, name: 'Rücklage Versicherungen', icon: '🛡️', amount: 5000, category: 'versicherung', owner: ME, active: true, potId: resPot });
+  for (const x of rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = resEnv;
   return { tx, rec, pol, config, pots, pantry, accounts, members, sums, cash, files: {} };
 }
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); } save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf') || !db.pots.some(p => p.kind === 'reserve')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); }
+      if (!db.pots.some(p => p.kind === 'reserve')) { const rp = fresh.pots.find(p => p.kind === 'reserve'), re = fresh.cash.find(e => e.potId === rp.id); db.pots.push(rp); if (!db.cash.some(e => e.id === re.id)) db.cash.push(re);
+        for (const x of db.rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = re.id; }
+      save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));
@@ -331,7 +339,13 @@ export function createDemoStore() {
     async bookDue() {
       const d = load(), keys = new Set(d.tx.filter(t => t.recurringId).map(t => t.recurringId + '|' + t.dueDate));
       const add = bookDueLocal(d.rec, todayIso(), keys);
-      for (const t of add) d.tx.push({ id: uid(), createdAt: new Date().toISOString(), ...t });
+      for (const t of add) {
+        d.tx.push({ id: uid(), createdAt: new Date().toISOString(), ...t });
+        // Aus Rücklage-Umschlag bezahlt: gleichen Betrag aus dem Umschlag nehmen
+        const r = d.rec.find(x => x.id === t.recurringId), env = r?.cashId && d.cash.find(e => e.id === r.cashId), pot = env?.potId && d.pots.find(p => p.id === env.potId && !p.archived);
+        const ref = `cover:${r?.id}:${t.date}`;
+        if (pot && r.kind === 'expense' && !d.tx.some(x => x.extRef === ref)) d.tx.push({ id: uid(), createdAt: new Date().toISOString(), date: t.date, amount: t.amount, kind: 'unsave', category: 'fi-sparen', note: `Aus Umschlag: ${r.name}`, source: 'recurring', potId: pot.id, owner: pot.owner ?? null, extRef: ref, recurringId: null, dueDate: null });
+      }
       save(); return add.length;
     },
     async listPolicies() { return delay(load().pol.map(p => ({ ...p, pages: null, pageCount: p.pages?.length ?? 0 }))); },
