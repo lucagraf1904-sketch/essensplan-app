@@ -65,6 +65,7 @@
 
     <aside id="demo-bar" class="demo-bar hidden" aria-label="Hinweis Demo">Demo mit Beispieldaten, nur auf diesem Gerät. <button class="btn link" id="btn-demo-exit">Beenden</button></aside>
 
+    <nav id="scope-bar" class="scope-bar hidden" aria-label="Ansicht: wessen Einträge"></nav>
     <main id="views">
       <section id="view-home" class="view" aria-label="Übersicht"></section>
       <section id="view-tx" class="view hidden" aria-label="Buchungen"></section>
@@ -117,6 +118,7 @@
         <input type="date" id="tx-date" class="hidden" aria-label="Datum">
       </div>
       <label class="field">Notiz <span class="muted">(optional, z. B. Laden oder Anlass)</span><input id="tx-note" list="note-list" autocomplete="off" maxlength="120"></label>
+      <div id="tx-who" class="who"></div>
       <datalist id="note-list"></datalist>
       <p id="tx-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
@@ -152,6 +154,7 @@
         </div>
         <p class="tiny muted">Die App erinnert, bevor die Frist abläuft. Verlängert sich der Vertrag, rechnet sie mit dem nächsten Vertragsjahr weiter.</p>
       </details>
+      <div id="rec-who" class="who"></div>
       <p class="tiny muted" id="rec-hint"></p>
       <p id="rec-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
@@ -196,9 +199,61 @@
         <div id="pol-progress" class="progress hidden" role="progressbar" aria-label="Police wird gelesen"><span></span></div>
         <p id="pol-file-msg" class="tiny" role="status"></p>
       </fieldset>
+      <div id="pol-who" class="who"></div>
       <p id="pol-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
         <button type="button" class="btn danger hidden" id="pol-delete">Löschen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Spartopf -->
+  <dialog id="dlg-pot" class="sheet" aria-labelledby="pot-title">
+    <form id="form-pot" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="pot-title">Spartopf</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <div id="pot-summary"></div>
+      <label class="field">Name<input id="pot-name" required maxlength="40" placeholder="z. B. Urlaub, Notgroschen, neues Auto"></label>
+      <div class="icon-pick" id="pot-icons" role="radiogroup" aria-label="Symbol"></div>
+      <div id="etf-fields" class="grid2 hidden">
+        <label class="field">ISIN <span class="muted">optional</span><input id="etf-isin" maxlength="14" autocapitalize="characters" autocomplete="off" placeholder="z. B. IE00B4L5Y983"></label>
+        <label class="field">Aktueller Wert (€)<input id="etf-value" inputmode="decimal" placeholder="aus der Banking-App"></label>
+      </div>
+      <div class="grid2" id="pot-goal-wrap">
+        <label class="field">Ziel (€) <span class="muted">optional</span><input id="pot-goal" inputmode="decimal" placeholder="z. B. 1.500"></label>
+        <label class="field">Bis wann <span class="muted">optional</span><input type="date" id="pot-date"></label>
+      </div>
+      <div class="grid2">
+        <label class="field"><span id="pot-rate-label">Sparrate pro Monat</span><input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field"><span id="pot-next-label">Nächste Sparrate am</span><input type="date" id="pot-next"></label>
+      </div>
+      <label class="field" id="pot-start-wrap">Schon drauf (€)<input id="pot-start" inputmode="decimal" placeholder="0,00"></label>
+      <label class="check" id="pot-auto-wrap"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
+      <div id="pot-who" class="who"></div>
+      <p id="pot-hint" class="tiny muted"></p>
+      <p id="pot-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="pot-delete">Auflösen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Bargeld-Umschlag -->
+  <dialog id="dlg-cash" class="sheet" aria-labelledby="cash-title">
+    <form id="form-cash" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="cash-title">Bargeld-Umschlag</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <label class="field">Name<input id="cash-name" required maxlength="40" placeholder="z. B. Wochenmarkt, Friseur, Taschengeld"></label>
+      <div class="icon-pick" id="cash-icons" role="radiogroup" aria-label="Symbol"></div>
+      <div class="grid2">
+        <label class="field">Pro Monat (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Kategorie<select id="cash-cat"></select></label>
+      </div>
+      <div id="cash-who" class="who"></div>
+      <p class="tiny muted">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
+      <p id="cash-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="cash-delete">Löschen</button>
         <button type="submit" class="btn primary grow">Speichern</button>
       </div>
     </form>

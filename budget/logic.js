@@ -90,7 +90,7 @@ export function bookDueLocal(recurring, today, existingKeys = new Set()) {
     let k = r.n, d = r.nextDue, guard = 0;
     while (d <= today && (!r.endDate || d <= r.endDate) && guard < 60) {
       const key = r.id + '|' + d;
-      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d }); existingKeys.add(key); }
+      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null, owner: r.owner ?? null, accountId: r.accountId ?? null }); existingKeys.add(key); }
       k++; guard++; d = nthDue(r.startDate, r.freq, k);
     }
     r.n = k; r.nextDue = d; r.active = !r.endDate || d <= r.endDate;
@@ -130,13 +130,17 @@ export const dateShortNoYear = s => { const d = parseIso(s); return `${d.getDate
 
 // Monatsübersicht. groupOf: Kategorie-ID → Gruppen-ID.
 // Ergebnis in Cent: income, expense (gebucht), pendingIncome/pendingExpense (Fixkosten, die in diesem Monat noch kommen),
-// free = income + pendingIncome − expense − pendingExpense, byGroup: Ausgaben je Gruppe (gebucht + noch offen getrennt).
+// saved/unsaved (in Spartöpfe gelegt bzw. herausgenommen), pendingSave (Sparraten, die noch kommen),
+// free = income + pendingIncome + unsaved − expense − pendingExpense − saved − pendingSave, byGroup: Ausgaben je Gruppe.
+// Sparen ist keine Ausgabe (zählt nicht in expense/byGroup), mindert aber, was frei ist.
 export function monthSummary({ tx, recurring, key, today, groupOf }) {
   const { from, to, days } = monthRange(key);
-  const s = { key, from, to, days, income: 0, expense: 0, fixedBooked: 0, pendingIncome: 0, pendingExpense: 0, byGroup: {}, pendingByGroup: {}, pendingList: [] };
+  const s = { key, from, to, days, income: 0, expense: 0, fixedBooked: 0, pendingIncome: 0, pendingExpense: 0, saved: 0, unsaved: 0, pendingSave: 0, byGroup: {}, pendingByGroup: {}, pendingList: [] };
   for (const t of tx) {
     if (t.date < from || t.date > to) continue;
     if (t.kind === 'income') s.income += t.amount;
+    else if (t.kind === 'save') s.saved += t.amount;
+    else if (t.kind === 'unsave') s.unsaved += t.amount;
     else {
       s.expense += t.amount;
       if (t.recurringId) s.fixedBooked += t.amount;
@@ -146,13 +150,14 @@ export function monthSummary({ tx, recurring, key, today, groupOf }) {
   for (const r of recurring) {
     for (const d of occurrences(r, from, to)) {
       if (r.kind === 'income') s.pendingIncome += r.amount;
+      else if (r.kind === 'save') s.pendingSave += r.amount;
       else { s.pendingExpense += r.amount; const g = groupOf(r.category); s.pendingByGroup[g] = (s.pendingByGroup[g] ?? 0) + r.amount; }
       s.pendingList.push({ date: d, r });
     }
   }
   s.pendingList.sort((a, b) => a.date.localeCompare(b.date));
   s.plannedIncome = s.income + s.pendingIncome;
-  s.free = s.plannedIncome - s.expense - s.pendingExpense;
+  s.free = s.plannedIncome + s.unsaved - s.expense - s.pendingExpense - s.saved - s.pendingSave;
   // Tage bis Monatsende inklusive heute (nur im laufenden Monat), sonst null
   s.daysLeft = today >= from && today <= to ? diffDays(today, to) + 1 : null;
   s.dayIndex = today >= from && today <= to ? diffDays(from, today) + 1 : today > to ? days : 0;
@@ -179,6 +184,140 @@ export function noticeInfo(contractEnd, noticeMonths, today) {
   return { end, deadline, daysLeft: diffDays(today, deadline), missed };
 }
 
+// ---------- Spartöpfe ----------
+// Stand je Topf in Cent: Startbetrag + Einzahlungen − Entnahmen (potTx = alle Buchungen mit Topf, nicht nur die letzten Monate)
+export function potBalances(pots, potTx) {
+  const b = new Map(pots.map(p => [p.id, p.startBalance ?? 0]));
+  for (const t of potTx) if (b.has(t.potId)) b.set(t.potId, b.get(t.potId) + (t.kind === 'save' ? t.amount : t.kind === 'unsave' ? -t.amount : 0));
+  return b;
+}
+// Monate bis zum Zieldatum, ab dem laufenden Monat gezählt (Zieldatum im laufenden Monat = 1, schon vorbei = 0)
+export function monthsUntil(today, target) {
+  if (!target) return null;
+  const [y, m] = today.split('-').map(Number), [ty, tm] = target.split('-').map(Number);
+  return target < today ? 0 : Math.max(1, (ty - y) * 12 + (tm - m) + (target.slice(8) >= today.slice(8) ? 1 : 0));
+}
+// Ziel-Rechnung: was fehlt, wie viel pro Monat nötig ist, und ob die Sparrate reicht
+export function potPlan({ goal, targetDate }, balance, monthlyRate, today) {
+  if (!goal) return { hasGoal: false };
+  const missing = Math.max(0, goal - balance), ratio = Math.min(1, Math.max(0, balance / goal));
+  const months = monthsUntil(today, targetDate);
+  const need = months ? Math.ceil(missing / months) : null;
+  let status = 'open';
+  if (!missing) status = 'done';
+  else if (months === 0) status = 'late';
+  else if (need != null && monthlyRate) status = monthlyRate >= need ? 'ontrack' : 'behind';
+  const etaMonths = monthlyRate > 0 ? Math.ceil(missing / monthlyRate) : null;
+  return { hasGoal: true, missing, ratio, months, need, status, etaMonths };
+}
+export const lastDayOfMonth = key => monthRange(key).to;
+
+// ---------- Einkäufe aus der Speisekammer ----------
+// Bons der Speisekammer stehen dort als einzelne Artikelzeilen (log, type 'bought'). Zeilen derselben Person, die kurz hintereinander
+// gespeichert wurden (höchstens 3 Minuten Abstand), sind ein Einkauf. Schlüssel 'sk:<erste Zeilen-ID>' verhindert doppeltes Übernehmen.
+// Kategorien der Speisekammer → Haushaltskasse (Putzmittel & Co. sind keine Lebensmittel)
+export const PANTRY_CATEGORY = { Haushalt: 'hh-waren', 'Getränke': 'lm-getraenke', Pfand: 'lm-getraenke' };
+export const pantryCategory = c => PANTRY_CATEGORY[c] ?? 'lm-supermarkt';
+// now: nur Einkäufe, deren letzte Zeile älter als gapMin ist (sonst wird der Bon evtl. noch gespeichert).
+// since: Einkäufe, die vor diesem Zeitpunkt beginnen, fallen weg (die Abfrage holt etwas mehr, damit Gruppen am Rand vollständig sind).
+export function groupPantry(rows, gapMin = 3, { now = null, since = null } = {}) {
+  const sorted = [...rows].filter(r => r.price > 0).sort((a, b) => a.at.localeCompare(b.at));
+  const out = [];
+  let cur = null;
+  for (const r of sorted) {
+    if (!cur || r.by !== cur.by || (new Date(r.at) - new Date(cur.lastAt)) > gapMin * 60000) {
+      cur = { key: 'sk:' + r.id, at: r.at, date: iso(new Date(r.at)), lastAt: r.at, by: r.by, amount: 0, items: [], parts: {} };
+      out.push(cur);
+    }
+    const c = pantryCategory(r.category);
+    cur.amount += r.price; cur.items.push(r.name); cur.lastAt = r.at; cur.parts[c] = (cur.parts[c] ?? 0) + r.price;
+  }
+  return out.filter(g => (!now || now - new Date(g.lastAt) > gapMin * 60000) && (!since || new Date(g.at) >= new Date(since)));
+}
+// Ist ein Einkauf schon übernommen? (Buchungen heißen 'sk:<id>:<kategorie>')
+export const pantryDone = (key, refs) => refs.some(r => r === key || r.startsWith(key + ':'));
+// Mögliche Doppelbuchung: Lebensmittel am selben Tag mit ähnlichem Betrag (±1 € bzw. ±3 %)
+export function similarTx(tx, purchase, groupOf) {
+  return tx.find(t => t.kind === 'expense' && t.date === purchase.date && groupOf(t.category) === 'lebensmittel' && !String(t.extRef ?? '').startsWith(purchase.key)
+    && Math.abs(t.amount - purchase.amount) <= Math.max(100, purchase.amount * 0.03)) ?? null;
+}
+
+// ---------- Personen und Konten ----------
+// Ansicht: 'all' = alles, was ich sehen darf; 'shared' = nur Gemeinsames; 'mine' = nur meine privaten; sonst User-ID = private Einträge dieser Person
+export function inScope(owner, scope, me) {
+  if (scope === 'all' || !scope) return true;
+  if (scope === 'shared') return owner == null;
+  if (scope === 'mine') return owner === me;
+  return owner === scope;
+}
+// Vorgabe für neue Einträge: Gemeinschaftskonto → gemeinsam; Konto einer anderen Person → gemeinsam (privat kann nur sie selbst buchen);
+// eigenes Konto → je nach Einstellung „neue Einträge privat“
+export function defaultOwner(account, me, defaultPrivate) {
+  if (!account || account.owner == null || account.owner !== me) return defaultPrivate && !account ? me : null;
+  return defaultPrivate ? me : null;
+}
+// Freigabe „nur Summen“ als Monatswerte, die in die Übersicht und Auswertung einfließen (keine Einzelbuchungen)
+export function sumsToTx(sums) {
+  return sums.filter(x => (x.area === 'tx' || x.area === 'pots') && x.month && x.total).map(x => ({
+    id: `sum:${x.owner}:${x.area}:${x.month}:${x.kind}:${x.category}`, date: `${x.month}-01`, amount: x.total, kind: x.kind, category: x.category,
+    note: '', source: 'sums', owner: x.owner, synthetic: true, potId: null, accountId: null,
+  }));
+}
+// Ausgaben je Konto in einem Zeitraum (Cent); ohne Konto unter dem Schlüssel ''
+export function byAccount(tx, from, to) {
+  const m = new Map();
+  for (const t of tx) {
+    if (t.synthetic || t.date < from || t.date > to || (t.kind !== 'expense' && t.kind !== 'save')) continue;
+    const k = t.accountId ?? ''; m.set(k, (m.get(k) ?? 0) + t.amount);
+  }
+  return m;
+}
+
+// ---------- ETFs ----------
+// Gewinn/Verlust aus eingezahlter Summe und selbst eingetragenem Depotwert
+export function etfGain(paid, value) {
+  if (value == null) return null;
+  const gain = value - paid;
+  return { gain, pct: paid > 0 ? gain / paid * 100 : null };
+}
+// Geschätzter Wert heute: zuletzt eingetragener Depotwert plus alle Ein- und Auszahlungen nach diesem Datum
+// (Kursänderungen seitdem kennt die App nicht). estimated = true, wenn seitdem etwas dazukam oder abging.
+export function etfValue(p, moves) {
+  if (p.marketValue == null) return { value: null, estimated: false };
+  let v = p.marketValue, estimated = false;
+  for (const t of moves) {
+    if (t.potId !== p.id || !p.marketValueAt || t.date <= p.marketValueAt) continue;
+    v += t.kind === 'save' ? t.amount : t.kind === 'unsave' ? -t.amount : 0; estimated = true;
+  }
+  return { value: Math.max(0, v), estimated };
+}
+// ISIN prüfen (Format und Prüfziffer nach ISO 6166)
+export function isValidIsin(isin) {
+  const s = String(isin ?? '').toUpperCase().replace(/\s/g, '');
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(s)) return false;
+  const digits = s.slice(0, 11).split('').map(c => /[A-Z]/.test(c) ? String(c.charCodeAt(0) - 55) : c).join('');
+  let sum = 0, dbl = true;
+  for (let i = digits.length - 1; i >= 0; i--) { let d = +digits[i]; if (dbl) { d *= 2; if (d > 9) d -= 9; } sum += d; dbl = !dbl; }
+  return (10 - sum % 10) % 10 === +s[11];
+}
+
+// ---------- Bargeld-Umschläge ----------
+export const cashRef = (month, id) => `cash:${month}:${id}`;
+// Was im Monat noch abzuheben ist: aktive Umschläge ohne „Abgehoben“-Buchung in diesem Monat.
+// Nur für den laufenden und künftige Monate (was in einem vergangenen Monat nicht abgehoben wurde, wurde nicht ausgegeben).
+export function cashPending(envelopes, tx, key, today, groupOf) {
+  const out = { total: 0, byGroup: {}, open: [], done: [] };
+  if (key < today.slice(0, 7)) return out;
+  const refs = new Set(tx.map(t => t.extRef).filter(Boolean));
+  for (const e of envelopes) {
+    if (!e.active) continue;
+    if (refs.has(cashRef(key, e.id))) { out.done.push(e); continue; }
+    out.total += e.amount; out.open.push(e);
+    const g = groupOf(e.category); out.byGroup[g] = (out.byGroup[g] ?? 0) + e.amount;
+  }
+  return out;
+}
+
 // ---------- Suche ----------
 export const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 export function matches(text, query) {
@@ -197,9 +336,9 @@ const csvCell = (v, text = true) => {
 export function toCsv(tx, catPath) {
   const head = ['Datum', 'Art', 'Kategorie', 'Betrag', 'Notiz', 'Quelle'];
   const rows = [...tx].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
-    dateShort(t.date), t.kind === 'income' ? 'Einnahme' : 'Ausgabe', catPath(t.category),
-    (t.kind === 'income' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
-    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import' }[t.source] ?? t.source,
+    dateShort(t.date), { income: 'Einnahme', expense: 'Ausgabe', save: 'In Spartopf', unsave: 'Aus Spartopf' }[t.kind] ?? t.kind, catPath(t.category),
+    (t.kind === 'income' || t.kind === 'unsave' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
+    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import', rest: 'Monatsrest', pantry: 'Speisekammer', cash: 'Bargeld' }[t.source] ?? t.source,
   ]);
   return '﻿' + [head, ...rows].map(r => r.map((v, i) => csvCell(v, i !== 3)).join(';')).join('\r\n');
 }

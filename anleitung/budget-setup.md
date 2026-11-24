@@ -18,6 +18,26 @@ Die Funktion `ai` der Speisekammer wurde erweitert (neue Aktion `policy`, neue F
 Seite in Safari öffnen → Teilen → „Zum Home-Bildschirm“. Die App heißt dort „Kasse“.
 Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleiche Anmeldung).
 
+## Update: Spartöpfe und Speisekammer-Einkäufe (24.11.2026)
+`supabase/budget.sql` **noch einmal** im SQL Editor ausführen (wiederholbar, bestehende Buchungen bleiben). Die KI-Funktion muss dafür nicht neu deployt werden.
+- **Spartöpfe:** Stand = Startbetrag + Einzahlungen − Entnahmen. Geld kommt über eine monatliche Sparrate (wird wie Fixkosten automatisch gebucht) und den Monatsrest: Nach Monatsende fragt die App, in welchen Topf der Rest soll, oder legt ihn automatisch in den Topf mit „Monatsrest automatisch“. Gefragt wird nur für Monate mit mindestens 5 eigenen Buchungen und Einnahmen. Sparen mindert „Noch frei“, ist aber keine Ausgabe. Ein Topf mit Buchungen lässt sich nur auflösen, nicht löschen.
+- **Einkäufe aus der Speisekammer:** Bons, die in der Speisekammer erfasst werden, erscheinen in der Übersicht als Vorschlag (ab Einführung, höchstens 45 Tage zurück). Putzmittel („Haushalt“) wird als Drogerie & Haushalt gebucht, Getränke und Pfand als Getränke, alles andere als Supermarkt. Gibt es am selben Tag schon eine ähnliche Lebensmittel-Buchung, fragt die App nach, ob es derselbe Einkauf ist. Die Speisekammer selbst merkt davon nichts.
+
+## Update: Personen, Konten, Freigaben und Bargeld (Version 3 und 4)
+`supabase/budget.sql` **noch einmal** ausführen (wiederholbar, bestehende Daten bleiben und gelten als gemeinsam).
+- **Privat oder gemeinsam:** Jeder Eintrag gehört dem Haushalt oder einer Person (🔒). Was eine Person privat anlegt, sieht die andere nur nach Freigabe: Einstellungen → Freigabe, je Bereich „Nichts“, „Nur Summen“ oder „Alles“. Die Datenbank setzt das durch (Row Level Security), auch für Policen-Dateien. Freigegebenes kann angesehen, aber nur vom Besitzer geändert werden.
+- **Konten:** Jede Person bekommt automatisch ein eigenes Konto, bei mehreren Personen entsteht ein Gemeinschaftskonto. Weitere unter Einstellungen → Konten. „Bezahlt von“ steht an jeder Buchung, die Fixkosten zeigen die Abbuchungen je Konto. Es wird kein Ausgleich zwischen Personen gerechnet.
+- **Ansicht:** Oben „Alles · Gemeinsam · Nur ich · Partner“ (nur bei mehreren Personen).
+- **Monatsrest:** bei mehreren Personen getrennt: gemeinsamer Rest in einen gemeinsamen Topf, eigener Rest in einen eigenen Topf.
+- **Bargeld-Umschläge:** in der Übersicht unter „Bargeld“. Jeder Umschlag hat einen Monatsbetrag und eine Kategorie. Die Summe ist der Betrag zum Abheben. Bis zum Tipp auf „Abgehoben“ zählt er wie offene Fixkosten, danach wird je Umschlag eine Ausgabe gebucht. Restgeld wird nicht mitgeführt.
+
+## Update: ETFs (Version 5)
+`supabase/budget.sql` noch einmal ausführen. In der Übersicht unter „ETFs“: Name, optional ISIN (wird auf Prüfziffer geprüft), monatlicher Sparplan mit Ausführungstag und Konto, was schon eingezahlt ist, und der aktuelle Depotwert.
+- **Eingezahlt** zählt die App selbst: Startbetrag + jede Sparplan-Ausführung + Einmalzahlungen − Verkäufe.
+- **Wert** trägst du selbst ein (z. B. aus der Banking-App); die App zeigt das Datum und erinnert nach 45 Tagen ans Aktualisieren. Daraus: Gewinn/Verlust in € und %. Es gibt keine Kursabfrage.
+- Der Sparplan zählt wie Sparen: mindert „Noch frei“, ist aber keine Ausgabe (Kategorie Geldanlage). Privat/gemeinsam und Freigabe wie bei Spartöpfen (Bereich Spartöpfe).
+- Keine Anlageberatung.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

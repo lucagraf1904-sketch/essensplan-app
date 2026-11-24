@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -110,4 +110,100 @@ test('Auszüge: Versicherungsschein immer dabei, Grenze eingehalten', () => {
   assert.ok(excerpts.reduce((a, x) => a + x.text.length, 0) <= 400);
   const long = chunkPages(['x'.repeat(5000)], {});
   assert.ok(long.every(c => c.text.length <= 1440));
+});
+
+test('Sparen mindert „frei“, ist aber keine Ausgabe', () => {
+  const tx = [
+    { date: '2026-11-01', amount: 200000, kind: 'income', category: 'ei-gehalt' },
+    { date: '2026-11-02', amount: 50000, kind: 'expense', category: 'wo-miete' },
+    { date: '2026-11-03', amount: 10000, kind: 'save', category: 'fi-sparen', potId: 'p' },
+    { date: '2026-11-04', amount: 3000, kind: 'unsave', category: 'fi-sparen', potId: 'p' },
+  ];
+  const rec = [{ id: 'r', amount: 5000, kind: 'save', category: 'fi-sparen', freq: 'monthly', startDate: '2026-11-28', nextDue: '2026-11-28', n: 0, active: true, potId: 'p' }];
+  const s = monthSummary({ tx, recurring: rec, key: '2026-11', today: '2026-11-24', groupOf: () => 'x' });
+  assert.equal(s.expense, 50000); assert.equal(s.saved, 10000); assert.equal(s.unsaved, 3000); assert.equal(s.pendingSave, 5000);
+  assert.equal(s.free, 200000 - 50000 - 10000 + 3000 - 5000);
+  assert.deepEqual(Object.keys(s.byGroup), ['x']);
+});
+
+test('Spartopf: Stand und Ziel', () => {
+  const b = potBalances([{ id: 'p', startBalance: 20000 }], [{ potId: 'p', kind: 'save', amount: 5000 }, { potId: 'p', kind: 'unsave', amount: 1000 }, { potId: 'q', kind: 'save', amount: 999 }]);
+  assert.equal(b.get('p'), 24000); assert.equal(b.has('q'), false);
+  assert.equal(monthsUntil('2026-11-24', '2027-08-01'), 9);   // Dez … Aug
+  assert.equal(monthsUntil('2026-11-24', '2026-11-30'), 1);
+  assert.equal(monthsUntil('2026-11-24', '2026-10-01'), 0);
+  const plan = potPlan({ goal: 150000, targetDate: '2027-08-01' }, 24000, 10000, '2026-11-24');
+  assert.equal(plan.missing, 126000); assert.equal(plan.need, 14000); assert.equal(plan.status, 'behind'); assert.equal(plan.etaMonths, 13);
+  assert.equal(potPlan({ goal: 1000 }, 1500, 0, '2026-11-24').status, 'done');
+  assert.equal(potPlan({ goal: null }, 0, 0, '2026-11-24').hasGoal, false);
+});
+
+test('Speisekammer-Einkäufe: Artikel zu Einkäufen bündeln, Doppelbuchung erkennen', () => {
+  const rows = [
+    { id: 'a', name: 'Milch', price: 119, at: '2026-11-20T10:00:00Z', by: 'u1' },
+    { id: 'b', name: 'Brot', price: 249, at: '2026-11-20T10:00:30Z', by: 'u1' },
+    { id: 'c', name: 'Käse', price: 399, at: '2026-11-20T10:02:00Z', by: 'u1' },
+    { id: 'd', name: 'Äpfel', price: 299, at: '2026-11-20T10:02:10Z', by: 'u2' },
+    { id: 'e', name: 'Wein', price: 599, at: '2026-11-20T18:00:00Z', by: 'u1' },
+    { id: 'f', name: 'Ohne Preis', price: null, at: '2026-11-20T18:00:01Z', by: 'u1' },
+    { id: 'g', name: 'Spülmittel', price: 199, at: '2026-11-20T18:00:20Z', by: 'u1', category: 'Haushalt' },
+  ];
+  const g = groupPantry(rows);
+  assert.deepEqual(g.map(x => [x.key, x.amount, x.items.length]), [['sk:a', 767, 3], ['sk:d', 299, 1], ['sk:e', 798, 2]]);
+  assert.deepEqual(g[2].parts, { 'lm-supermarkt': 599, 'hh-waren': 199 });
+  // Bon wird gerade noch gespeichert: Einkauf erst nach 3 Minuten Ruhe vorschlagen
+  assert.equal(groupPantry(rows, 3, { now: new Date('2026-11-20T18:02:00Z') }).length, 2);
+  assert.equal(groupPantry(rows, 3, { now: new Date('2026-11-20T18:04:00Z') }).length, 3);
+  // Einkauf, der vor dem Stichtag beginnt, taucht nicht mit neuem Schlüssel wieder auf
+  assert.deepEqual(groupPantry(rows, 3, { since: '2026-11-20T10:01:00Z' }).map(x => x.key), ['sk:d', 'sk:e']);
+  assert.ok(pantryDone('sk:a', ['sk:a:lm-supermarkt'])); assert.ok(!pantryDone('sk:a', ['sk:ab:x']));
+  const tx = [{ kind: 'expense', date: g[0].date, category: 'lm-supermarkt', amount: 780 }];
+  assert.ok(similarTx(tx, g[0], () => 'lebensmittel'));
+  assert.equal(similarTx(tx, g[1], () => 'lebensmittel'), null); // 2,99 € ist nicht ähnlich zu 7,80 €
+});
+
+test('Personen: Ansicht, Vorgabe privat/gemeinsam, Summen, Konten', () => {
+  assert.ok(inScope(null, 'shared', 'me')); assert.ok(!inScope('me', 'shared', 'me'));
+  assert.ok(inScope('me', 'mine', 'me')); assert.ok(!inScope(null, 'mine', 'me'));
+  assert.ok(inScope('lea', 'lea', 'me')); assert.ok(inScope('lea', 'all', 'me'));
+  const joint = { owner: null }, mineAcc = { owner: 'me' }, leaAcc = { owner: 'lea' };
+  assert.equal(defaultOwner(joint, 'me', true), null);
+  assert.equal(defaultOwner(mineAcc, 'me', true), 'me'); assert.equal(defaultOwner(mineAcc, 'me', false), null);
+  assert.equal(defaultOwner(leaAcc, 'me', true), null);
+  assert.equal(defaultOwner(null, 'me', true), 'me');
+  const tx = sumsToTx([{ owner: 'lea', area: 'tx', month: '2026-11', kind: 'expense', category: 'kl-kleidung', total: 6000 }, { owner: 'lea', area: 'potbal', total: 9 }]);
+  assert.equal(tx.length, 1); assert.equal(tx[0].date, '2026-11-01'); assert.ok(tx[0].synthetic);
+  const acc = byAccount([{ date: '2026-11-02', amount: 100, kind: 'expense', accountId: 'a' }, { date: '2026-11-03', amount: 50, kind: 'save', accountId: 'a' },
+    { date: '2026-11-03', amount: 70, kind: 'expense' }, { date: '2026-11-03', amount: 999, kind: 'income', accountId: 'a' }, ...tx], '2026-11-01', '2026-11-30');
+  assert.equal(acc.get('a'), 150); assert.equal(acc.get(''), 70); assert.equal(acc.size, 2);
+});
+
+test('Bargeld: Abhebesumme, erledigte Umschläge, vergangene Monate', () => {
+  const env = [{ id: 'a', name: 'Markt', amount: 6000, category: 'lm-markt', active: true }, { id: 'b', name: 'Friseur', amount: 2500, category: 'kl-friseur', active: true },
+    { id: 'c', name: 'Alt', amount: 999, category: 'x', active: false }];
+  const g = id => ({ 'lm-markt': 'lebensmittel', 'kl-friseur': 'kleidung' })[id];
+  let p = cashPending(env, [], '2026-11', '2026-11-24', g);
+  assert.equal(p.total, 8500); assert.deepEqual(p.byGroup, { lebensmittel: 6000, kleidung: 2500 });
+  p = cashPending(env, [{ extRef: cashRef('2026-11', 'a') }], '2026-11', '2026-11-24', g);
+  assert.equal(p.total, 2500); assert.equal(p.done.length, 1);
+  assert.equal(cashPending(env, [], '2026-10', '2026-11-24', g).total, 0);
+  assert.equal(cashPending(env, [], '2026-12', '2026-11-24', g).total, 8500);
+});
+
+test('ETF: Gewinn/Verlust und ISIN-Prüfung', () => {
+  assert.deepEqual(etfGain(320000, 410000), { gain: 90000, pct: 28.125 });
+  assert.equal(etfGain(100000, 90000).gain, -10000);
+  assert.equal(etfGain(0, 5000).pct, null);
+  assert.equal(etfGain(1000, null), null);
+  assert.ok(isValidIsin('IE00B4L5Y983')); assert.ok(isValidIsin('ie00b4l5y983'));
+  assert.ok(isValidIsin('US0378331005'));
+  assert.ok(!isValidIsin('IE00B4L5Y984')); assert.ok(!isValidIsin('DE123')); assert.ok(!isValidIsin(''));
+});
+
+test('ETF: Wert wird mit Bewegungen nach dem letzten Eintrag fortgeschrieben', () => {
+  const p = { id: 'e', marketValue: 410000, marketValueAt: '2026-11-01' };
+  const moves = [{ potId: 'e', date: '2026-11-01', kind: 'save', amount: 15000 }, { potId: 'e', date: '2026-11-10', kind: 'unsave', amount: 100000 }, { potId: 'e', date: '2026-11-20', kind: 'save', amount: 15000 }, { potId: 'x', date: '2026-11-20', kind: 'save', amount: 999 }];
+  assert.deepEqual(etfValue(p, moves), { value: 325000, estimated: true });
+  assert.deepEqual(etfValue(p, []), { value: 410000, estimated: false });
+  assert.deepEqual(etfValue({ id: 'e', marketValue: null }, moves), { value: null, estimated: false });
 });

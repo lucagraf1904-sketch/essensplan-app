@@ -5,19 +5,20 @@ import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, gr
 import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
-  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays,
+  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, etfGain, etfValue, isValidIsin, groupPantry, similarTx, pantryDone,
+  inScope, defaultOwner, sumsToTx, byAccount, cashPending, cashRef,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v1';
+const VERSION = 'v5';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
-const state = { tx: [], recurring: [], policies: [], config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
-  txFilter: { q: '', kind: 'all', group: '' }, statsRange: 6, statsTable: false };
+const state = { tx: [], recurring: [], policies: [], pots: [], potTx: [], pantry: [], cash: [], members: [], accounts: [], memberIds: [], sums: [], scope: localStorage.getItem('haushaltskasse.scope') || 'all', config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
+  txFilter: { q: '', kind: 'all', group: '', account: '' }, statsRange: 6, statsTable: false };
 let store = null, chat = null;
 const saving = new Map(); // Buchungs-ID → laufendes Speichern (Rückgängig wartet darauf)
 
@@ -40,7 +41,9 @@ function ask(title, html, buttons = [{ value: 'ok', label: 'OK', cls: 'primary' 
 }
 const confirmDelete = async what => (await ask(`${what} löschen?`, '<p>Das lässt sich nicht rückgängig machen.</p>', [{ value: '', label: 'Abbrechen' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes';
 const amountClass = t => t.kind === 'income' ? 'amt-in' : '';
-const signed = t => (t.kind === 'income' ? '+' : '−') + eur(t.amount).replace('-', '');
+const signed = t => (t.kind === 'income' ? '+' : t.kind === 'save' ? '→ ' : t.kind === 'unsave' ? '← ' : '−') + eur(t.amount).replace('-', '');
+const potOf = id => state.pots.find(p => p.id === id);
+const potRate = id => state.recurring.filter(r => r.kind === 'save' && r.potId === id && r.active).reduce((a, r) => a + monthlyCents(r), 0);
 const setSync = (text, warn = false) => { const s = $('#sync'); s.textContent = text; s.classList.toggle('warn', warn); };
 
 // ---------- Warteschlange für Buchungen ohne Netz ----------
@@ -70,16 +73,23 @@ async function loadAll({ book = true } = {}) {
   if (book) { try { const n = await store.bookDue(); if (n && !(store.mode === 'demo' && n > 20)) toast(`${n} ${n === 1 ? 'Fixkosten-Buchung' : 'Fixkosten-Buchungen'} automatisch eingetragen`); } catch (e) { if (!e.offline) throw e; } }
   await flushOutbox();
   const since = addMonths(state.today.slice(0, 7) + '-01', -24);
-  const [tx, recurring, policies, config] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig()]);
+  const [tx, recurring, policies, config, pots, potTx, members, accounts, memberIds, sums] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig(), store.listPots(), store.listPotTx(),
+    store.listMembers(), store.listAccounts(), store.memberIds(), store.sharedSums(since).catch(() => [])]);
+  // Fehler beim Laden der Umschläge: bisherigen Stand behalten (sonst fehlten sie in „Noch frei“ und im Offline-Stand)
+  const cash = await store.listCash().catch(e => { console.warn('Bargeld', e); return null; });
+  if (cash) state.cash = cash;
   // Noch nicht gesendete Buchungen sichtbar lassen
   const pending = outbox.get().filter(o => !o.user || o.user === store.me());
   const del = new Set(pending.filter(o => o.op === 'delete').map(o => o.id));
   const saves = new Map(pending.filter(o => o.op === 'save').map(o => [o.tx.id, o.tx]));
-  state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id))].sort(byDateDesc);
-  state.recurring = recurring; state.policies = policies;
-  state.config = { limits: {}, custom: [], ...config };
+  // Freigabe „nur Summen“ der anderen fließt als Monatswerte mit ein (synthetic, ohne Einzelbuchungen)
+  state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id)), ...sumsToTx(sums)].sort(byDateDesc);
+  state.members = members; state.accounts = accounts; state.memberIds = memberIds; state.sums = sums;
+  state.recurring = recurring; state.policies = policies; state.pots = pots; state.potTx = potTx;
+  if (!cfgDirty) state.config = { limits: {}, custom: [], ...config };
   setCustomCategories(state.config.custom);
   chat?.clearCache();
+  await loadPantry();
   saveSnapshot();
 }
 // Letzter Stand für unterwegs ohne Netz (13 Monate Buchungen, ohne Seitentexte der Policen)
@@ -87,13 +97,15 @@ const SNAP = 'haushaltskasse.snapshot';
 function saveSnapshot() {
   if (store.mode !== 'supabase') return;
   const since = addMonths(state.today.slice(0, 7) + '-01', -13);
-  try { localStorage.setItem(SNAP, JSON.stringify({ at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config })); }
+  try { localStorage.setItem(SNAP, JSON.stringify({ at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config, pots: state.pots, potTx: state.potTx, members: state.members, accounts: state.accounts, memberIds: state.memberIds, sums: state.sums, cash: state.cash })); }
   catch { /* Speicher voll: dann eben ohne Offline-Stand */ }
 }
 function loadSnapshot() { try { return JSON.parse(localStorage.getItem(SNAP)); } catch { return null; } }
 const byDateDesc = (a, b) => b.date.localeCompare(a.date) || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
 
 let reloadTimer = null;
+// Wird ein Eintrag woanders privat gemacht, kommt kein Live-Ereignis an: daher alle 2 Minuten (nur sichtbar) neu laden
+setInterval(() => { if (document.visibilityState === 'visible' && store && !document.querySelector('dialog[open]')) scheduleReload(); }, 120000);
 function scheduleReload() { clearTimeout(reloadTimer); reloadTimer = setTimeout(async () => { try { await loadAll({ book: false }); render(); } catch (e) { console.warn(e); } }, 500); }
 
 // ---------- Navigation ----------
@@ -105,21 +117,100 @@ function show(view) {
   render(); window.scrollTo({ top: 0 });
 }
 function render() {
+  renderScopeBar();
   $('#m-label').textContent = monthName(state.month);
   $('#m-next').disabled = state.month >= shiftMonth(state.today.slice(0, 7), 12);
   const fn = { home: renderHome, tx: renderTx, fixed: renderFixed, ins: renderIns, stats: renderStats }[state.view];
   fn?.();
 }
-const summary = (key = state.month) => monthSummary({ tx: state.tx, recurring: state.recurring, key, today: state.today, groupOf });
+// ---------- Personen, Konten, Ansicht ----------
+const me = () => store.me();
+const multi = () => state.memberIds.length > 1 || state.members.length > 1;
+const myMember = () => state.members.find(m => m.userId === me()) ?? { share: {}, defaultPrivate: false };
+const memberName = id => id === me() ? 'Ich' : state.members.find(m => m.userId === id)?.displayName || 'Partner';
+const others = () => state.members.filter(m => m.userId !== me());
+const accOf = id => state.accounts.find(a => a.id === id);
+const accLabel = a => a ? `${a.icon} ${a.name}` : 'ohne Konto';
+const canWrite = owner => owner == null || owner === me();
+const sc = o => inScope(o, state.scope, me());
+// Was die aktuelle Ansicht zeigt
+const V = {
+  get tx() { return state.tx.filter(t => sc(t.owner)); },
+  get recurring() { return state.recurring.filter(r => sc(r.owner)); },
+  get pots() { return state.pots.filter(p => sc(p.owner)); },
+  get potTx() { return state.potTx.filter(t => sc(t.owner)); },
+  get policies() { return state.policies.filter(p => sc(p.owner)); },
+  get cash() { return state.cash.filter(e => sc(e.owner)); },
+};
+const real = list => list.filter(t => !t.synthetic);
+const ownerTag = owner => owner == null ? '' : owner === me() ? ' · 🔒 privat' : ` · 🔒 ${esc(memberName(owner))}`;
+function renderScopeBar() {
+  const bar = $('#scope-bar');
+  bar.classList.toggle('hidden', !multi());
+  if (!multi()) return;
+  const opts = [['all', 'Alles'], ['shared', '👥 Gemeinsam'], ['mine', '🔒 Nur ich'], ...others().map(m => [m.userId, `🔒 ${m.displayName || 'Partner'}`])];
+  if (!opts.some(([v]) => v === state.scope)) state.scope = 'all';
+  bar.innerHTML = opts.map(([v, l]) => `<button type="button" class="chip ${state.scope === v ? 'on' : ''}" role="radio" aria-checked="${state.scope === v}" data-scope="${esc(v)}">${esc(l)}</button>`).join('');
+}
+// Beim ersten Start: eigener Eintrag mit Namen, eigenes Konto, bei mehreren Personen ein Gemeinschaftskonto
+async function ensureSetup() {
+  let changed = false;
+  try {
+    if (!state.members.some(m => m.userId === me())) { await store.saveMe({ displayName: store.suggestedName(), share: {}, defaultPrivate: false }); changed = true; }
+    const name = myMember().displayName || store.suggestedName();
+    if (!state.accounts.some(a => a.owner === me())) { await store.saveAccount({ name: `Konto ${name}`, owner: me() }).catch(e => { if (!e.duplicate) throw e; }); changed = true; }
+    if (multi() && !state.accounts.some(a => a.owner == null)) { await store.saveAccount({ name: 'Gemeinschaftskonto', owner: null, icon: '🏦' }).catch(e => { if (!e.duplicate) throw e; }); changed = true; }
+  } catch (e) { console.warn('Einrichtung', e); }
+  if (changed) { [state.members, state.accounts] = await Promise.all([store.listMembers(), store.listAccounts()]); }
+}
+
+// Auswahl „Bezahlt von“ und „Wer sieht das“ in den Formularen
+function whoWidget(el, { account = undefined, owner = null, editing = false, accounts = true, hint = '' } = {}) {
+  const ro = editing && !canWrite(owner);
+  el.dataset.owner = owner ?? ''; el.dataset.touched = editing ? '1' : '';
+  el.dataset.acc = account ?? ''; el.dataset.ro = ro ? '1' : '';
+  const accs = state.accounts.filter(a => !a.archived || a.id === account);
+  el.innerHTML = (ro ? `<p class="ro">🔒 Gehört ${esc(memberName(owner))}. Du kannst es ansehen, aber nicht ändern.</p>` : '')
+    + (accounts && accs.length ? `<div><span class="lbl">Bezahlt von</span><div class="chips" role="radiogroup" aria-label="Bezahlt von" style="margin-top:6px">${accs.map(a =>
+      `<button type="button" class="chip ${a.id === el.dataset.acc ? 'on' : ''}" role="radio" aria-checked="${a.id === el.dataset.acc}" data-acc="${esc(a.id)}" ${ro ? 'disabled' : ''}>${esc(accLabel(a))}</button>`).join('')}</div></div>` : '')
+    + `<div><span class="lbl">Wer sieht das?</span><div class="seg small" role="radiogroup" aria-label="Wer sieht das" style="margin-top:6px;display:flex">
+        <label><input type="radio" name="${el.id}-own" value="shared" ${!el.dataset.owner ? 'checked' : ''} ${ro ? 'disabled' : ''}><span>👥 Gemeinsam</span></label>
+        <label><input type="radio" name="${el.id}-own" value="me" ${el.dataset.owner ? 'checked' : ''} ${ro ? 'disabled' : ''}><span>🔒 Nur ich</span></label></div>
+        <p class="tiny muted" style="margin-top:4px">${multi() ? (hint || 'Private Einträge sieht dein Partner nur, wenn du es unter Einstellungen → Freigabe erlaubst.') : 'Wichtig, sobald jemand deinem Haushalt beitritt. Bis dahin siehst nur du alles.'}</p></div>`;
+  el.querySelectorAll('[data-acc]').forEach(b => b.onclick = () => {
+    el.dataset.acc = el.dataset.acc === b.dataset.acc ? '' : b.dataset.acc;
+    el.querySelectorAll('[data-acc]').forEach(x => { const on = x.dataset.acc === el.dataset.acc; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+    if (!el.dataset.touched) { const o = defaultOwner(accOf(el.dataset.acc), me(), myMember().defaultPrivate); el.dataset.owner = o ?? ''; el.querySelector(`[value=${o ? 'me' : 'shared'}]`).checked = true; }
+  });
+  el.querySelectorAll(`[name="${el.id}-own"]`).forEach(r => r.onchange = () => { el.dataset.owner = r.value === 'me' ? me() : ''; el.dataset.touched = '1'; });
+  return ro;
+}
+const whoValue = el => ({ accountId: el.dataset.acc || null, owner: el.dataset.owner || null, readOnly: el.dataset.ro === '1' });
+// Besitzer ändern geht nur zwischen „gemeinsam“ und „ich“; fremde Einträge bleiben, wie sie sind
+const keepOwner = (old, wanted) => old && !canWrite(old.owner) ? old.owner : wanted;
+const lastAccount = () => { const id = localStorage.getItem('haushaltskasse.account'); return accOf(id) && !accOf(id).archived ? id : (state.accounts.find(a => a.owner == null && !a.archived) ?? state.accounts.find(a => a.owner === me() && !a.archived))?.id ?? null; };
+
+const summary = (key = state.month) => {
+  const s = monthSummary({ tx: V.tx, recurring: V.recurring, key, today: state.today, groupOf });
+  const c = cashPending(V.cash, state.tx, key, state.today, groupOf);
+  // „Nur Summen“-Freigabe: noch nicht abgehobenes Bargeld anderer (nur laufender Monat)
+  for (const x of state.sums) if (x.area === 'cash' && x.month === key && sc(x.owner) && key === state.today.slice(0, 7)) { c.total += x.total; const g = groupOf(x.category); c.byGroup[g] = (c.byGroup[g] ?? 0) + x.total; }
+  if (c.total) {
+    s.pendingExpense += c.total; s.free -= c.total; s.pendingCash = c.total;
+    for (const [g, v] of Object.entries(c.byGroup)) s.pendingByGroup[g] = (s.pendingByGroup[g] ?? 0) + v;
+    if (s.daysLeft) s.perDay = Math.floor(Math.max(0, s.free) / s.daysLeft);
+  }
+  return s;
+};
 
 // ---------- Übersicht ----------
 function deadlines(days = 60) {
   const out = [], seenPolicy = new Set();
-  for (const p of state.policies) {
+  for (const p of V.policies) {
     const n = noticeInfo(p.contractEnd, p.noticeMonths, state.today);
     if (n && n.daysLeft <= days) { out.push({ name: p.name, icon: cat(p.category).icon, ...n, open: () => openPolicy(p) }); seenPolicy.add(p.id); }
   }
-  for (const r of state.recurring) {
+  for (const r of V.recurring) {
     if (!r.active || (r.policyId && seenPolicy.has(r.policyId))) continue;
     const pol = r.policyId && state.policies.find(p => p.id === r.policyId);
     const n = noticeInfo(r.contractEnd ?? pol?.contractEnd, r.noticeMonths ?? pol?.noticeMonths, state.today);
@@ -129,10 +220,16 @@ function deadlines(days = 60) {
 }
 
 function txItem(t) {
+  if (t.potId) {
+    const p = potOf(t.potId);
+    return `<li><button class="item" data-pot="${esc(t.potId)}"><span class="ic" aria-hidden="true">${esc(p?.icon ?? '🐷')}</span>
+      <span><span class="t">${esc(p?.name ?? 'Spartopf')}</span><span class="s">${t.kind === 'save' ? 'In den Spartopf' : 'Aus dem Spartopf'}${t.note && t.note !== p?.name ? ' · ' + esc(t.note) : ''}</span></span>
+      <span class="a">${signed(t)}</span></button></li>`;
+  }
   const c = cat(t.category);
   return `<li><button class="item" data-tx="${esc(t.id)}">
     <span class="ic" aria-hidden="true">${c.icon}</span>
-    <span><span class="t">${esc(t.note || c.label)}</span><span class="s">${esc(t.note ? catPath(t.category) : group(c.group)?.label ?? '')}${t.recurringId || t.source === 'recurring' ? ' · Fixkosten' : ''}${t.source === 'receipt' ? ' · Bon' : ''}</span></span>
+    <span><span class="t">${esc(t.note || c.label)}</span><span class="s">${esc(t.note ? catPath(t.category) : group(c.group)?.label ?? '')}${t.recurringId || t.source === 'recurring' ? ' · Fixkosten' : ''}${t.source === 'receipt' ? ' · Bon' : ''}${t.accountId && state.accounts.length > 1 ? ' · ' + esc(accOf(t.accountId)?.name ?? '') : ''}${ownerTag(t.owner)}</span></span>
     <span class="a ${amountClass(t)}">${signed(t)}</span></button></li>`;
 }
 
@@ -157,13 +254,16 @@ function renderHome() {
       <p class="band-label">${esc(label)}</p>
       <p class="band-value ${s.free < 0 ? 'neg' : ''}">${s.free < 0 ? '−' : ''}${eur(Math.abs(s.free))}</p>
       <p class="band-sub">${esc(sub)}</p>
-      ${band({ spent: s.expense, pending: s.pendingExpense, total: s.plannedIncome, progress: cur ? (s.dayIndex - 0.5) / s.days : null })}
-      <div class="band-legend"><span><i class="k-spent"></i>Ausgegeben ${eur(s.expense)}</span>${s.pendingExpense ? `<span><i class="k-pending"></i>Fixkosten offen ${eur(s.pendingExpense)}</span>` : ''}<span><i class="k-free"></i>Frei ${eur(Math.max(0, s.free))}</span></div>
+      ${band({ spent: s.expense, pending: s.pendingExpense, saved: Math.max(0, s.saved + s.pendingSave - s.unsaved), total: s.plannedIncome, progress: cur ? (s.dayIndex - 0.5) / s.days : null })}
+      <div class="band-legend"><span><i class="k-spent"></i>Ausgegeben ${eur(s.expense)}</span>${s.pendingExpense ? `<span><i class="k-pending"></i>${s.pendingCash ? 'Fixkosten und Bargeld offen' : 'Fixkosten offen'} ${eur(s.pendingExpense)}</span>` : ''}${s.saved + s.pendingSave ? `<span><i class="k-saved"></i>Gespart ${eur(s.saved + s.pendingSave)}</span>` : ''}<span><i class="k-free"></i>Frei ${eur(Math.max(0, s.free))}</span></div>
       <details><summary class="tiny" style="cursor:pointer;margin-top:10px;opacity:.9">So rechnet die App</summary>
       <dl class="band-math">
         <dt>Einnahmen${s.pendingIncome ? ' (inkl. erwartet)' : ''}</dt><dd>${eur(s.plannedIncome)}</dd>
         <dt>Ausgaben bisher${s.fixedBooked ? `, davon Fixkosten ${eur(s.fixedBooked)}` : ''}</dt><dd>−${eur(s.expense)}</dd>
-        ${s.pendingExpense ? `<dt>Fixkosten noch offen</dt><dd>−${eur(s.pendingExpense)}</dd>` : ''}
+        ${s.pendingExpense - (s.pendingCash ?? 0) ? `<dt>Fixkosten noch offen</dt><dd>−${eur(s.pendingExpense - (s.pendingCash ?? 0))}</dd>` : ''}
+        ${s.pendingCash ? `<dt>Bargeld noch abzuheben</dt><dd>−${eur(s.pendingCash)}</dd>` : ''}
+        ${s.saved + s.pendingSave ? `<dt>In Spartöpfe${s.pendingSave ? ' (inkl. Sparrate, die noch kommt)' : ''}</dt><dd>−${eur(s.saved + s.pendingSave)}</dd>` : ''}
+        ${s.unsaved ? `<dt>Aus Spartöpfen genommen</dt><dd>+${eur(s.unsaved)}</dd>` : ''}
         <dt class="sum">Frei</dt><dd class="sum">${s.free < 0 ? '−' : ''}${eur(Math.abs(s.free))}</dd>
       </dl></details></div>`;
   }
@@ -192,17 +292,21 @@ function renderHome() {
 
   // Demnächst fällig (14 Tage)
   const until = addDays(state.today, 14);
-  const upcoming = state.recurring.flatMap(r => occurrences(r, addDays(state.today, 1), until).map(d => ({ d, r }))).sort((a, b) => a.d.localeCompare(b.d)).slice(0, 8);
-  const recent = state.tx.filter(t => monthKey(t.date) === state.month).slice(0, 5);
+  const upcoming = V.recurring.flatMap(r => occurrences(r, addDays(state.today, 1), until).map(d => ({ d, r }))).sort((a, b) => a.d.localeCompare(b.d)).slice(0, 8);
+  const recent = real(V.tx).filter(t => monthKey(t.date) === state.month).slice(0, 5);
 
   $('#view-home').innerHTML = bandHtml
+    + restCard() + pantryCard()
     + (alerts ? `<div class="section-head"><h2>Fristen</h2></div>${alerts}` : '')
+    + cashSection()
+    + potsSection()
+    + etfSection()
     + `<div class="section-head"><h2>Budgets</h2><button class="btn link" data-act="limits">${limited.length ? 'Ändern' : 'Festlegen'}</button></div>`
     + (limited.length ? `<ul class="list">${budgets}</ul><p class="tiny muted" style="margin:6px 4px 0">${pace != null ? 'Der Strich zeigt, wie weit der Monat ist. Liegt der Balken davor, bist du im Plan.' : ''}</p>`
       : `<div class="card empty"><p>Lege fest, wie viel du im Monat z. B. für Lebensmittel oder Essen gehen ausgeben willst. Die App warnt, bevor es knapp wird.</p><button class="btn primary" data-act="limits">Budgets festlegen</button></div>`)
     + `<div class="section-head"><h2>In den nächsten 14 Tagen</h2><button class="btn link" data-act="fixed">Fixkosten</button></div>`
-    + (upcoming.length ? `<ul class="list">${upcoming.map(({ d, r }) => `<li><button class="item" data-rec="${esc(r.id)}"><span class="ic" aria-hidden="true">${cat(r.category).icon}</span>
-        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
+    + (upcoming.length ? `<ul class="list">${upcoming.map(({ d, r }) => `<li><button class="item" ${r.potId ? `data-pot="${esc(r.potId)}"` : `data-rec="${esc(r.id)}"`}><span class="ic" aria-hidden="true">${r.potId ? esc(potOf(r.potId)?.icon ?? '🐷') : cat(r.category).icon}</span>
+        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : r.kind === 'save' ? '→ ' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
       : `<div class="card empty"><p>In den nächsten zwei Wochen ist nichts fällig.</p>${state.recurring.length ? '' : '<button class="btn" data-act="add-rec">Fixkosten eintragen</button>'}</div>`)
     + `<div class="section-head"><h2>Letzte Buchungen</h2>${recent.length ? '<button class="btn link" data-act="tx">Alle</button>' : ''}</div>`
     + (recent.length ? `<ul class="list">${recent.map(txItem).join('')}</ul>` : `<div class="card empty"><p>In diesem Monat ist noch nichts gebucht.</p><button class="btn primary" data-act="add">Erste Ausgabe erfassen</button></div>`);
@@ -213,10 +317,13 @@ function renderHome() {
 // ---------- Buchungen ----------
 function renderTx() {
   const f = state.txFilter;
-  const list = (f.q ? state.tx : state.tx.filter(t => monthKey(t.date) === state.month))
+  const list = (f.q ? real(V.tx) : real(V.tx).filter(t => monthKey(t.date) === state.month))
     .filter(t => f.kind === 'all' || t.kind === f.kind)
+    .filter(t => !f.account || (f.account === '-' ? !t.accountId : t.accountId === f.account))
     .filter(t => !f.group || groupOf(t.category) === f.group)
-    .filter(t => !f.q || matches(`${t.note} ${catPath(t.category)} ${eur(t.amount)} ${dateShort(t.date)}`, f.q));
+    .filter(t => !f.q || matches(`${t.note} ${catPath(t.category)} ${eur(t.amount)} ${dateShort(t.date)} ${accOf(t.accountId)?.name ?? ''} ${t.owner ? memberName(t.owner) : ''}`, f.q));
+  // Freigabe „nur Summen“: eine Zeile je Person und Monat
+  const sumLines = f.q ? [] : others().map(m => { const xs = V.tx.filter(t => t.synthetic && t.owner === m.userId && monthKey(t.date) === state.month && t.kind === 'expense' && (!f.group || groupOf(t.category) === f.group)); return { m, total: xs.reduce((a, t) => a + t.amount, 0) }; }).filter(x => x.total);
   const sumE = list.filter(t => t.kind === 'expense').reduce((a, t) => a + t.amount, 0);
   const sumI = list.filter(t => t.kind === 'income').reduce((a, t) => a + t.amount, 0);
   const days = new Map();
@@ -228,6 +335,7 @@ function renderTx() {
       <div class="seg small" role="radiogroup" aria-label="Art">
         ${[['all', 'Alle'], ['expense', 'Ausgaben'], ['income', 'Einnahmen']].map(([v, l]) => `<label><input type="radio" name="txk" value="${v}" ${f.kind === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}
       </div>
+      ${state.accounts.length > 1 ? `<select id="tx-a" aria-label="Konto" style="flex:1;min-width:150px"><option value="">Alle Konten</option>${state.accounts.map(a => `<option value="${esc(a.id)}" ${f.account === a.id ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}<option value="-" ${f.account === '-' ? 'selected' : ''}>Ohne Konto</option></select>` : ''}
       <select id="tx-g" aria-label="Kategorie" style="flex:1;min-width:150px">
         <option value="">Alle Kategorien</option>${groups.map(g => `<option value="${g.id}" ${f.group === g.id ? 'selected' : ''}>${g.icon} ${esc(g.label)}</option>`).join('')}
       </select>
@@ -237,13 +345,16 @@ function renderTx() {
   const body = list.length ? [...days.entries()].map(([d, ts]) => {
     const e = ts.filter(t => t.kind === 'expense').reduce((a, t) => a + t.amount, 0);
     return `<div class="day-head"><span>${esc(dayLabel(d, state.today))}${f.q ? ' · ' + dateShort(d) : ''}</span><span>${e ? '−' + eur(e) : ''}</span></div><ul class="list">${ts.map(txItem).join('')}</ul>`;
-  }).join('') : `<div class="card empty" style="margin-top:14px"><p>${f.q || f.group || f.kind !== 'all' ? 'Keine Buchung passt zum Filter.' : 'In diesem Monat ist noch nichts gebucht.'}</p>${f.q || f.group || f.kind !== 'all' ? '<button class="btn" data-act="clear-filter">Filter zurücksetzen</button>' : '<button class="btn primary" data-act="add">Ausgabe erfassen</button>'}</div>`;
+  }).join('') : !['all', 'shared', 'mine'].includes(state.scope) ? `<div class="card empty" style="margin-top:14px"><p>Keine einzelnen Buchungen von ${esc(memberName(state.scope))} sichtbar. ${esc(memberName(state.scope))} entscheidet in den eigenen Einstellungen, was freigegeben ist.</p></div>`
+    : `<div class="card empty" style="margin-top:14px"><p>${f.q || f.group || f.kind !== 'all' || f.account ? 'Keine Buchung passt zum Filter.' : 'In diesem Monat ist noch nichts gebucht.'}</p>${f.q || f.group || f.kind !== 'all' || f.account ? '<button class="btn" data-act="clear-filter">Filter zurücksetzen</button>' : '<button class="btn primary" data-act="add">Ausgabe erfassen</button>'}</div>`;
   const hadFocus = document.activeElement?.id === 'tx-q', pos = hadFocus ? document.activeElement.selectionStart : 0;
-  $('#view-tx').innerHTML = head + body;
+  const sumHtml = sumLines.map(x => `<div class="card" style="margin-top:10px"><p>🔒 <b>${esc(x.m.displayName || 'Partner')}</b>: private Ausgaben ${eur(x.total)} in ${esc(monthName(state.month).split(' ')[0])}</p><p class="tiny muted">Nur die Summe ist freigegeben, keine einzelnen Buchungen.</p></div>`).join('');
+  $('#view-tx').innerHTML = head + sumHtml + body;
   if (hadFocus) { const q = $('#tx-q'); q.focus(); q.setSelectionRange(pos, pos); }
   $('#tx-q').oninput = e => { state.txFilter.q = e.target.value; renderTx(); };
   $$('[name=txk]').forEach(r => r.onchange = () => { state.txFilter.kind = r.value; renderTx(); });
   $('#tx-g').onchange = e => { state.txFilter.group = e.target.value; renderTx(); };
+  if ($('#tx-a')) $('#tx-a').onchange = e => { state.txFilter.account = e.target.value; renderTx(); };
 }
 
 // ---------- Fixkosten ----------
@@ -252,14 +363,17 @@ function recItem(r) {
   const n = noticeInfo(r.contractEnd ?? pol?.contractEnd, r.noticeMonths ?? pol?.noticeMonths, state.today);
   const nb = n ? `<span class="badge ${n.daysLeft <= 14 ? 'bad' : n.daysLeft <= 60 ? 'warn' : ''}">kündbar bis ${dateShortNoYear(n.deadline)}${n.deadline.slice(0, 4) !== state.today.slice(0, 4) ? n.deadline.slice(0, 4) : ''}</span>` : '';
   const sub = r.active ? `${FREQS[r.freq].label} · nächste ${r.nextDue.slice(0, 4) === state.today.slice(0, 4) ? dateShortNoYear(r.nextDue) : dateShort(r.nextDue)}` : `beendet${r.endDate ? ' am ' + dateShort(r.endDate) : ''}`;
-  return `<li><button class="item" data-rec="${esc(r.id)}"><span class="ic" aria-hidden="true">${c.icon}</span>
-    <span><span class="t">${esc(r.name)}</span><span class="s">${esc(sub)}</span>${nb ? `<span style="display:block;margin-top:3px">${nb}</span>` : ''}</span>
+  return `<li><button class="item" ${r.potId ? `data-pot="${esc(r.potId)}"` : `data-rec="${esc(r.id)}"`}><span class="ic" aria-hidden="true">${r.potId ? esc(potOf(r.potId)?.icon ?? '🐷') : c.icon}</span>
+    <span><span class="t">${esc(r.name)}</span><span class="s">${esc(sub)}${r.accountId && state.accounts.length > 1 ? ' · ' + esc(accOf(r.accountId)?.name ?? '') : ''}${ownerTag(r.owner)}</span>${nb ? `<span style="display:block;margin-top:3px">${nb}</span>` : ''}</span>
     <span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${eur(r.amount)}<small>${r.freq === 'monthly' ? 'im Monat' : `≈ ${eur(monthlyCents(r))}/Monat`}</small></span></button></li>`;
 }
 function renderFixed() {
-  const act = state.recurring.filter(r => r.active), ended = state.recurring.filter(r => !r.active);
-  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income');
-  const mExp = exp.reduce((a, r) => a + monthlyCents(r), 0), mInc = inc.reduce((a, r) => a + monthlyCents(r), 0);
+  const act = V.recurring.filter(r => r.active), ended = V.recurring.filter(r => !r.active);
+  const perAcc = new Map();
+  for (const r of act) if (r.kind !== 'income') perAcc.set(r.accountId ?? '', (perAcc.get(r.accountId ?? '') ?? 0) + monthlyCents(r));
+  const sumFixed = others().map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'fixed' && x.kind !== 'income').reduce((a, x) => a + x.total, 0) })).filter(x => x.total && sc(x.m.userId) && state.scope !== 'shared');
+  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income'), sav = act.filter(r => r.kind === 'save');
+  const mExp = exp.reduce((a, r) => a + monthlyCents(r), 0), mInc = inc.reduce((a, r) => a + monthlyCents(r), 0), mSav = sav.reduce((a, r) => a + monthlyCents(r), 0);
   const ins = exp.filter(r => groupOf(r.category) === 'versicherung').reduce((a, r) => a + monthlyCents(r), 0);
   const nonMonthly = exp.filter(r => r.freq !== 'monthly').reduce((a, r) => a + monthlyCents(r), 0);
   const byGroup = new Map();
@@ -269,12 +383,17 @@ function renderFixed() {
     <div class="kpis" style="margin-top:6px">
       <div class="kpi"><span>Fixkosten</span><b>${eur(mExp)}</b><small>pro Monat</small></div>
       <div class="kpi"><span>Regelmäßig rein</span><b class="amt-in">${eur(mInc)}</b><small>pro Monat</small></div>
-      <div class="kpi"><span>Bleibt</span><b>${mInc ? eur(mInc - mExp) : '–'}</b><small>${mInc ? 'für alles andere' : 'Einnahme fehlt'}</small></div>
+      <div class="kpi"><span>Bleibt</span><b>${mInc ? eur(mInc - mExp - mSav) : '–'}</b><small>${mInc ? (mSav ? 'nach Sparraten' : 'für alles andere') : 'Einnahme fehlt'}</small></div>
     </div>
     ${nonMonthly ? `<p class="tiny muted" style="margin:10px 4px 0">Darin stecken ${eur(nonMonthly)} pro Monat für jährliche oder vierteljährliche Kosten${ins ? `, ${eur(ins)} davon für Versicherungen` : ''}. Diesen Betrag am besten monatlich zurücklegen.</p>` : ''}
+    ${state.accounts.length && perAcc.size ? `<div class="section-head"><h2>Abbuchungen je Konto</h2></div><div class="card" style="padding:4px 14px">${[...perAcc.entries()].sort((a, b) => b[1] - a[1]).map(([id, c]) => `<div class="acc-row"><span>${esc(accLabel(accOf(id)))}</span><b>${eur(c)}/Monat</b></div>`).join('')}
+      <p class="tiny muted" style="padding:8px 0">So viel geht im Schnitt pro Monat von jedem Konto für Fixkosten und Sparraten ab.</p></div>` : ''}
+    ${sumFixed.map(x => `<p class="tiny muted" style="margin:10px 4px 0">🔒 ${esc(x.m.displayName || 'Partner')} hat private Fixkosten von ${eur(x.total)} im Monat (nur Summe freigegeben).</p>`).join('')}
     <div class="section-head"><h2>Ausgaben</h2><button class="btn link" data-act="add-rec">Hinzufügen</button></div>
     ${exp.length ? ordered.map(g => `<div class="day-head"><span>${g.icon} ${esc(g.label)}</span><span>${eur(byGroup.get(g.id).reduce((a, r) => a + monthlyCents(r), 0))}/Monat</span></div><ul class="list">${byGroup.get(g.id).map(recItem).join('')}</ul>`).join('')
       : `<div class="card empty"><p>Trag hier ein, was regelmäßig abgeht: Miete, Strom, Handy, Streaming, Versicherungen. Die App bucht es dann jeden Monat automatisch.</p><button class="btn primary" data-act="add-rec">Fixkosten eintragen</button></div>`}
+    <div class="section-head"><h2>Sparraten</h2><button class="btn link" data-act="add-pot">Spartopf anlegen</button></div>
+    ${sav.length ? `<ul class="list">${sav.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Eine feste Sparrate legt jeden Monat automatisch Geld in einen Spartopf.</p><button class="btn" data-act="add-pot">Spartopf anlegen</button></div>`}
     <div class="section-head"><h2>Regelmäßige Einnahmen</h2><button class="btn link" data-act="add-income">Hinzufügen</button></div>
     ${inc.length ? `<ul class="list">${inc.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Gehalt, BAföG oder Nebenjob eintragen, dann weiß die App, wie viel im Monat frei ist.</p><button class="btn" data-act="add-income">Einnahme eintragen</button></div>`}
     ${ended.length ? `<div class="section-head"><h2>Beendet</h2></div><ul class="list">${ended.map(recItem).join('')}</ul>` : ''}`;
@@ -282,14 +401,14 @@ function renderFixed() {
 
 // ---------- Versicherungen ----------
 function renderIns() {
-  const ps = state.policies;
+  const ps = V.policies;
   const withText = ps.filter(p => p.pageCount > 0).length;
   const cards = ps.map(p => {
     const r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
     const n = noticeInfo(p.contractEnd, p.noticeMonths, state.today);
     return `<div class="card pol">
       <div class="pol-top"><span class="ic" aria-hidden="true">${cat(p.category).icon}</span>
-        <span><b>${esc(p.name)}</b><span class="tiny muted" style="display:block">${esc([cat(p.category).label, p.insurer].filter(Boolean).join(' · '))}</span></span>
+        <span><b>${esc(p.name)}</b><span class="tiny muted" style="display:block">${esc([cat(p.category).label, p.insurer].filter(Boolean).join(' · '))}${ownerTag(p.owner)}</span></span>
         <span style="text-align:right">${r ? `<b>${eur(r.amount)}</b><span class="tiny muted" style="display:block">${FREQS[r.freq].label}</span>` : '<span class="tiny muted">kein Beitrag</span>'}</span></div>
       <div class="row wrap">
         ${p.pageCount ? `<span class="badge good">✓ Police hinterlegt · ${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}</span>` : '<span class="badge warn">Police fehlt</span>'}
@@ -333,13 +452,15 @@ function renderStats() {
       <div class="kpi"><span>Ø Einnahmen</span><b>${avgI ? eur(avgI) : '–'}</b><small>pro Monat</small></div>
       <div class="kpi"><span>Sparquote</span><b>${rate != null ? rate + ' %' : '–'}</b><small>${done.length ? `aus ${done.length} abgeschl. Monaten` : 'noch kein ganzer Monat'}</small></div>
     </div>
-    ${state.statsTable ? `<div class="card" style="margin-top:14px"><table class="data-table"><thead><tr><th>Monat</th><th>Einnahmen</th><th>Ausgaben</th><th>Plus/Minus</th></tr></thead><tbody>
-      ${sums.map(x => `<tr><td>${esc(monthName(x.key))}</td><td>${eur(x.income)}</td><td>${eur(x.expense)}</td><td>${x.income - x.expense >= 0 ? '+' : '−'}${eur(Math.abs(x.income - x.expense))}</td></tr>`).join('')}</tbody></table></div>`
+    ${state.statsTable ? `<div class="card" style="margin-top:14px"><table class="data-table"><thead><tr><th>Monat</th><th>Einnahmen</th><th>Ausgaben</th><th>Gespart</th><th>Plus/Minus</th></tr></thead><tbody>
+      ${sums.map(x => `<tr><td>${esc(monthName(x.key))}</td><td>${eur(x.income)}</td><td>${eur(x.expense)}</td><td>${eur(x.saved - x.unsaved)}</td><td>${x.income - x.expense >= 0 ? '+' : '−'}${eur(Math.abs(x.income - x.expense))}</td></tr>`).join('')}</tbody></table></div>`
     : `<div class="card" style="margin-top:14px"><h2>Ausgaben je Monat</h2><p class="tiny muted">Hervorgehoben: ${esc(monthName(state.month))}${avgE ? `. Linie: Durchschnitt ${eur(avgE)} (abgeschlossene Monate)` : ''}${keys.includes(curKey) ? '. Der laufende Monat ist noch nicht fertig.' : ''}</p><div id="ch-exp" style="margin-top:8px"></div></div>
-       <div class="card"><h2>Plus oder Minus je Monat</h2><p class="tiny muted">Einnahmen minus Ausgaben. Blau: Geld übrig, orange: mehr ausgegeben als eingenommen.</p><div id="ch-bal" style="margin-top:8px"></div>
+       <div class="card"><h2>Plus oder Minus je Monat</h2><p class="tiny muted">Einnahmen minus Ausgaben. Blau: Geld übrig (Gespartes zählt dazu), orange: mehr ausgegeben als eingenommen.</p><div id="ch-bal" style="margin-top:8px"></div>
        <div class="legend"><span><i style="background:var(--pos)"></i>Plus</span><span><i style="background:var(--neg)"></i>Minus</span></div></div>`}
+    ${(() => { const r = monthRange(state.month), m = byAccount(V.tx, r.from, r.to); return state.accounts.length && m.size ? `<div class="card"><h2>Nach Konto im ${esc(monthName(state.month).split(' ')[0])}</h2><p class="tiny muted">Ausgaben und Sparen, je nachdem, von welchem Konto bezahlt wurde.</p>
+      <div class="rank" style="margin-top:12px">${[...m.entries()].sort((a, b) => b[1] - a[1]).map(([id, c]) => `<button class="rank-row" data-acc-filter="${esc(id || '-')}" style="border:0;background:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit"><span class="lab">${esc(accLabel(accOf(id)))}</span><span class="num">${eur(c)}</span><span class="track"><i style="width:${100 * c / Math.max(...m.values())}%"></i></span></button>`).join('')}</div></div>` : ''; })()}
     <div class="card"><h2>Wofür im ${esc(monthName(state.month).split(' ')[0])}</h2>
-      <p class="tiny muted">${s.expense ? `${eur(s.expense)} ausgegeben, ${fixedShare} % davon Fixkosten. Vergleich mit dem Vormonat darunter.` : 'Noch keine Ausgaben in diesem Monat.'}${Object.keys(limits).length ? ' Strich = Budget.' : ''}</p>
+      <p class="tiny muted">${s.expense ? `${eur(s.expense)} ausgegeben, ${fixedShare} % davon Fixkosten. Vergleich mit dem Vormonat darunter.` : 'Noch keine Ausgaben in diesem Monat.'}${s.saved - s.unsaved > 0 ? ` Dazu ${eur(s.saved - s.unsaved)} in Spartöpfe gelegt.` : ''}${Object.keys(limits).length ? ' Strich = Budget.' : ''}</p>
       <div class="rank" style="margin-top:12px">${rows.map(r => {
         const d = r.v - r.p, dTxt = !r.p ? 'im Vormonat nichts' : d === 0 ? 'wie im Vormonat' : `${d > 0 ? '+' : '−'}${eur(Math.abs(d))} zum Vormonat`;
         return `<button class="rank-row" data-group="${r.g.id}" style="border:0;background:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit">
@@ -359,7 +480,7 @@ function renderStats() {
 const tx = { kind: 'expense', group: null, cat: null, editing: null, catTouched: false, source: 'manual' };
 function drawCats() {
   const groups = groupsFor(tx.kind);
-  const recent = topCategories(state.tx, tx.kind, 5).filter(id => cat(id).group);
+  const recent = topCategories(real(state.tx), tx.kind, 5).filter(id => cat(id).group);
   $('#tx-recent').innerHTML = recent.length && !tx.editing ? recent.map(id => `<button type="button" class="chip ${tx.cat === id ? 'on' : ''}" data-cat="${esc(id)}">${cat(id).icon} ${esc(cat(id).label)}</button>`).join('') : '';
   $('#tx-groups').innerHTML = groups.length > 1 ? groups.map(g => `<button type="button" role="radio" aria-checked="${tx.group === g.id}" data-g="${g.id}"><span aria-hidden="true">${g.icon}</span>${esc(g.label)}</button>`).join('') : '';
   const subs = tx.group ? subsOf(tx.group) : [];
@@ -377,7 +498,9 @@ function openTx(t = null, preset = {}) {
   const when = d === state.today ? 'today' : d === addDays(state.today, -1) ? 'yesterday' : 'other';
   $$('[name=when]').forEach(r => r.checked = r.value === when);
   $('#tx-date').value = d; $('#tx-date').classList.toggle('hidden', when !== 'other');
-  $('#tx-delete').classList.toggle('hidden', !t);
+  const ro = whoWidget($('#tx-who'), { account: t ? t.accountId : lastAccount(), owner: t ? t.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!t });
+  $('#tx-delete').classList.toggle('hidden', !t || ro);
+  $('#tx-save').classList.toggle('hidden', ro);
   $('#tx-err').textContent = ''; $('#tx-photo-msg').textContent = t?.recurringId ? 'Automatisch aus den Fixkosten gebucht. Änderungen gelten nur für diese eine Buchung.' : '';
   const notes = [...new Set(state.tx.filter(x => x.note && x.source !== 'recurring').map(x => x.note))].slice(0, 60);
   $('#note-list').innerHTML = notes.map(n => `<option value="${esc(n)}">`).join('');
@@ -393,7 +516,11 @@ async function saveTxForm() {
   if (!tx.cat) { $('#tx-err').textContent = 'Bitte eine Kategorie antippen.'; return; }
   if (!isIso(date)) { $('#tx-err').textContent = 'Bitte ein gültiges Datum wählen.'; return; }
   const old = tx.editing;
-  const t = { ...(old ?? {}), id: old?.id ?? uid(), date, amount, kind: tx.kind, category: tx.cat, note: $('#tx-note').value.trim(), source: old?.source ?? tx.source, createdAt: old?.createdAt ?? new Date().toISOString() };
+  const who = whoValue($('#tx-who'));
+  if (who.readOnly) return;
+  const t = { ...(old ?? {}), id: old?.id ?? uid(), date, amount, kind: tx.kind, category: tx.cat, note: $('#tx-note').value.trim(), source: old?.source ?? tx.source, createdAt: old?.createdAt ?? new Date().toISOString(),
+    accountId: who.accountId, owner: keepOwner(old, who.owner) };
+  if (who.accountId) localStorage.setItem('haushaltskasse.account', who.accountId);
   if (!old) { t.recurringId = null; t.dueDate = null; }
   // Sofort anzeigen, dann im Hintergrund speichern
   state.tx = [t, ...state.tx.filter(x => x.id !== t.id)].sort(byDateDesc);
@@ -405,6 +532,7 @@ async function saveTxForm() {
     if (e.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); return; }
     state.tx = old ? state.tx.map(x => x.id === t.id ? old : x) : state.tx.filter(x => x.id !== t.id); render();
     ask('Nicht gespeichert', `<p>${esc(e.message)}</p>`);
+    if (e.stale) scheduleReload();
   }
 }
 async function deleteTx(t, silent = false) {
@@ -449,6 +577,9 @@ function recHint() {
 function openRec(r = null, preset = {}) {
   recEditing = r;
   const kind = r?.kind ?? preset.kind ?? 'expense';
+  const ro = whoWidget($('#rec-who'), { account: r ? r.accountId : lastAccount(), owner: r ? r.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!r });
+  $('#form-rec [type=submit]').classList.toggle('hidden', ro);
+  recReadOnly = ro;
   $$('[name=rkind]').forEach(x => x.checked = x.value === kind);
   $('#rec-title').textContent = r ? (kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten') : kind === 'income' ? 'Neue regelmäßige Einnahme' : 'Neue Fixkosten';
   $('#rec-name').value = r?.name ?? preset.name ?? '';
@@ -461,7 +592,7 @@ function openRec(r = null, preset = {}) {
   $('#rec-cend').value = r?.contractEnd ?? '';
   $('#rec-notice').innerHTML = noticeOptions(r?.noticeMonths);
   $('#rec-contract').open = !!(r?.contractEnd || r?.noticeMonths != null);
-  $('#rec-delete').classList.toggle('hidden', !r);
+  $('#rec-delete').classList.toggle('hidden', !r || recReadOnly);
   $('#rec-err').textContent = '';
   const pol = r?.policyId && state.policies.find(p => p.id === r.policyId);
   recHint();
@@ -478,7 +609,9 @@ async function saveRecForm() {
   if (end && (!isIso(end) || end < next)) return err('Die letzte Abbuchung muss nach der nächsten liegen.');
   const old = recEditing;
   const scheduleChanged = !old || old.freq !== freq || old.nextDue !== next || !old.active;
-  const r = { ...(old ?? {}), name, amount, kind, freq, category: $('#rec-cat').value, endDate: end || null, contractEnd: $('#rec-cend').value || null,
+  const who = whoValue($('#rec-who'));
+  if (who.readOnly) return;
+  const r = { ...(old ?? {}), accountId: who.accountId, owner: keepOwner(old, who.owner), name, amount, kind, freq, category: $('#rec-cat').value, endDate: end || null, contractEnd: $('#rec-cend').value || null,
     noticeMonths: $('#rec-notice').value === '' ? null : +$('#rec-notice').value, active: true,
     ...(scheduleChanged ? { startDate: next, nextDue: next, n: 0 } : {}) };
   if (next < addMonths(state.today, -24)) return err('Die nächste Abbuchung darf höchstens zwei Jahre zurückliegen.');
@@ -491,9 +624,12 @@ async function saveRecForm() {
 }
 
 // ---------- Versicherung bearbeiten ----------
-let polEditing = null, polFile = null, polRead = null;
+let polEditing = null, polFile = null, polRead = null, polReadOnly = false, recReadOnly = false;
 function openPolicy(p = null) {
   polEditing = p; polFile = null; polRead = null;
+  const roPol = whoWidget($('#pol-who'), { account: undefined, owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, accounts: false, hint: 'Eine private Police (auch die Datei) sieht dein Partner nur, wenn du Versicherungen freigibst.' });
+  $('#form-pol [type=submit]').classList.toggle('hidden', roPol);
+  polReadOnly = roPol;
   const r = p && (state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id));
   $('#pol-title').textContent = p ? p.name : 'Neue Versicherung';
   $('#pol-name').value = p?.name ?? '';
@@ -510,7 +646,8 @@ function openPolicy(p = null) {
   $('#pol-file').value = '';
   $('#pol-file-state').textContent = p?.pageCount ? `Hinterlegt: ${p.fileName ?? 'Text'} (${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}${p.textSource === 'photo' ? ', per KI abgeschrieben' : p.textSource === 'manual' ? ', Text eingefügt' : ''}). Neue Datei ersetzt sie.` : p?.filePath ? `Datei hinterlegt (${p.fileName}), aber kein lesbarer Text.` : 'Noch keine Police hinterlegt. Am besten das PDF aus dem Kundenportal oder der E-Mail des Versicherers.';
   $('#pol-file-msg').textContent = ''; $('#pol-progress').classList.add('hidden');
-  $('#pol-delete').classList.toggle('hidden', !p);
+  $('#pol-delete').classList.toggle('hidden', !p || polReadOnly);
+  $('#pol-file').closest('fieldset').querySelectorAll('input,textarea,button').forEach(x => { x.disabled = polReadOnly; });
   $('#pol-err').textContent = '';
   $('#dlg-pol').showModal();
 }
@@ -539,7 +676,9 @@ async function savePolicyForm() {
   if (amountRaw && !amount) return err('Der Beitrag ist keine gültige Zahl.');
   if (amount && !isIso(next)) return err('Bitte das Datum der nächsten Abbuchung angeben, damit der Beitrag als Fixkosten gebucht wird.');
   const old = polEditing;
-  const p = { ...(old ?? {}), id: old?.id ?? uid(), name, category: $('#pol-cat').value, insurer: $('#pol-insurer').value.trim(), policyNo: $('#pol-no').value.trim(),
+  const who = whoValue($('#pol-who'));
+  if (who.readOnly) return;
+  const p = { ...(old ?? {}), owner: keepOwner(old, who.owner), id: old?.id ?? uid(), name, category: $('#pol-cat').value, insurer: $('#pol-insurer').value.trim(), policyNo: $('#pol-no').value.trim(),
     contractEnd: $('#pol-cend').value || null, noticeMonths: $('#pol-notice').value === '' ? null : +$('#pol-notice').value, notes: $('#pol-notes').value.trim() };
   const btn = $('#form-pol [type=submit]'); btn.disabled = true; btn.textContent = 'Speichert …';
   try {
@@ -555,7 +694,7 @@ async function savePolicyForm() {
     const freq = $('#pol-freq').value;
     if (amount) {
       const changed = !r || r.freq !== freq || r.nextDue !== next || !r.active;
-      await store.saveRecurring({ ...(r ?? {}), name, amount, kind: 'expense', category: p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
+      await store.saveRecurring({ ...(r ?? {}), owner: p.owner, accountId: r?.accountId ?? lastAccount(), name, amount, kind: 'expense', category: p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
         contractEnd: null, noticeMonths: null, ...(changed ? { startDate: next, nextDue: next, n: 0 } : {}) });
     } else if (r && (await ask('Beitrag entfernen?', `<p>Die Fixkosten „${esc(r.name)}“ gehören zu dieser Versicherung. Sollen sie gelöscht werden? Bisherige Buchungen bleiben.</p>`, [{ value: '', label: 'Behalten' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes') {
       await store.deleteRecurring(r.id);
@@ -568,12 +707,398 @@ async function savePolicyForm() {
   finally { btn.disabled = false; btn.textContent = 'Speichern'; }
 }
 
+// ---------- ETFs ----------
+const ETF_ICONS = ['📈', '🌍', '🇪🇺', '🇺🇸', '🌏', '🏭', '💡', '🌱', '🏦', '💹'];
+const signedEur = c => (c > 0 ? '+' : c < 0 ? '−' : '') + eur(Math.abs(c));
+const pct = v => v == null ? '' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('de-DE', { maximumFractionDigits: 1 })} %`;
+const pctIn = v => v == null ? '' : ` (${pct(v)})`;
+function etfCard(p, paid) {
+  const rate = potRate(p.id), cur = etfValue(p, state.potTx), g = etfGain(paid, cur.value);
+  const old = p.marketValueAt && diffDays(p.marketValueAt, state.today) > 45;
+  return `<li><button class="pot" data-pot="${esc(p.id)}">
+    <span class="ic" aria-hidden="true">${esc(p.icon)}</span><span class="nm">${esc(p.name)}${p.owner ? ' 🔒' : ''}</span>
+    <span class="bal">${cur.value != null ? (cur.estimated ? 'ca. ' : '') + eur(cur.value) : eur(paid)}</span>
+    <span class="gl">${esc(p.isin || 'ETF')}</span><span class="gl r ${g ? (g.gain >= 0 ? 'gain-up' : 'gain-down') : ''}">${g ? `${g.gain >= 0 ? '▲' : '▼'} ${g.pct != null ? pct(g.pct) : signedEur(g.gain)}` : 'Wert fehlt'}</span>
+    <span class="etf-grid"><span>Eingezahlt</span><span>${g ? 'Gewinn/Verlust' : 'Sparplan'}</span><b>${eur(paid)}</b><b class="${g ? (g.gain >= 0 ? 'gain-up' : 'gain-down') : ''}">${g ? signedEur(g.gain) : rate ? eur(rate) + ' im Monat' : '–'}</b></span>
+    <span class="note ${old ? 'behind' : ''}">${rate ? `Sparplan ${eur(rate)} im Monat` : 'Kein Sparplan'}${p.marketValueAt ? ` · Wert vom ${dateShort(p.marketValueAt)}${cur.estimated ? ', seitdem Ein-/Auszahlungen dazugerechnet' : ''}${old ? ' (bitte aktualisieren)' : ''}` : ''}</span></button></li>`;
+}
+function etfSection() {
+  const etfs = V.pots.filter(p => !p.archived && p.kind === 'etf');
+  const bal = potBalances(state.pots, state.potTx);
+  const paid = etfs.reduce((a, p) => a + (bal.get(p.id) ?? 0), 0);
+  const allValued = etfs.length && etfs.every(p => p.marketValue != null);
+  const value = etfs.reduce((a, p) => a + (etfValue(p, state.potTx).value ?? bal.get(p.id) ?? 0), 0);
+  const g = allValued ? etfGain(paid, value) : null;
+  const rate = etfs.reduce((a, p) => a + potRate(p.id), 0);
+  const otherEtf = state.scope === 'shared' ? [] : others().filter(m => sc(m.userId)).map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'etfbal').reduce((a, x) => a + x.total, 0) })).filter(x => x.total);
+  return `<div class="section-head"><h2>ETFs${etfs.length ? ` · ${eur(value)}` : ''}</h2><button class="btn link" data-act="add-etf">${etfs.length ? 'Neuer ETF' : 'Anlegen'}</button></div>`
+    + (etfs.length ? `${etfs.length > 1 || g ? `<p class="tiny muted" style="margin:0 4px 8px">Eingezahlt ${eur(paid)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)}${pctIn(g.pct)}</span>` : ''}${rate ? ` · Sparpläne ${eur(rate)} im Monat` : ''}</p>` : ''}<ul class="list">${etfs.map(p => etfCard(p, bal.get(p.id) ?? 0)).join('')}</ul>
+      <p class="tiny muted" style="margin:6px 4px 0">Den Wert trägst du selbst ein, z. B. aus der Banking-App. Keine Anlageberatung.</p>`
+      : `<div class="card empty"><p>Trag deine ETF-Sparpläne ein: Die App zählt mit, wie viel du eingezahlt hast. Mit dem aktuellen Depotwert siehst du Gewinn oder Verlust.</p><button class="btn" data-act="add-etf">ETF anlegen</button></div>`)
+    + otherEtf.map(x => `<p class="tiny muted" style="margin:8px 4px 0">🔒 ${esc(x.m.displayName || 'Partner')} hat ${eur(x.total)} in eigene ETFs eingezahlt (nur Summe freigegeben).</p>`).join('');
+}
+
+// ---------- Bargeld-Umschläge ----------
+const CASH_ICONS = ['💶', '🥕', '💇', '🪙', '☕', '🍺', '🎁', '🧒', '🚌', '🧺', '🐾', '🎟️'];
+function cashSection() {
+  const key = state.month, cur = key === state.today.slice(0, 7), future = key > state.today.slice(0, 7);
+  const list = V.cash.filter(e => e.active);
+  const p = cashPending(V.cash, state.tx, key, state.today, groupOf);
+  const booked = real(V.tx).filter(t => t.source === 'cash' && monthKey(t.date) === key);
+  const bookedSum = booked.reduce((a, t) => a + t.amount, 0);
+  const writableOpen = p.open.filter(e => canWrite(e.owner));
+  const head = `<div class="section-head"><h2>Bargeld</h2><button class="btn link" data-act="add-cash">${list.length ? 'Neuer Umschlag' : 'Anlegen'}</button></div>`;
+  if (!list.length && !bookedSum) return head + `<div class="card empty"><p>Lege Umschläge für Dinge an, die du bar bezahlst, z. B. Wochenmarkt, Friseur oder Taschengeld. Die App rechnet zusammen, wie viel du im Monat abheben musst.</p><button class="btn" data-act="add-cash">Umschlag anlegen</button></div>`;
+  const top = (cur || future) && p.total
+    ? `<div class="cash-sum"><span>${cur ? 'Diesen Monat abheben' : `Im ${esc(monthName(key).split(' ')[0])} abheben`}</span><b>${eur(p.total)}</b></div>`
+    : bookedSum ? `<div class="cash-sum"><span class="cash-done">✓ Abgehoben im ${esc(monthName(key).split(' ')[0])}</span><b>${eur(bookedSum)}</b></div>` : '';
+  const rows = list.map(e => {
+    const done = p.done.some(x => x.id === e.id) || (!cur && !future);
+    return `<li><button class="item" data-cash="${esc(e.id)}"><span class="ic" aria-hidden="true">${esc(e.icon)}</span>
+      <span><span class="t">${esc(e.name)}</span><span class="s">${esc(cat(e.category).label)}${ownerTag(e.owner)}${done && (cur || future) ? ' · ✓ abgehoben' : ''}</span></span>
+      <span class="a">${eur(e.amount)}</span></button></li>`;
+  }).join('');
+  const btn = cur && writableOpen.length ? `<div style="padding:4px 14px 14px"><button class="btn primary" style="width:100%" data-act="cash-withdraw">Abgehoben: ${eur(writableOpen.reduce((a, e) => a + e.amount, 0))}</button>
+    <p class="tiny muted" style="margin-top:6px">Bucht die Umschläge als ausgegeben, jeweils unter ihrer Kategorie. Bis dahin zählen sie wie offene Fixkosten.</p></div>` : '';
+  return head + `<div class="card" style="padding:0">${top}<ul class="list" style="box-shadow:none;border-radius:0">${rows}</ul>${btn}</div>`;
+}
+let cashEditing = null;
+function openCash(e = null) {
+  cashEditing = e;
+  $('#cash-title').textContent = e ? `${e.icon} ${e.name}` : 'Neuer Bargeld-Umschlag';
+  $('#cash-name').value = e?.name ?? '';
+  const icon = e?.icon ?? '💶';
+  $('#cash-icons').innerHTML = CASH_ICONS.map(i => `<label><input type="radio" name="cash-icon" value="${i}" ${i === icon ? 'checked' : ''} aria-label="Symbol ${i}"><span aria-hidden="true">${i}</span></label>`).join('');
+  $('#cash-amount').value = e ? amountInput(e.amount) : '';
+  $('#cash-cat').innerHTML = catOptions('expense', e?.category ?? 'sonstiges');
+  const ro = whoWidget($('#cash-who'), { account: undefined, owner: e ? e.owner : (myMember().defaultPrivate ? me() : null), editing: !!e, accounts: false, hint: 'Ein privater Umschlag zählt nur zu deiner Abhebesumme.' });
+  $('#form-cash [type=submit]').classList.toggle('hidden', ro);
+  $('#cash-delete').classList.toggle('hidden', !e || ro);
+  $('#cash-err').textContent = '';
+  $('#dlg-cash').showModal();
+}
+async function saveCashForm() {
+  const err = m => { $('#cash-err').textContent = m; };
+  const name = $('#cash-name').value.trim(), amount = parseAmount($('#cash-amount').value);
+  if (!name) return err('Bitte einen Namen eingeben.');
+  if (!amount) return err('Bitte den Betrag pro Monat eingeben.');
+  const who = whoValue($('#cash-who')); if (who.readOnly) return;
+  const old = cashEditing;
+  try {
+    await store.saveCash({ ...(old ?? {}), name, amount, icon: $$('[name=cash-icon]').find(x => x.checked)?.value ?? '💶', category: $('#cash-cat').value, owner: keepOwner(old, who.owner), active: true });
+    $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast(old ? 'Umschlag gespeichert' : `Umschlag „${name}“ angelegt`);
+  } catch (e) { err(e.message); }
+}
+async function withdrawCash() {
+  const key = state.today.slice(0, 7);
+  const open = cashPending(V.cash, state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
+  if (!open.length) return;
+  const total = open.reduce((a, e) => a + e.amount, 0);
+  // Gemeinsames Bargeld nur von gemeinsamen Konten, eigenes nur von eigenen (und keine fremden privaten Konten)
+  const groups = [
+    { id: 'shared', label: 'Gemeinsames Bargeld von', envs: open.filter(e => e.owner == null), accs: state.accounts.filter(a => !a.archived && a.owner == null) },
+    { id: 'mine', label: 'Eigenes Bargeld von', envs: open.filter(e => e.owner != null), accs: state.accounts.filter(a => !a.archived && a.owner === me()) },
+  ].filter(g => g.envs.length);
+  const pick = g => { const last = lastAccount(); return g.accs.some(a => a.id === last) ? last : g.accs[0]?.id; };
+  const v = await ask(`${eur(total)} abgehoben?`, `<p>${open.map(e => `${esc(e.icon)} ${esc(e.name)} ${eur(e.amount)}${e.owner ? ' 🔒' : ''}`).join('<br>')}</p>
+    ${groups.filter(g => g.accs.length).map(g => `<label class="field">${groups.length > 1 ? g.label : 'Von welchem Konto?'}<select id="cash-acc-${g.id}">${g.accs.map(a => `<option value="${esc(a.id)}" ${a.id === pick(g) ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}<option value="">ohne Konto</option></select></label>`).join('')}
+    <p class="tiny muted">Wird heute je Umschlag als Ausgabe gebucht.</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Ja, abgehoben', cls: 'primary' }]);
+  if (v !== 'ok') return;
+  const accFor = e => $(`#cash-acc-${e.owner == null ? 'shared' : 'mine'}`)?.value || null;
+  let n = 0, queued = 0;
+  for (const e of open) {
+    const t = { id: uid(), date: state.today, amount: e.amount, kind: 'expense', category: e.category, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: e.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() };
+    try { await store.saveTx(t); n++; }
+    catch (err) {
+      if (err.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); state.tx = [t, ...state.tx].sort(byDateDesc); queued++; continue; }
+      if (!err.duplicate) { ask('Nicht gebucht', `<p>${esc(err.message)}</p>`); break; }
+    }
+  }
+  if (!queued) { try { await loadAll({ book: false }); } catch (e) { console.warn(e); } }
+  render();
+  if (n || queued) toast(queued ? `Bargeld ${eur(total)} gemerkt, wird gesendet, sobald Netz da ist` : `Bargeld ${eur(total)} gebucht`);
+}
+
+// ---------- Spartöpfe ----------
+const POT_ICONS = ['🐷', '🏖️', '🛟', '🚗', '🏠', '🎁', '💍', '🎓', '👶', '💻', '🚲', '🎄'];
+function potCard(p, bal) {
+  const rate = potRate(p.id), plan = potPlan(p, bal, rate, state.today);
+  const until = p.targetDate ? ` bis ${monthShort(p.targetDate.slice(0, 7))} ${p.targetDate.slice(0, 4)}` : '';
+  let note = '', cls = plan.status ?? '';
+  if (!plan.hasGoal) note = rate ? `Sparrate ${eur(rate)} im Monat` : 'Ohne Ziel';
+  else if (plan.status === 'done') note = '🎉 Ziel erreicht';
+  else if (plan.status === 'late') note = `⚠️ Zieldatum vorbei, es fehlen noch ${eur(plan.missing)}`;
+  else if (plan.status === 'ontrack') note = `Im Plan: ${eur(rate)} im Monat reichen`;
+  else if (plan.status === 'behind') note = `⚠️ Fürs Ziel ${eur(plan.need)} im Monat nötig, Sparrate ist ${eur(rate)}`;
+  else if (plan.need) note = `Noch ${eur(plan.missing)}: ${eur(plan.need)} im Monat${until}`;
+  else note = rate ? `Mit ${eur(rate)} im Monat in ca. ${plan.etaMonths} ${plan.etaMonths === 1 ? 'Monat' : 'Monaten'} erreicht` : `Noch ${eur(plan.missing)} bis zum Ziel`;
+  return `<li><button class="pot" data-pot="${esc(p.id)}">
+    <span class="ic" aria-hidden="true">${esc(p.icon)}</span><span class="nm">${esc(p.name)}${p.owner ? ' 🔒' : ''}</span><span class="bal">${eur(bal)}</span>
+    <span class="gl">${plan.hasGoal ? `Ziel ${eur(p.goal)}${until}` : p.autoRest ? 'bekommt den Monatsrest' : ''}</span><span class="gl r">${plan.hasGoal ? Math.round(plan.ratio * 100) + ' %' : ''}</span>
+    ${plan.hasGoal ? `<span class="meter"><i style="width:${(plan.ratio * 100).toFixed(1)}%"></i></span>` : ''}
+    <span class="note ${cls}">${note}</span></button></li>`;
+}
+function potsSection() {
+  const pots = V.pots.filter(p => !p.archived && p.kind !== 'etf');
+  const bal = potBalances(state.pots, state.potTx);
+  const otherBal = state.scope === 'shared' ? [] : others().filter(m => sc(m.userId)).map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'potbal').reduce((a, x) => a + x.total, 0) })).filter(x => x.total);
+  const total = pots.reduce((a, p) => a + (bal.get(p.id) ?? 0), 0);
+  return `<div class="section-head"><h2>Spartöpfe${pots.length ? ` · ${eur(total)}` : ''}</h2><button class="btn link" data-act="add-pot">${pots.length ? 'Neuer Topf' : 'Anlegen'}</button></div>`
+    + (pots.length ? `<ul class="list">${pots.map(p => potCard(p, bal.get(p.id) ?? 0)).join('')}</ul>`
+      : `<div class="card empty"><p>Leg Geld für Urlaub, Auto oder einen Notgroschen zur Seite. Mit fester Sparrate und dem, was am Monatsende übrig bleibt.</p><button class="btn primary" data-act="add-pot">Spartopf anlegen</button></div>`)
+    + otherBal.map(x => `<p class="tiny muted" style="margin:8px 4px 0">🔒 ${esc(x.m.displayName || 'Partner')} hat ${eur(x.total)} in eigenen Spartöpfen (nur Summe freigegeben).</p>`).join('');
+}
+
+// Was am Ende eines Monats übrig blieb. Nur für Monate, in denen die App wirklich genutzt wurde (mindestens 5 eigene Buchungen).
+// Monatsrest: Gibt es mehrere Personen, wird getrennt gerechnet: was gemeinsam übrig blieb (gemeinsame Einnahmen − gemeinsame Ausgaben)
+// und was jeder privat übrig hat. So zählt nichts doppelt, und niemand verteilt das Geld des anderen. Allein: alles zusammen.
+// Nur für Monate, in denen die App wirklich genutzt wurde (mindestens 5 eigene Buchungen).
+function restScopes() {
+  return multi()
+    ? [{ id: 'shared', label: 'gemeinsam', filter: o => o == null, ref: m => `rest:${m}:shared`, pots: () => state.pots.filter(p => !p.archived && p.kind !== 'etf' && p.owner == null) },
+       { id: me(), label: 'bei dir privat', filter: o => o === me(), ref: m => `rest:${m}:${me()}`, pots: () => state.pots.filter(p => !p.archived && p.kind !== 'etf' && canWrite(p.owner)) }]
+    : [{ id: 'all', label: '', filter: o => canWrite(o), ref: m => `rest:${m}`, pots: () => state.pots.filter(p => !p.archived && p.kind !== 'etf' && canWrite(p.owner)) }];
+}
+const closedKey = (m, sc) => sc.id === 'all' ? m : `${m}:${sc.id}`;
+function restCandidates() {
+  const m = shiftMonth(state.today.slice(0, 7), -1);
+  return restScopes().map(sc => {
+    if (!sc.pots().length || state.config.closed?.[closedKey(m, sc)] || state.tx.some(t => t.extRef === sc.ref(m))) return null;
+    const used = real(state.tx).filter(t => monthKey(t.date) === m && t.source !== 'recurring' && !t.potId && sc.filter(t.owner)).length;
+    const s = monthSummary({ tx: real(state.tx).filter(t => sc.filter(t.owner)), recurring: state.recurring.filter(r => sc.filter(r.owner)), key: m, today: state.today, groupOf });
+    if (used < 5 || !s.income || s.free <= 0) return null;
+    return { month: m, amount: s.free, sc };
+  }).filter(Boolean);
+}
+function restCard() {
+  if (state.month !== state.today.slice(0, 7)) return '';
+  return restCandidates().map(c => `<div class="card" style="margin-top:14px;display:grid;gap:10px">
+    <p><b>Im ${esc(monthName(c.month).split(' ')[0])} sind ${c.sc.label ? esc(c.sc.label) + ' ' : ''}${eur(c.amount)} übrig geblieben.</b></p>
+    <p class="tiny muted">In einen Spartopf legen? Gebucht wird am letzten Tag des Monats, der laufende Monat bleibt unverändert.</p>
+    <div class="row wrap"><select id="rest-pot-${esc(c.sc.id)}" aria-label="Spartopf" style="flex:1;min-width:140px">${c.sc.pots().map(p => `<option value="${esc(p.id)}">${esc(p.icon)} ${esc(p.name)}${p.owner ? ' 🔒' : ''}</option>`).join('')}</select>
+      <button class="btn primary" data-act="rest-book" data-scope-id="${esc(c.sc.id)}">In Topf legen</button>
+      <button class="btn" data-act="rest-keep" data-scope-id="${esc(c.sc.id)}">Behalten</button></div></div>`).join('');
+}
+async function bookRest(c, pot, auto = false) {
+  const { month, amount, sc } = c;
+  const t = { id: uid(), owner: pot.owner ?? null, date: lastDayOfMonth(month), amount, kind: 'save', category: 'fi-sparen', potId: pot.id, note: `Rest aus ${monthName(month)}`, source: 'rest', extRef: sc.ref(month), createdAt: new Date().toISOString() };
+  state.config.closed = { ...(state.config.closed ?? {}), [closedKey(month, sc)]: auto ? 'auto' : 'pot' }; saveConfigSoon(0);
+  try { await store.saveTx(t); toast(`${eur(amount)} aus dem ${monthName(month).split(' ')[0]} ${auto ? 'automatisch ' : ''}in „${pot.name}“ gelegt`); }
+  catch (e) { if (!e.duplicate) { ask('Nicht gebucht', `<p>${esc(e.message)}</p>`); return; } }
+  await loadAll({ book: false }); render();
+}
+async function autoRest() {
+  for (const c of restCandidates()) {
+    const pot = c.sc.pots().find(p => p.autoRest && (c.sc.id === 'shared' ? p.owner == null : c.sc.id === 'all' || p.owner === me()));
+    if (pot) await bookRest(c, pot, true);
+  }
+}
+
+function openPot(p = null, newKind = 'pot') {
+  potEditing = p;
+  const isEtf = (p?.kind ?? newKind) === 'etf'; potKind = isEtf ? 'etf' : 'pot';
+  $('#etf-fields').classList.toggle('hidden', !isEtf); $('#pot-goal-wrap').classList.toggle('hidden', isEtf); $('#pot-auto-wrap').classList.toggle('hidden', isEtf);
+  $('#pot-rate-label').textContent = isEtf ? 'Sparplan pro Monat' : 'Sparrate pro Monat';
+  $('#pot-next-label').textContent = isEtf ? 'Nächste Ausführung am' : 'Nächste Sparrate am';
+  $('#etf-isin').value = p?.isin ?? ''; $('#etf-value').value = p?.marketValue != null ? amountInput(p.marketValue) : '';
+  $('#pot-name').placeholder = isEtf ? 'z. B. MSCI World, FTSE All-World' : 'z. B. Urlaub, Notgroschen, neues Auto';
+  const rec = p && state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active);
+  const roPot = whoWidget($('#pot-who'), { account: rec ? rec.accountId : lastAccount(), owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, hint: isEtf ? 'Ein privater ETF zählt nur für dich. Der Sparplan geht vom gewählten Konto ab.' : 'Ein privater Topf zählt nur für dich. Die Sparrate geht vom gewählten Konto ab.' });
+  const bal = p ? potBalances(state.pots, state.potTx).get(p.id) ?? 0 : 0;
+  $('#pot-title').textContent = p ? `${p.icon} ${p.name}` : isEtf ? 'Neuer ETF' : 'Neuer Spartopf';
+  $('#pot-name').value = p?.name ?? '';
+  const icon = p?.icon ?? (isEtf ? '📈' : '🐷');
+  $('#pot-icons').innerHTML = (isEtf ? ETF_ICONS : POT_ICONS).map(i => `<label><input type="radio" name="pot-icon" value="${i}" ${i === icon ? 'checked' : ''} aria-label="Symbol ${i}"><span aria-hidden="true">${i}</span></label>`).join('');
+  $('#pot-goal').value = p?.goal ? amountInput(p.goal).replace(',00', '') : '';
+  $('#pot-date').value = p?.targetDate ?? '';
+  $('#pot-rate').value = rec ? amountInput(rec.amount) : '';
+  $('#pot-next').value = rec?.nextDue ?? addMonths(state.today.slice(0, 7) + '-01', 1);
+  $('#pot-start').value = p ? amountInput(p.startBalance) : '';
+  $('#pot-start-wrap').firstChild.textContent = isEtf ? (p ? 'Eingezahlt vor dem Anlegen (€)' : 'Schon eingezahlt (€)') : p ? 'Startbetrag beim Anlegen (€)' : 'Schon drauf (€)';
+  $('#pot-auto').checked = !!p?.autoRest;
+  $('#pot-delete').classList.toggle('hidden', !p || p.archived);
+  $('#form-pot [type=submit]').classList.toggle('hidden', !!p?.archived || roPot);
+  if (roPot) $('#pot-delete').classList.add('hidden');
+  $('#pot-err').textContent = ''; $('#pot-hint').textContent = p?.archived ? 'Dieser Topf ist aufgelöst. Die Bewegungen bleiben zur Übersicht erhalten.' : '';
+  const moves = p ? state.potTx.filter(t => t.potId === p.id).slice(0, 30) : [];
+  $('#pot-summary').innerHTML = p ? `<div class="pot-head">
+      ${isEtf ? (() => { const cur = etfValue(p, state.potTx), g = etfGain(bal, cur.value); return `<span class="tiny muted">${cur.value != null ? `${cur.estimated ? 'Geschätzt: ' : ''}Wert vom ${dateShort(p.marketValueAt ?? state.today)}${cur.estimated ? ' plus Ein-/Auszahlungen seitdem' : ''}` : 'Eingezahlt'}</span><span class="big">${eur(cur.value ?? bal)}</span>
+        <span class="tiny">Eingezahlt ${eur(bal)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)}${pctIn(g.pct)}</span>` : ''}</span>`; })()
+      : `<span class="tiny muted">Stand</span><span class="big">${eur(bal)}</span>`}
+      ${p.goal ? `<span class="meter"><i style="width:${Math.min(100, 100 * bal / p.goal).toFixed(1)}%;background:var(--good)"></i></span><span class="tiny">${Math.round(Math.min(1, bal / p.goal) * 100)} % von ${eur(p.goal)}</span>` : ''}
+      ${p.archived || roPot ? '' : `<div class="row wrap"><button type="button" class="btn small primary" id="pot-in">${isEtf ? 'Einmal einzahlen' : 'Einzahlen'}</button><button type="button" class="btn small" id="pot-out">${isEtf ? 'Verkauf' : 'Entnehmen'}</button></div>`}</div>
+    ${moves.length ? `<details class="more"><summary>Bewegungen (${moves.length})</summary><ul class="list">${moves.map(t => `<li class="item" style="cursor:default"><span class="ic" aria-hidden="true">${t.kind === 'save' ? '↘' : '↗'}</span>
+      <span><span class="t">${t.kind === 'save' ? 'Eingezahlt' : isEtf ? 'Verkauft' : 'Entnommen'}</span><span class="s">${dateShort(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</span></span>
+      <span class="a">${t.kind === 'save' ? '+' : '−'}${eur(t.amount)}${roPot || p.archived ? '' : ` <button type="button" class="btn small danger" data-del-move="${esc(t.id)}" aria-label="Bewegung löschen">✕</button>`}</span></li>`).join('')}</ul></details>` : ''}` : '';
+  if (p) {
+    if ($('#pot-in')) { $('#pot-in').onclick = () => potMove(p, 'save'); $('#pot-out').onclick = () => potMove(p, 'unsave'); }
+    $$('[data-del-move]').forEach(b => b.onclick = async () => {
+      if (!(await confirmDelete('Bewegung'))) return;
+      try { await store.deleteTx(b.dataset.delMove); await loadAll({ book: false }); render(); openPot(potOf(p.id)); } catch (e) { $('#pot-err').textContent = e.message; }
+    });
+  }
+  if (!$('#dlg-pot').open) $('#dlg-pot').showModal();
+}
+let potEditing = null, potKind = 'pot';
+async function potMove(p, kind) {
+  const etf = p.kind === 'etf';
+  const v = await ask(kind === 'save' ? `In „${p.name}“ einzahlen` : etf ? `„${p.name}“ teilweise verkaufen` : `Aus „${p.name}“ entnehmen`,
+    `<label class="field">${etf && kind === 'unsave' ? 'Verkaufserlös (€)' : 'Betrag (€)'}<input id="mv-amount" inputmode="decimal" placeholder="0,00"></label><label class="field">Notiz <span class="muted">(optional)</span><input id="mv-note" maxlength="80" placeholder="${kind === 'save' ? (etf ? 'z. B. Bonus angelegt' : 'z. B. Geburtstagsgeld') : etf ? 'z. B. Teilverkauf' : 'z. B. Flug gebucht'}"></label>
+     <p class="tiny muted">${kind === 'save' ? 'Zählt im laufenden Monat als gespart und mindert, was frei ist.' : 'Das Geld steht dann im laufenden Monat wieder zur Verfügung.'}${etf ? ' Der Depotwert wird um diesen Betrag fortgeschrieben, bis du einen neuen einträgst.' : ''}</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: kind === 'save' ? 'Einzahlen' : etf ? 'Verkauf buchen' : 'Entnehmen', cls: 'primary' }]);
+  if (v !== 'ok') return;
+  const amount = parseAmount($('#mv-amount').value);
+  if (!amount) { toast('Kein gültiger Betrag'); return; }
+  const bal = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
+  const limit = etf ? (etfValue(p, state.potTx).value ?? bal) : bal;
+  if (kind === 'unsave' && amount > limit && (await ask(etf ? 'Mehr als der Depotwert' : 'Mehr als drauf ist', `<p>${etf ? `Der ETF ist nach letztem Stand etwa ${eur(limit)} wert.` : `Im Topf sind nur ${eur(bal)}.`} Trotzdem ${eur(amount)} ${etf ? 'als Verkauf buchen' : 'entnehmen'}?</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Trotzdem', cls: 'primary' }])) !== 'ok') return;
+  try {
+    await store.saveTx({ id: uid(), owner: p.owner ?? null, date: state.today, amount, kind, category: p.kind === 'etf' ? 'fi-anlage' : 'fi-sparen', potId: p.id, note: $('#mv-note').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
+    await loadAll({ book: false }); render(); openPot(potOf(p.id));
+    toast(kind === 'save' ? `${eur(amount)} eingezahlt` : etf ? `Verkauf über ${eur(amount)} gebucht` : `${eur(amount)} entnommen`);
+  } catch (e) { $('#pot-err').textContent = e.message; }
+}
+async function savePotForm() {
+  const err = m => { $('#pot-err').textContent = m; };
+  const name = $('#pot-name').value.trim();
+  if (!name) return err('Bitte einen Namen eingeben.');
+  const read = id => { const v = $(id).value.trim(); if (!v) return { ok: true, c: null }; const c = parseAmount(v); return { ok: c != null, c }; };
+  const goal = read('#pot-goal'), rate = read('#pot-rate'), start = read('#pot-start');
+  if (!goal.ok) return err('Das Ziel ist keine gültige Zahl.');
+  if (!rate.ok) return err('Die Sparrate ist keine gültige Zahl.');
+  if (!start.ok) return err('Der Startbetrag ist keine gültige Zahl.');
+  const isEtf = potKind === 'etf';
+  const isin = $('#etf-isin').value.toUpperCase().replace(/\s/g, ''), mv = read('#etf-value');
+  if (isEtf && isin && !isValidIsin(isin)) return err('Die ISIN stimmt nicht (12 Zeichen, z. B. IE00B4L5Y983). Leer lassen geht auch.');
+  if (isEtf && !mv.ok) return err('Der aktuelle Wert ist keine gültige Zahl.');
+  const date = $('#pot-date').value, next = $('#pot-next').value;
+  if (date && !isIso(date)) return err('Bitte ein gültiges Zieldatum wählen.');
+  if (rate.c && !isIso(next)) return err('Bitte angeben, wann die nächste Sparrate abgeht.');
+  if (rate.c && next < state.today && (await ask('Sparrate nachbuchen?', `<p>Die erste Sparrate am ${dateShort(next)} liegt in der Vergangenheit. Alle Raten seit dann werden gebucht.</p>`, [{ value: '', label: 'Datum ändern' }, { value: 'ok', label: 'Nachbuchen', cls: 'primary' }])) !== 'ok') return;
+  const old = potEditing;
+  if (old?.archived) return err('Dieser Topf ist aufgelöst.');
+  const who = whoValue($('#pot-who'));
+  if (who.readOnly) return;
+  const p = { ...(old ?? {}), id: old?.id ?? uid(), name, icon: $$('[name=pot-icon]').find(x => x.checked)?.value ?? '🐷', goal: goal.c || null, targetDate: date || null,
+    startBalance: start.c ?? 0, autoRest: !isEtf && $('#pot-auto').checked, archived: false, owner: keepOwner(old, who.owner), kind: isEtf ? 'etf' : 'pot',
+    ...(isEtf ? { goal: null, targetDate: null, isin: isin || null, marketValue: mv.c, marketValueAt: mv.c == null ? null : mv.c === old?.marketValue ? old.marketValueAt : state.today } : {}) };
+  if (old && old.owner !== p.owner && state.potTx.some(t => t.potId === p.id)) return err('Ein Topf mit Bewegungen kann nicht mehr zwischen privat und gemeinsam wechseln. Lege dafür einen neuen Topf an.');
+  try {
+    await store.savePot(p);
+    const rec = state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active);
+    if (rate.c) {
+      const changed = !rec || rec.nextDue !== next;
+      await store.saveRecurring({ ...(rec ?? {}), name: `${isEtf ? 'Sparplan' : 'Sparrate'} ${name}`, amount: rate.c, kind: 'save', category: isEtf ? 'fi-anlage' : 'fi-sparen', freq: 'monthly', potId: p.id, active: true, owner: p.owner, accountId: who.accountId,
+        endDate: null, contractEnd: null, noticeMonths: null, ...(changed ? { startDate: next, nextDue: next, n: 0 } : {}) });
+    } else if (rec) await store.deleteRecurring(rec.id);
+    $('#dlg-pot').close();
+    await loadAll(); render();
+    toast(old ? (isEtf ? 'ETF gespeichert' : 'Spartopf gespeichert') : `${isEtf ? 'ETF' : 'Spartopf'} „${name}“ angelegt`);
+  } catch (e) { err(e.message); }
+}
+async function dissolvePot() {
+  const p = potEditing, isEtf = p.kind === 'etf';
+  // ETF: zurück kommt der Verkaufserlös (aktueller Wert), nicht die eingezahlte Summe
+  const paidIn = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
+  const bal = isEtf ? (etfValue(p, state.potTx).value ?? paidIn) : paidIn;
+  const hasMoves = state.potTx.some(t => t.potId === p.id) || paidIn !== 0;
+  const v = await ask(`„${p.name}“ auflösen?`, hasMoves || bal
+    ? `<p>${bal > 0 ? `${eur(bal)}${isEtf ? ' (letzter Wert, bitte vorher prüfen)' : ''} kommen als ${isEtf ? 'Verkauf' : 'Entnahme'} zurück in diesen Monat.` : isEtf ? 'Es wird kein Verkaufserlös gebucht.' : 'Der Topf ist leer.'} ${isEtf ? 'Der Sparplan' : 'Die Sparrate'} endet. Bisherige Einzahlungen bleiben in der Auswertung sichtbar.</p>`
+    : '<p>Der Topf hat noch keine Bewegungen und wird gelöscht.</p>',
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Auflösen', cls: 'danger' }]);
+  if (v !== 'ok') return;
+  try {
+    for (const r of state.recurring.filter(r => r.potId === p.id && r.active)) await store.saveRecurring({ ...r, active: false, endDate: state.today < r.startDate ? r.startDate : state.today });
+    if (!hasMoves && !bal) await store.deletePot(p.id);
+    else {
+      if (bal > 0) await store.saveTx({ id: uid(), owner: p.owner ?? null, date: state.today, amount: bal, kind: 'unsave', category: isEtf ? 'fi-anlage' : 'fi-sparen', potId: p.id, note: isEtf ? 'ETF verkauft' : 'Topf aufgelöst', source: 'manual', createdAt: new Date().toISOString() });
+      await store.savePot({ ...p, archived: true, autoRest: false });
+    }
+    $('#dlg-pot').close(); await loadAll({ book: false }); render(); toast(`„${p.name}“ aufgelöst`);
+  } catch (e) { $('#pot-err').textContent = e.message; }
+}
+
+// ---------- Einkäufe aus der Speisekammer ----------
+let pantryTimer = null;
+async function loadPantry() {
+  if (!store.listPantryPurchases) return;
+  if (!state.config.pantrySince) { // ab Einführung: nur Einkäufe der letzten 14 Tage vorschlagen, keine ganze Historie
+    state.config.pantrySince = addDays(state.today, -14);
+    try { await store.setConfig(state.config); } catch { /* nächstes Mal */ }
+  }
+  try {
+    const since = new Date([state.config.pantrySince, addDays(state.today, -45)].sort().pop() + 'T00:00:00');
+    const rows = await store.listPantryPurchases(new Date(since - 86400000).toISOString()); // einen Tag mehr holen, damit Einkäufe am Rand vollständig sind
+    const refs = [...state.tx.map(t => t.extRef).filter(Boolean), ...(state.config.pantryDismissed ?? [])];
+    const all = groupPantry(rows, 3, { since: since.toISOString() });
+    state.pantry = all.filter(p => Date.now() - new Date(p.lastAt) > 3 * 60000 && !pantryDone(p.key, refs)).map(p => ({ ...p, similar: similarTx(real(state.tx), p, groupOf) }));
+    // Bon wird gerade noch gespeichert: in ein paar Minuten erneut schauen
+    clearTimeout(pantryTimer);
+    if (all.some(p => Date.now() - new Date(p.lastAt) <= 3 * 60000)) pantryTimer = setTimeout(() => scheduleReload(), 3.5 * 60000);
+  } catch (e) { console.warn('Speisekammer-Einkäufe', e); state.pantry = []; }
+}
+function pantryCard() {
+  if (!state.pantry.length) return '';
+  const list = state.pantry.slice(-5).reverse();
+  const plain = state.pantry.filter(p => !p.similar).length;
+  return `<div class="section-head"><h2>Aus der Speisekammer</h2>${plain > 1 ? `<button class="btn link" data-act="pantry-all">Alle ${plain} übernehmen</button>` : ''}</div>
+    <div class="card" style="padding:0">${list.map(p => `<div class="suggest">
+      <div class="top"><span><b>🛒 Einkauf ${esc(dayLabel(p.date, state.today))}</b><span class="tiny muted" style="display:block">${p.items.length} Artikel: ${esc(p.items.slice(0, 3).join(', '))}${p.items.length > 3 ? ' …' : ''}</span>${Object.keys(p.parts).length > 1 ? `<span class="tiny muted" style="display:block">Wird aufgeteilt: ${Object.entries(p.parts).map(([c, a]) => `${esc(cat(c).label)} ${eur(a)}`).join(', ')}</span>` : ''}</span><b>${eur(p.amount)}</b></div>
+      ${p.similar ? `<p class="warnline">⚠️ Am selben Tag hast du schon ${eur(p.similar.amount)}${p.similar.note ? ` „${esc(p.similar.note)}“` : ''} erfasst. Derselbe Einkauf?</p>` : ''}
+      <div class="row wrap">${p.similar
+        ? `<button class="btn small" data-act="pantry-skip" data-key="${esc(p.key)}">Ja, schon erfasst</button><button class="btn small" data-act="pantry-take" data-key="${esc(p.key)}">Nein, übernehmen</button>`
+        : `<button class="btn small primary" data-act="pantry-take" data-key="${esc(p.key)}">Übernehmen</button><button class="btn small" data-act="pantry-skip" data-key="${esc(p.key)}">Ignorieren</button>`}</div></div>`).join('')}</div>`;
+}
+async function takePantry(list) {
+  let n = 0, sum = 0;
+  for (const p of list) {
+    // Je Kategorie eine Buchung (z. B. Lebensmittel und Putzmittel vom selben Bon)
+    try {
+      for (const [category, amount] of Object.entries(p.parts)) {
+        try { await store.saveTx({ id: uid(), owner: null, accountId: state.accounts.find(a => a.owner == null && !a.archived)?.id ?? null, date: p.date, amount, kind: 'expense', category, note: 'Einkauf (Speisekammer)', source: 'pantry', extRef: `${p.key}:${category}`, createdAt: new Date().toISOString() }); sum += amount; }
+        catch (e) { if (!e.duplicate) throw e; }
+      }
+      n++;
+    } catch (e) { ask('Nicht übernommen', `<p>${esc(e.message)}</p>`); break; }
+  }
+  await loadAll({ book: false }); render();
+  if (n) toast(`${n === 1 ? 'Einkauf' : n + ' Einkäufe'} übernommen: ${eur(sum)}`);
+}
+function dismissPantry(keys) {
+  state.config.pantryDismissed = [...(state.config.pantryDismissed ?? []), ...keys].slice(-300);
+  state.pantry = state.pantry.filter(p => !keys.includes(p.key));
+  saveConfigSoon(0); render();
+}
+
 // ---------- Einstellungen ----------
-let cfgTimer = null;
-function saveConfigSoon() { clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); setSync(''); } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, 600); }
+let cfgTimer = null, cfgDirty = false;
+// Lokale Änderung bleibt maßgeblich, bis sie gespeichert ist (ein Neuladen dazwischen überschreibt sie nicht)
+function saveConfigSoon(delay = 600) { cfgDirty = true; clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); cfgDirty = false; } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, delay); }
 function openSettings(focus) {
   const hh = store.household(), limits = state.config.limits ?? {};
+  const mm = myMember(), share = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', ...mm.share };
+  const partner = others().map(m => m.displayName || 'Partner').join(' und ') || 'Dein Partner';
+  const shareRow = (area, label, levels) => `<div class="share-row"><span>${label}</span><div class="seg small" role="radiogroup" aria-label="${label}">${levels.map(([v, l]) =>
+    `<label><input type="radio" name="share-${area}" value="${v}" ${share[area] === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>`;
   $('#settings-body').innerHTML = `
+    <section class="set-group"><h3>Du</h3>
+      <label class="field">Dein Name im Haushalt<input id="me-name" maxlength="30" value="${esc(mm.displayName ?? '')}"></label>
+      <div class="share-row"><span>Neue Einträge von deinem Konto</span><div class="seg small" role="radiogroup" aria-label="Neue Einträge"><label><input type="radio" name="me-default" value="shared" ${mm.defaultPrivate ? '' : 'checked'}><span>👥 Gemeinsam</span></label><label><input type="radio" name="me-default" value="private" ${mm.defaultPrivate ? 'checked' : ''}><span>🔒 Nur ich</span></label></div></div>
+      <p class="tiny muted">Was vom Gemeinschaftskonto bezahlt wird, ist immer gemeinsam. Jede Buchung lässt sich einzeln umstellen.</p>
+    </section>
+    <section class="set-group"><h3>Freigabe: was ${esc(partner)} von deinen privaten Sachen sieht</h3>
+      ${shareRow('tx', 'Buchungen', [['none', 'Nichts'], ['sums', 'Nur Summen'], ['all', 'Alles']])}
+      ${shareRow('fixed', 'Fixkosten', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
+      ${shareRow('pots', 'Spartöpfe', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
+      ${shareRow('policies', 'Versicherungen', [['none', 'Nichts'], ['all', 'Alles']])}
+      <p class="tiny muted">„Nur Summen“: Monatssummen je Kategorie bzw. Gesamtstand, keine einzelnen Buchungen, Notizen oder Namen. Gemeinsame Einträge sehen immer alle. Ansehen heißt nicht ändern: Private Einträge kann nur ihr Besitzer bearbeiten.</p>
+    </section>
+    <section class="set-group"><h3>Konten</h3>
+      <div>${state.accounts.map(a => `<div class="acc-row"><span>${esc(accLabel(a))} <span class="owner-tag">${a.owner == null ? 'gemeinsam' : a.owner === me() ? 'meins' : esc(memberName(a.owner))}${a.archived ? ' · ausgeblendet' : ''}</span></span>
+        ${canWrite(a.owner) ? `<button class="btn small" data-acc-toggle="${esc(a.id)}">${a.archived ? 'Einblenden' : 'Ausblenden'}</button>` : '<span></span>'}</div>`).join('') || '<p class="muted">Noch keine Konten.</p>'}</div>
+      <form id="form-acc" class="row wrap"><input id="acc-name" placeholder="z. B. Tagesgeld, Kreditkarte" maxlength="40" aria-label="Name des Kontos" style="flex:2;min-width:140px">
+        <select id="acc-owner" aria-label="Wem gehört das Konto" style="flex:1;min-width:120px"><option value="me">Meins</option><option value="shared">Gemeinsam</option></select><button class="btn">Dazu</button></form>
+    </section>
     <section class="set-group" id="set-limits"><h3>Budgets pro Monat</h3>
       <p class="tiny muted">Leer lassen = kein Budget. Fixkosten zählen mit, z. B. die Miete zu Wohnen.</p>
       ${EXPENSE_GROUPS.map(g => `<label class="limit-row"><span>${g.icon} ${esc(g.label)}</span><input inputmode="decimal" data-limit="${g.id}" value="${limits[g.id] ? amountInput(limits[g.id]).replace(',00', '') : ''}" placeholder="–" aria-label="Budget ${esc(g.label)} in Euro"></label>`).join('')}
@@ -594,6 +1119,27 @@ function openSettings(focus) {
       <div class="row wrap">${store.mode === 'supabase' ? '<button class="btn" data-act="logout">Abmelden</button>' : '<button class="btn" data-act="demo-reset">Beispieldaten neu laden</button><button class="btn" data-act="demo-exit">Demo beenden</button>'}</div>
       <p class="tiny muted">Haushaltskasse ${VERSION}</p>
     </section>`;
+  // Änderungen sammeln (Name, Freigabe, Vorgabe) und gemeinsam speichern, damit keine verloren geht
+  let meTimer = null, mePatch = {};
+  const saveMe = (patch, delay = 0) => {
+    mePatch = { ...mePatch, ...patch, share: { ...(mePatch.share ?? {}), ...(patch.share ?? {}) } };
+    clearTimeout(meTimer); meTimer = setTimeout(async () => {
+      const p = mePatch; mePatch = {};
+      try { const cur = myMember(); const saved = await store.saveMe({ ...cur, ...p, share: { ...cur.share, ...p.share } }); state.members = state.members.filter(m => m.userId !== me()).concat(saved); render(); }
+      catch (e) { toast('Nicht gespeichert: ' + e.message); } }, delay);
+  };
+  $('#me-name').oninput = e => saveMe({ displayName: e.target.value.trim() }, 700);
+  $$('[name=me-default]').forEach(r => r.onchange = () => saveMe({ defaultPrivate: r.value === 'private' }));
+  for (const area of ['tx', 'fixed', 'pots', 'policies']) $$(`[name=share-${area}]`).forEach(r => r.onchange = () => { saveMe({ share: { [area]: r.value } }); toast('Freigabe gespeichert'); });
+  $('#form-acc').onsubmit = async e => {
+    e.preventDefault(); const name = $('#acc-name').value.trim(); if (!name) return;
+    try { await store.saveAccount({ name, owner: $('#acc-owner').value === 'me' ? me() : null, icon: $('#acc-owner').value === 'me' ? '💳' : '🏦' }); state.accounts = await store.listAccounts(); openSettings(); }
+    catch (err) { toast(err.message); }
+  };
+  $$('[data-acc-toggle]').forEach(b => b.onclick = async () => {
+    const a = accOf(b.dataset.accToggle);
+    try { await store.saveAccount({ ...a, archived: !a.archived }); state.accounts = await store.listAccounts(); openSettings(); } catch (err) { toast(err.message); }
+  });
   $$('[data-limit]').forEach(inp => inp.oninput = () => {
     const v = inp.value.trim(), c = v ? parseAmount(v) : null;
     inp.setAttribute('aria-invalid', v && c == null ? 'true' : 'false');
@@ -616,7 +1162,7 @@ function openSettings(focus) {
   if (focus === 'limits') setTimeout(() => $('#set-limits input')?.focus(), 80);
 }
 function downloadCsv() {
-  const blob = new Blob([toCsv(state.tx, catPath)], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob([toCsv(real(state.tx), catPath)], { type: 'text/csv;charset=utf-8' });
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `haushaltskasse-${state.today}.csv` });
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
@@ -633,23 +1179,39 @@ function bindEvents() {
 
   // Klicks in allen Ansichten und Dialogen
   document.addEventListener('click', async e => {
-    const el = e.target.closest('[data-tx],[data-rec],[data-pol],[data-ask],[data-file],[data-act],[data-group]');
+    const sb = e.target.closest('[data-scope]');
+    if (sb) { state.scope = sb.dataset.scope; localStorage.setItem('haushaltskasse.scope', state.scope); render(); return; }
+    const af = e.target.closest('[data-acc-filter]');
+    if (af) { state.txFilter = { q: '', kind: 'all', group: '', account: af.dataset.accFilter }; show('tx'); return; }
+    const el = e.target.closest('[data-tx],[data-cash],[data-pot],[data-rec],[data-pol],[data-ask],[data-file],[data-act],[data-group]');
+    if (el?.closest('#dlg-pot') || el?.closest('#dlg-cash')) return;
     if (!el || el.closest('#dlg-tx')) return;
+    if (el.dataset.cash) return openCash(state.cash.find(x => x.id === el.dataset.cash));
+    if (el.dataset.pot) return openPot(potOf(el.dataset.pot));
     if (el.dataset.tx) return openTx(state.tx.find(t => t.id === el.dataset.tx));
     if (el.dataset.rec) return openRec(state.recurring.find(r => r.id === el.dataset.rec));
     if (el.dataset.pol) return openPolicy(state.policies.find(p => p.id === el.dataset.pol));
     if (el.dataset.ask !== undefined && el.hasAttribute('data-ask')) return chat.open(el.dataset.ask);
     if (el.dataset.file) { const p = state.policies.find(x => x.id === el.dataset.file); try { window.open(await store.policyFileUrl(p.filePath), '_blank', 'noopener'); } catch (err) { toast(err.message); } return; }
-    if (el.dataset.group && !el.dataset.act) { state.txFilter = { q: '', kind: 'expense', group: el.dataset.group }; return show('tx'); }
+    if (el.dataset.group && !el.dataset.act) { state.txFilter = { q: '', kind: 'expense', group: el.dataset.group, account: '' }; return show('tx'); }
     const act = el.dataset.act;
     if (act === 'add') openTx();
     else if (act === 'add-rec') openRec();
     else if (act === 'add-income') openRec(null, { kind: 'income', name: 'Gehalt', category: 'ei-gehalt' });
     else if (act === 'add-pol') openPolicy();
+    else if (act === 'add-pot') openPot();
+    else if (act === 'add-etf') openPot(null, 'etf');
+    else if (act === 'add-cash') openCash();
+    else if (act === 'cash-withdraw') withdrawCash();
+    else if (act === 'rest-book') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId), pot = c && potOf($(`#rest-pot-${CSS.escape(c.sc.id)}`).value); if (pot) bookRest(c, pot); }
+    else if (act === 'rest-keep') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId); if (c) { state.config.closed = { ...(state.config.closed ?? {}), [closedKey(c.month, c.sc)]: 'keep' }; saveConfigSoon(0); render(); } }
+    else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
+    else if (act === 'pantry-all') takePantry(state.pantry.filter(p => !p.similar));
+    else if (act === 'pantry-skip') { dismissPantry([el.dataset.key]); }
     else if (act === 'fixed') show('fixed');
     else if (act === 'tx') show('tx');
     else if (act === 'limits') openSettings('limits');
-    else if (act === 'clear-filter') { state.txFilter = { q: '', kind: 'all', group: '' }; renderTx(); }
+    else if (act === 'clear-filter') { state.txFilter = { q: '', kind: 'all', group: '', account: '' }; renderTx(); }
     else if (act === 'table') { state.statsTable = !state.statsTable; renderStats(); }
     else if (act === 'csv') downloadCsv();
     else if (act === 'logout') { if (outbox.get().length && (await ask('Abmelden?', '<p>Es gibt noch nicht gesendete Buchungen. Beim Abmelden gehen sie verloren.</p>', [{ value: '', label: 'Abbrechen' }, { value: 'yes', label: 'Trotzdem abmelden', cls: 'danger' }])) !== 'yes') return;
@@ -684,6 +1246,17 @@ function bindEvents() {
     if (!(await confirmDelete(recEditing.kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten'))) return;
     try { await store.deleteRecurring(recEditing.id); $('#dlg-rec').close(); await loadAll({ book: false }); render(); toast('Gelöscht. Bisherige Buchungen bleiben erhalten.'); } catch (e) { $('#rec-err').textContent = e.message; }
   };
+
+  // Bargeld
+  $('#form-cash').onsubmit = e => { e.preventDefault(); saveCashForm(); };
+  $('#cash-delete').onclick = async () => {
+    if (!(await confirmDelete('Umschlag'))) return;
+    try { await store.deleteCash(cashEditing.id); $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast('Umschlag gelöscht. Bisherige Buchungen bleiben.'); } catch (e) { $('#cash-err').textContent = e.message; }
+  };
+
+  // Spartopf
+  $('#form-pot').onsubmit = e => { e.preventDefault(); savePotForm(); };
+  $('#pot-delete').onclick = () => dissolvePot();
 
   // Versicherung
   $('#form-pol').onsubmit = e => { e.preventDefault(); savePolicyForm(); };
@@ -745,6 +1318,8 @@ async function start() {
   $('#demo-bar').classList.toggle('hidden', store.mode !== 'demo');
   setSync('Lädt …');
   await loadAll();
+  await ensureSetup();
+  await autoRest();
   showOutbox();
   store.onChange(() => scheduleReload());
   show(state.view);
@@ -752,7 +1327,7 @@ async function start() {
 
 // Ohne Netz: letzten Stand zeigen, neue Buchungen landen in der Warteschlange und gehen raus, sobald wieder Netz da ist
 function startOffline(snap) {
-  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, config: { limits: {}, custom: [], ...snap.config } });
+  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, pots: snap.pots ?? [], potTx: snap.potTx ?? [], members: snap.members ?? [], accounts: snap.accounts ?? [], cash: snap.cash ?? [], memberIds: snap.memberIds ?? [], sums: snap.sums ?? [], config: { limits: {}, custom: [], ...snap.config } });
   setCustomCategories(state.config.custom);
   store.useOffline(snap.household);
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
@@ -767,7 +1342,7 @@ async function boot() {
   const demo = localStorage.getItem('haushaltskasse.mode') === 'demo' || !SUPABASE_URL;
   try { store = demo ? createDemoStore() : await createSupabaseStore(); }
   catch { store = null; }
-  chat = initChat({ state, store, toast, ask });
+  chat = initChat({ state: V, store, toast, ask });
   bindEvents(); bindAuth();
   if (!store) { showAuth('login'); authMsg('Keine Verbindung zum Server. Ohne Netz kannst du die Demo ausprobieren.'); return; }
   try { await start(); }
