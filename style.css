@@ -361,3 +361,4 @@ details.more > summary.chip { padding: 8px 12px; font-size: .9rem; border-radius
 [hidden] { display: none !important; }
 .sync-state { font-size: .85rem !important; padding: 4px 6px; } .sync-state.bad { color: var(--red); }
 .sync-state:empty { display: none; }
+.plan-mode { margin: 0 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .pantry-only { margin-bottom: 8px; }

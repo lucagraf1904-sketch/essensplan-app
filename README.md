@@ -172,3 +172,6 @@ Einstellungen → oben und unter „Budget": „💾 Jetzt speichern und mit dem
 
 ## v62: Speichern-Knopf überall
 Oben in der Kopfzeile steht immer „💾 Speichern" (nur mit Supabase). Tippen: alles zum Server schreiben (Haushalts- und persönliche Einstellungen direkt, Listen eintragsweise, Plan nach Tageszeit), zurücklesen und Ergebnis melden. Die Anzeige wird zu ⏳ beim Senden und ⚠️ bei Fehlern.
+
+## v63: „Nur aus dem Vorrat"
+Plan-Tab: Knopf „🏠 Nur Vorrat" (auch im Aufklappmenü der Kopfzeile erklärt), Haushalts-Einstellung `planOnlyPantry`, Standard aus. An: `score()` verwirft Gerichte, bei denen eine Zutat (`need`) im Vorrat fehlt (Tiefkühlware zählt, Menge wird nicht geprüft); offene Tage werden neu geplant, gewählte/angepasste Tage bleiben; Wochenziele gelten nur unter den möglichen Gerichten; leere Tage zeigen „Fast möglich: … (fehlt: …)".

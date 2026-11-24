@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS = {
   askLeftovers: true,     // Nach dem Abendessen fragen: alles aufgegessen? Was passiert mit dem Rest?
   planExclude: [],       // Vom Nutzer selbst gewählte Ausschlüsse im Essensplan: [{ w: Suchwort, label, from }] (Haushalt)
   weekFish: 2, weekBeef: 1, weekVeg: 0, weekVegG: 0, // Wochenziele (Luca 23.11.): Fisch pro Woche, Rind höchstens, vegetarische Abende, Gemüse-g pro Abend
+  planOnlyPantry: false, // Plan nur mit Gerichten, deren Zutaten alle im Vorrat sind (Luca 24.11., Haushalt, Standard aus)
   planHealthRules: true, // Fisch- und Fleischquoten im Essensplan (Schalter erscheint, sobald der Planer gebaut ist)
 };
 

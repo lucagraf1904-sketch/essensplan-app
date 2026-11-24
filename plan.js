@@ -64,6 +64,8 @@ function score(r, i, date, chosen, forgottenUsed) {
   const meat = ['rind', 'schwein', 'gefluegel'];
   if (prefs.includes('vegetarisch') && (meat.includes(r.kind) || r.kind === 'fisch')) return null;
   if (excludedBy(r)) return null;
+  // Schalter „Nur aus dem Vorrat“: Gerichte, bei denen etwas fehlt, kommen gar nicht infrage
+  if (s.planOnlyPantry && (r.need ?? []).some(([w]) => !has(items, w))) return null;
   if (chosen.some(c => c.id === r.id)) p -= 10;
   // Vorrat und Ablauf
   let usedMain = false;
@@ -235,10 +237,17 @@ function renderWeek(body, s) {
   const goalRows = s.planHealthRules ? `<div class="goal-rows">${goal('weekFish', '🐟', 'Fisch pro Woche', 2, 5)}${goal('weekBeef', '🥩', 'Rind höchstens', 1, 5)}${goal('weekVeg', '🥦', 'Vegetarische Abende', 0, 7)}${goal('weekVegG', '🥗', 'Gemüse pro Abend mind.', 0, 500, ' g', 50)}</div>
       <p class="tiny muted">Der Plan richtet sich danach, soweit eure Gerichte es hergeben. Änderungen gelten für den Haushalt und planen die offenen Tage neu (Gekochtes bleibt).</p>` : '';
   const sumLine = `🐟 ${fish}${s.planHealthRules ? '/' + (s.weekFish ?? 2) : ''}× · 🥩 ${meat}${s.planHealthRules ? '/' + (s.weekBeef ?? 1) : ''}×${veg ? ` · 🥦 ca. ${veg} g` : ''}`;
+  const only = !!s.planOnlyPantry;
+  // Fast möglich: Gerichte, denen im Vorrat nur ein, zwei Zutaten fehlen
+  const almost = () => { const c = activeRecipes().map(r => ({ r, m: (r.need ?? []).filter(([w]) => !has(items, w)) })).filter(x => x.m.length && x.m.length <= 2).sort((a, b) => a.m.length - b.m.length).slice(0, 3);
+    return c.length ? `Fast möglich: ${c.map(x => `${esc(x.r.title)} (fehlt: ${x.m.map(n => esc(n[1])).join(', ')})`).join('; ')}. ` : ''; };
+  const onlyBox = `<div class="pantry-only"><button type="button" class="chip ${only ? 'accepted' : ''}" data-pantry-only>${only ? '🏠 Nur aus dem Vorrat: AN' : '🏠 Nur aus dem Vorrat: aus'}</button>
+      <p class="tiny muted">${only ? 'An: Der Plan wählt nur Gerichte, bei denen jede Zutat im Vorrat ist (Tiefkühlware zählt). Geht für einen Tag kein Gericht auf, bleibt er leer, statt dass etwas eingekauft werden muss. Die Wochenziele gelten nur unter den möglichen Gerichten und werden eventuell nicht erreicht. Geprüft wird, ob die Zutat da ist, nicht die Menge. Bereits gewählte oder angepasste Tage bleiben.' : 'Aus: Der Plan darf auch Gerichte mit Zutaten wählen, die ihr erst kaufen müsst (auf Wunsch kommen sie auf die Einkaufsliste). Ablaufendes und Vorhandenes wird trotzdem bevorzugt.'}</p></div>`;
   const head0 = `<div class="plan-top"><details class="tip hint goals plan-head" ${goalsOpen ? 'open' : ''}><summary>🎯 Woche: ${sumLine}</summary>
-      ${goalRows}${info}
+      ${onlyBox}${goalRows}${info}
       <p class="tiny muted">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. „Neu prüfen“ zeigt zuerst eine Vorschau; Gekochtes, Übersprungenes, angepasste Tage und eingeplante Reste bleiben.</p></details>
-    <button id="plan-new" class="chip" title="Plan anhand Vorrat neu prüfen">🔄 Neu prüfen</button></div>`;
+    <button id="plan-new" class="chip" title="Plan anhand Vorrat neu prüfen">🔄 Neu prüfen</button></div>
+    <div class="plan-mode"><button type="button" class="chip ${only ? 'accepted' : ''}" data-pantry-only>${only ? '🏠 Nur Vorrat: AN' : '🏠 Nur Vorrat: aus'}</button>${only ? ' <span class="tiny muted">Der Plan nutzt nur, was da ist.</span>' : ''}</div>`;
   const firstOpen = p.days.find(x => x.status === 'geplant' && daysTo(x.date) >= 0)?.date;
   const isOpen = d => dayOpen.has(d.date) ? dayOpen.get(d.date) : (daysTo(d.date) === 0 || (!p.days.some(x => daysTo(x.date) === 0) && d.date === firstOpen));
   const wrap = (d, i, pre, sum, inner, cls = '') => `<li class="plan-day ${cls} ${d.status}" data-i="${i}">${pre}<details class="day" data-date="${d.date}" ${isOpen(d) ? 'open' : ''}><summary>${sum}</summary>${inner}</details></li>`;
@@ -258,7 +267,7 @@ function renderWeek(body, s) {
         <div class="plan-dinner"><b>🍴 ${esc(d.title)}</b><div class="tiny muted">Selbst eingetragen${d.free.items?.length ? ' · ' + d.free.items.map(esc).join(', ') : ''}</div></div>
         <div class="good-tag">✓ Gegessen</div>
         <div class="tip-alts"><button class="chip" data-act="eat">✏️ Ändern</button><button class="chip" data-act="savefree">📚 Als Gericht speichern</button><button class="chip" data-act="unfree">Rückgängig</button></div>`);
-      if (!r) return wrap(d, i, restBox, sumOf(d, 'Kein passendes Gericht'), `${head}<div class="plan-dinner muted"><button class="chip" data-act="swap">🔄 Vorschlag</button></div>`);
+      if (!r) return wrap(d, i, restBox, sumOf(d, 'Kein passendes Gericht'), `${head}<div class="plan-dinner muted">${s.planOnlyPantry ? `Mit dem aktuellen Vorrat geht kein Gericht ganz auf. ${almost()}Vorrat auffüllen oder „Nur Vorrat“ ausschalten. ` : ''}<button class="chip" data-act="swap">🔄 Vorschlag</button></div>`);
       const missing = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
       const thaw = needOf(d, r).map(([w]) => has(items, w)).find(x => x?.frozenAt);
@@ -627,6 +636,11 @@ async function onClick(e) {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.view) { view = b.dataset.view; goalsOpen = false; return render(); }
   if (b.id === 'plan-new') return recheckPlan();
+  if ('pantryOnly' in b.dataset) {
+    const on = !getSettings().planOnlyPantry; ctx.setSetting('planOnlyPantry', on);
+    rebuildOpen(); await render();
+    return toast(on ? '🏠 Nur Vorrat: offene Tage neu geplant' : 'Nur Vorrat aus: offene Tage neu geplant');
+  }
   if (b.dataset.goal) {
     const k = b.dataset.goal, def = { weekFish: 2, weekBeef: 1, weekVeg: 0, weekVegG: 0 }[k], cur = getSettings()[k] ?? def;
     ctx.setSetting(k, Math.max(0, Math.min(+b.dataset.max, cur + +b.dataset.d)));
