@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reserveForecast, etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { cashDueAmount, nextWithdrawals, cashIcs, reserveForecast, etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -231,4 +231,19 @@ test('Rücklage-Umschlag: Abhebesumme als Sparen, Prognose bis zur Fälligkeit',
   assert.equal(f.ok, false); assert.equal(f.missing, 3600); assert.equal(f.name, 'Kfz');
   const g = reserveForecast({ balance: 40000, monthly: 5000, withdrawnThisMonth: true, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }], today: '2026-11-24' });
   assert.equal(g.ok, true); assert.equal(g.next.name, 'Kfz');
+});
+
+test('Umschlag: Rhythmus, abweichende Beträge, nächste Abhebungen, Kalendertermin', () => {
+  const q = { id: 'q', name: 'Friseur; alle 3 Monate', amount: 7500, freq: 'quarterly', startMonth: '2026-11', withdrawDay: 3, overrides: { '2027-05': 9000 } };
+  assert.equal(cashDueAmount(q, '2026-11'), 7500); assert.equal(cashDueAmount(q, '2026-12'), 0); assert.equal(cashDueAmount(q, '2027-02'), 7500);
+  assert.equal(cashDueAmount(q, '2027-05'), 9000); assert.equal(cashDueAmount(q, '2026-10'), 0);
+  assert.equal(cashDueAmount({ amount: 100 }, '2026-12'), 100);
+  assert.deepEqual(nextWithdrawals(q, '2026-11-24', 3).map(x => [x.date, x.amount, x.override]), [['2026-11-03', 7500, false], ['2027-02-03', 7500, false], ['2027-05-03', 9000, true]]);
+  const ics = cashIcs(q, '2026-12-03', 'abc');
+  assert.match(ics, /RRULE:FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=3/); assert.match(ics, /DTSTART:20261203T090000/);
+  assert.match(ics, /SUMMARY:Bargeld abheben: Friseur\\; alle 3 Monate/); assert.match(ics, /BEGIN:VALARM/);
+  const p = cashPending([{ ...q, active: true, category: 'kl-friseur' }], [], '2026-12', '2026-11-24', () => 'kleidung');
+  assert.equal(p.total, 0, 'im Dezember nicht dran');
+  const f = reserveForecast({ balance: 0, deposit: k => cashDueAmount({ amount: 15000, freq: 'quarterly', startMonth: '2026-11' }, k), withdrawnThisMonth: false, dues: [{ date: '2027-01-01', amount: 20000, name: 'Kfz' }], today: '2026-11-24' });
+  assert.equal(f.ok, false); assert.equal(f.missing, 5000);
 });

@@ -303,6 +303,38 @@ export function isValidIsin(isin) {
 
 // ---------- Bargeld-Umschläge ----------
 export const cashRef = (month, id) => `cash:${month}:${id}`;
+export const CASH_FREQ = { monthly: { label: 'monatlich', step: 1 }, quarterly: { label: 'vierteljährlich', step: 3 }, halfyearly: { label: 'halbjährlich', step: 6 }, yearly: { label: 'jährlich', step: 12 } };
+const monthIndex = key => +key.slice(0, 4) * 12 + (+key.slice(5, 7) - 1);
+// Betrag, der im Monat key abzuheben ist (0 = in diesem Monat nicht dran). Gleiche Regel wie budget_cash_due in budget.sql.
+export function cashDueAmount(e, key) {
+  const step = CASH_FREQ[e.freq ?? 'monthly']?.step ?? 1;
+  const amount = e.overrides?.[key] ?? e.amount;
+  if (!e.startMonth) return amount; // ohne Startmonat: jeden Monat (Umschläge aus früheren Versionen)
+  if (key < e.startMonth) return 0;
+  return (monthIndex(key) - monthIndex(e.startMonth)) % step === 0 ? amount : 0;
+}
+// Nächste Abhebungen ab dem laufenden Monat: [{ key, date, amount, override }]
+export function nextWithdrawals(e, today, n = 4, horizon = 36) {
+  const out = [], start = today.slice(0, 7);
+  for (let k = 0; k < horizon && out.length < n; k++) {
+    const key = addMonths(start + '-01', k).slice(0, 7), amount = cashDueAmount(e, key);
+    if (!amount) continue;
+    const day = Math.min(e.withdrawDay ?? 1, daysInMonth(+key.slice(0, 4), +key.slice(5, 7) - 1));
+    out.push({ key, date: `${key}-${String(day).padStart(2, '0')}`, amount, override: e.overrides?.[key] != null });
+  }
+  return out;
+}
+// Wiederkehrender Kalendertermin (iCalendar) mit Erinnerung, zum Eintragen in den Handy-Kalender
+export function cashIcs(e, firstDate, uidSeed) {
+  const step = CASH_FREQ[e.freq ?? 'monthly']?.step ?? 1;
+  const d = firstDate.replace(/-/g, ''), day = +firstDate.slice(8, 10);
+  const esc = t => String(t).replace(/[\\,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Haushaltskasse//DE', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
+    `UID:${uidSeed}@haushaltskasse`, `DTSTAMP:${d}T080000`, `DTSTART:${d}T090000`, `DTEND:${d}T091500`,
+    `RRULE:FREQ=MONTHLY;INTERVAL=${step};BYMONTHDAY=${day}`,
+    `SUMMARY:${esc(`Bargeld abheben: ${e.name}`)}`, `DESCRIPTION:${esc('Betrag siehe Haushaltskasse (Übersicht → Bargeld).')}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(`Bargeld abheben: ${e.name}`)}`, 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
 // Was im Monat noch abzuheben ist: aktive Umschläge ohne „Abgehoben“-Buchung in diesem Monat.
 // Nur für den laufenden und künftige Monate (was in einem vergangenen Monat nicht abgehoben wurde, wurde nicht ausgegeben).
 // total: normale Umschläge (zählen als Ausgabe je Kategorie), reserve: Rücklage-Umschläge (zählen als Sparen, die Ausgabe kommt erst am Zahltag)
@@ -310,13 +342,16 @@ export function cashPending(envelopes, tx, key, today, groupOf) {
   const out = { total: 0, reserve: 0, byGroup: {}, open: [], done: [] };
   if (key < today.slice(0, 7)) return out;
   const refs = new Set(tx.map(t => t.extRef).filter(Boolean));
-  for (const e of envelopes) {
-    if (!e.active) continue;
+  for (const e0 of envelopes) {
+    if (!e0.active) continue;
+    const due = cashDueAmount(e0, key);
+    if (!due) continue; // in diesem Monat nicht dran (Rhythmus)
+    const e = { ...e0, due };
     if (refs.has(cashRef(key, e.id))) { out.done.push(e); continue; }
     out.open.push(e);
-    if (e.potId) { out.reserve += e.amount; continue; }
-    out.total += e.amount;
-    const g = groupOf(e.category); out.byGroup[g] = (out.byGroup[g] ?? 0) + e.amount;
+    if (e.potId) { out.reserve += due; continue; }
+    out.total += due;
+    const g = groupOf(e.category); out.byGroup[g] = (out.byGroup[g] ?? 0) + due;
   }
   return out;
 }
@@ -324,12 +359,13 @@ export function cashPending(envelopes, tx, key, today, groupOf) {
 // Rücklage-Umschlag: Reicht das Geld bis zu den nächsten Fälligkeiten?
 // Annahme: Der Monatsbetrag wird zu Monatsbeginn abgehoben (im laufenden Monat nur, wenn noch nicht geschehen).
 // dues: [{ date, amount, name }] aufsteigend. Ergebnis: ok, oder erster Engpass mit Datum, Name und Fehlbetrag.
-export function reserveForecast({ balance, monthly, withdrawnThisMonth, dues, today, months = 12 }) {
+// deposit(monthKey) liefert den Abhebe-Betrag des Monats (Rhythmus, abweichende Beträge); monthly geht weiter für feste Beträge.
+export function reserveForecast({ balance, monthly = 0, deposit = null, withdrawnThisMonth, dues, today, months = 12 }) {
   let cash = balance;
   const start = today.slice(0, 7);
   for (let k = 0; k < months; k++) {
     const m = addMonths(start + '-01', k).slice(0, 7);
-    if (k > 0 || !withdrawnThisMonth) cash += monthly;
+    if (k > 0 || !withdrawnThisMonth) cash += deposit ? deposit(m) : monthly;
     for (const d of dues.filter(x => x.date.slice(0, 7) === m)) {
       cash -= d.amount;
       if (cash < 0) return { ok: false, date: d.date, name: d.name, missing: -cash };

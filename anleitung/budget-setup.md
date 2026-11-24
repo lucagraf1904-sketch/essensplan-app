@@ -52,6 +52,14 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - Der Umschlag zeigt, wie viel drin ist, welche Fixkosten daraus bezahlt werden und ob das Geld bis zur nächsten Fälligkeit reicht (Annahme: Abheben jeweils zu Monatsbeginn).
 - Normale Umschläge (ohne Fixkosten) verfallen weiter jeden Monat.
 
+## Update: Umschläge einstellbar (Version 8)
+`supabase/budget.sql` noch einmal ausführen. Im Umschlag (Übersicht → Bargeld → Umschlag antippen):
+- **Betrag je Abhebung** und **Rhythmus** (monatlich, vierteljährlich, halbjährlich, jährlich) ab einem **Startmonat**.
+- **Abhebetag**: ab diesem Tag erscheint in der Übersicht „Bargeld abheben“. Knopf „Erinnerung in den Kalender eintragen“ legt einen wiederkehrenden Termin mit Erinnerung im Handy-Kalender an (.ics-Datei; auf dem iPhone „Zum Kalender hinzufügen“ antippen).
+- **Einzelne Abhebungen anpassen**: für die nächsten Termine einen anderen Betrag eintragen (leer = normaler Betrag).
+- **Fixkosten per Häkchen** wählen, mit Vorschlag für den Betrag je Abhebung. Es sind nur Fixkosten mit gleichem Besitzer wählbar (beide gemeinsam oder beide privat).
+- **Stand anpassen** (Rücklagen): dazulegen, entnehmen oder den aktuellen Inhalt direkt eintragen (die Differenz wird als Korrektur gebucht).
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

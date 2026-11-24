@@ -222,3 +222,7 @@ update budget_cash set active = false where name = 'Rücklagen';
 reset role;
 select count(*) = 0 as unlinked_on_deactivate from budget_recurring where cash_id is not null and name = 'Kfz jährlich';
 set role authenticated;
+-- ---------- Version 8: Rhythmus und abweichende Beträge ----------
+select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'quarterly', '2026-01', null, '{}')::budget_cash, '2026-04') = 10 as quarterly_due;
+select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'quarterly', '2026-01', null, '{}')::budget_cash, '2026-05') = 0 as quarterly_not_due;
+select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'monthly', null, null, '{"2026-12": 25}')::budget_cash, '2026-12') = 25 as override_used;
