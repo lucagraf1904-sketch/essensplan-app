@@ -1,5 +1,7 @@
 # Haushaltskasse einrichten (einmalig, ca. 10 Minuten)
 
+> **Neu:** Updates in Supabase gehen auch automatisch. Einmal einrichten nach `anleitung/automatik-setup.md`, danach führt GitHub `budget.sql` und das Deployment der KI-Funktion nach jedem Merge selbst aus. Die Schritte unten sind dann nur noch für die allererste Einrichtung nötig.
+
 Die Haushaltskasse liegt unter `/budget/` im selben Repo wie die Speisekammer, also z. B.
 `https://<dein-github-name>.github.io/essensplan-app/budget/`. Sie nutzt dasselbe Supabase-Projekt, dieselbe Anmeldung und denselben Haushalt.
 Ohne Einrichtung kannst du sie mit `…/budget/?demo=1` sofort mit Beispieldaten ausprobieren (nur auf dem Gerät, ohne KI).
