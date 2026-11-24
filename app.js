@@ -60,7 +60,7 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
   $('#fab').classList.toggle('hidden', b.dataset.tab !== 'pantry');
   if (b.dataset.tab === 'log') renderLog();
-  if (b.dataset.tab === 'shop') { renderShop(); refreshOffers(); }
+  if (b.dataset.tab === 'shop') { renderShop(); }
 }));
 
 // ---------- Vorrat ----------
@@ -884,13 +884,16 @@ const offerTag = (o, acc) => `<div class="offer-tag">🏷️ ${esc(chainName(o.c
 // Automatische Angebote einmal am Tag holen (nur mit Supabase)
 let refreshing = false, offerErr = '', offerInfo = '';
 async function refreshOffers(force = false) {
-  const st = getSettings();
-  if (store.mode !== 'supabase' || refreshing || (!force && (!st.autoOffers || localStorage.getItem('lastOfferRefresh') === isoLocal(new Date())))) return;
+  // Gedrosselt (24.11., Marktguru-AGB): kein automatischer Abruf aus der App. Automatisch läuft nur der Server freitags 14 Uhr.
+  // Von Hand höchstens einmal pro Tag.
+  if (store.mode !== 'supabase' || refreshing || !force) return;
+  const today = isoLocal(new Date());
+  if (localStorage.getItem('lastOfferManual') === today) { offerInfo = 'Heute schon gesucht. Von Hand geht es einmal pro Tag, automatisch läuft es freitags um 14 Uhr.'; renderOfferAuto(); return; }
   refreshing = true; offerErr = ''; renderOfferAuto('Angebote werden gesucht …');
   try {
     const res = await store.refreshOffers(loadShop().filter(i => !i.done).map(i => i.name));
-    offerInfo = `Letzte Suche: ${res?.found ?? 0} Angebote gefunden${res?.errors ? `, ${res.errors} Abfragen fehlgeschlagen` : ''}.`;
-    localStorage.setItem('lastOfferRefresh', isoLocal(new Date()));
+    localStorage.setItem('lastOfferManual', today); localStorage.setItem('lastOfferRefresh', today);
+    offerInfo = res?.cached ? `Heute schon gesucht: ${res.found} Angebote vorhanden. Von Hand geht es einmal pro Tag.` : `Letzte Suche: ${res?.found ?? 0} Angebote gefunden${res?.errors ? `, ${res.errors} Abfragen fehlgeschlagen` : ''}.`;
     renderOfferAuto();
   } catch (err) { offerErr = `Suche fehlgeschlagen: ${err.message}`; renderOfferAuto(); }
   finally { refreshing = false; renderShop(); }
@@ -898,8 +901,8 @@ async function refreshOffers(force = false) {
 function renderOfferAuto(msg) {
   const st = getSettings(), last = localStorage.getItem('lastOfferRefresh');
   $('#offer-auto').innerHTML = store.mode === 'supabase'
-    ? `<p class="muted tiny">${offerErr ? `<b class="offer-err">${esc(offerErr)}</b>` : offerInfo ? `<b>${esc(offerInfo)}</b>` : ''} ${msg ? esc(msg) : st.autoOffers ? `Automatisch über Marktguru (inoffiziell), täglich.${last ? ` Zuletzt: ${fmtDate(last)}.` : ''}` : 'Automatische Suche ist in den Einstellungen aus.'}</p>
-       <button id="offer-refresh" ${refreshing ? 'disabled' : ''}>🔄 Angebote jetzt suchen</button>`
+    ? `<p class="muted tiny">${offerErr ? `<b class="offer-err">${esc(offerErr)}</b>` : offerInfo ? `<b>${esc(offerInfo)}</b>` : ''} ${msg ? esc(msg) : st.autoOffers ? `Automatisch über Marktguru (inoffiziell), einmal pro Woche: freitags um 14 Uhr. Von Hand einmal pro Tag.${last ? ` Zuletzt von Hand: ${fmtDate(last)}.` : ''}` : 'Automatische Suche ist in den Einstellungen aus.'}</p>
+       <button id="offer-refresh" ${refreshing ? 'disabled' : ''}>🔄 Angebote suchen (1× pro Tag)</button>`
     : '<p class="muted tiny">Automatische Angebote (Marktguru) laufen erst, wenn Supabase eingerichtet ist. Bis dahin: Angebote selbst eintragen.</p>';
 }
 
@@ -1122,7 +1125,7 @@ const SWITCHES = {
     ['tipsMeat', 'Fleisch und Fisch', null, 'tips'],
   ],
   '#settings-offers': [
-    ['autoOffers', 'Angebote automatisch suchen', 'Über Marktguru (inoffiziell), braucht Supabase'],
+    ['autoOffers', 'Angebote automatisch suchen', 'Über Marktguru (inoffiziell), einmal pro Woche freitags 14 Uhr, braucht Supabase'],
     ['ownBrandOk', 'Eigenmarke zählt als gleich', 'Bei gleicher Menge, z. B. Rewe-Hack statt Lidl-Hack'],
   ],
   '#settings-show': [
@@ -1428,7 +1431,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v63 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v64 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

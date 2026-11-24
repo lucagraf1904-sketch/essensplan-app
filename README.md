@@ -175,3 +175,6 @@ Oben in der Kopfzeile steht immer „💾 Speichern" (nur mit Supabase). Tippen:
 
 ## v63: „Nur aus dem Vorrat"
 Plan-Tab: Knopf „🏠 Nur Vorrat" (auch im Aufklappmenü der Kopfzeile erklärt), Haushalts-Einstellung `planOnlyPantry`, Standard aus. An: `score()` verwirft Gerichte, bei denen eine Zutat (`need`) im Vorrat fehlt (Tiefkühlware zählt, Menge wird nicht geprüft); offene Tage werden neu geplant, gewählte/angepasste Tage bleiben; Wochenziele gelten nur unter den möglichen Gerichten; leere Tage zeigen „Fast möglich: … (fehlt: …)".
+
+## v64: Angebote gedrosselt (Luca 24.11., Marktguru-AGB)
+Automatisch nur noch einmal pro Woche: Freitag 14:00 Uhr deutscher Zeit (`cron.sql`: Einträge 12 und 13 Uhr UTC, die Function prüft die Berliner Uhrzeit und tut sonst nichts). Kein Abruf mehr beim Öffnen des Einkauf-Tabs. Von Hand höchstens einmal pro Tag (App merkt es sich, die Function gibt sonst die vorhandenen Angebote zurück). Die Sonntag-18-Uhr-Nachricht ist im Code nicht gebaut; Hinweis nach dem Freitagsabruf wäre ein späterer Schritt.

@@ -5,6 +5,7 @@
 // Aufruf:
 //  - aus der App (angemeldet): POST { terms: [...] }  → sucht diese Begriffe für den eigenen Haushalt
 //  - per Cron (Header x-cron-secret): sucht für jeden Haushalt die oft gekauften Produkte der letzten 90 Tage
+// Gedrosselt (Luca 24.11., Marktguru-AGB): automatisch nur freitags 14:00 Uhr (Europe/Berlin), manuell höchstens 1× pro Tag und Haushalt.
 // Secrets: MARKTGURU_API_KEY, MARKTGURU_CLIENT_KEY (Header x-apikey / x-clientkey), CRON_SECRET.
 // Konfiguration (PLZ, Ketten) wie offers-config.json.
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -78,8 +79,11 @@ Deno.serve(async req => {
   const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
-  // Cron: alle Haushalte
+  // Cron: alle Haushalte, nur Freitag 14 Uhr deutscher Zeit (der Cron läuft um 12 und 13 UTC, die Zeitumstellung regelt diese Prüfung)
   if (req.headers.get('x-cron-secret') && req.headers.get('x-cron-secret') === Deno.env.get('CRON_SECRET')) {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', weekday: 'short', hour: '2-digit', hour12: false }).formatToParts(new Date());
+    const wd = parts.find(p => p.type === 'weekday')?.value, hr = parts.find(p => p.type === 'hour')?.value;
+    if (wd !== 'Fri' || hr !== '14') return Response.json({ skipped: true, berlin: `${wd} ${hr}` });
     const { data: hhs } = await admin.from('households').select('id');
     const out = [];
     for (const h of hhs ?? []) out.push(await collect(h.id, [...new Set([...ALWAYS, ...(await frequentTerms(h.id))])]));
@@ -92,6 +96,12 @@ Deno.serve(async req => {
   if (!user) return new Response('unauthorized', { status: 401, headers: cors });
   const { data: mem } = await admin.from('members').select('household_id').eq('user_id', user.id).maybeSingle();
   if (!mem) return new Response('no household', { status: 403, headers: cors });
+  // Manuell höchstens 1× pro 24 Stunden und Haushalt: sonst die vorhandenen Angebote zurückgeben
+  const { data: last } = await admin.from('offers').select('created_at').eq('household_id', mem.household_id).eq('source', 'marktguru').order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (last && Date.now() - Date.parse(last.created_at) < 24 * 3600 * 1000) {
+    const { count } = await admin.from('offers').select('id', { count: 'exact', head: true }).eq('household_id', mem.household_id).eq('source', 'marktguru');
+    return Response.json({ found: count ?? 0, errors: 0, cached: true, last: last.created_at }, { headers: cors });
+  }
   const body = await req.json().catch(() => ({}));
   const terms = [...new Set([...(body.terms ?? []), ...ALWAYS, ...(await frequentTerms(mem.household_id))].map((t: string) => t.trim()).filter(Boolean))];
   return Response.json(await collect(mem.household_id, terms), { headers: cors });

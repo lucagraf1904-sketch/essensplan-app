@@ -10,10 +10,20 @@ select cron.schedule('speisekammer-reminders', '*/15 * * * *', $$
   );
 $$);
 
--- Angebote: täglich 6:00 Uhr (UTC 5:00) für die oft gekauften Produkte jedes Haushalts.
-select cron.schedule('speisekammer-offers', '0 5 * * *', $$
+-- Angebote: nur freitags 14:00 Uhr deutscher Zeit (Luca 24.11., sparsam wegen Marktguru-AGB).
+-- Zwei Einträge (12 und 13 Uhr UTC) wegen Sommer-/Winterzeit; die Function prüft selbst, ob es in Berlin gerade Freitag 14 Uhr ist, sonst tut sie nichts.
+-- Die Function heißt bei Luca im Dashboard „quick-action“ (technischer Name der Adresse).
+-- Alten täglichen Eintrag zuerst entfernen: select cron.unschedule('speisekammer-offers');
+select cron.schedule('speisekammer-offers-fr-a', '0 12 * * 5', $$
   select net.http_post(
-    url := 'https://<PROJEKT-REF>.supabase.co/functions/v1/offers',
+    url := 'https://<PROJEKT-REF>.supabase.co/functions/v1/quick-action',
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+    body := '{}'::jsonb
+  );
+$$);
+select cron.schedule('speisekammer-offers-fr-b', '0 13 * * 5', $$
+  select net.http_post(
+    url := 'https://<PROJEKT-REF>.supabase.co/functions/v1/quick-action',
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
     body := '{}'::jsonb
   );
