@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -198,4 +198,12 @@ test('ETF: Gewinn/Verlust und ISIN-Prüfung', () => {
   assert.ok(isValidIsin('IE00B4L5Y983')); assert.ok(isValidIsin('ie00b4l5y983'));
   assert.ok(isValidIsin('US0378331005'));
   assert.ok(!isValidIsin('IE00B4L5Y984')); assert.ok(!isValidIsin('DE123')); assert.ok(!isValidIsin(''));
+});
+
+test('ETF: Wert wird mit Bewegungen nach dem letzten Eintrag fortgeschrieben', () => {
+  const p = { id: 'e', marketValue: 410000, marketValueAt: '2026-11-01' };
+  const moves = [{ potId: 'e', date: '2026-11-01', kind: 'save', amount: 15000 }, { potId: 'e', date: '2026-11-10', kind: 'unsave', amount: 100000 }, { potId: 'e', date: '2026-11-20', kind: 'save', amount: 15000 }, { potId: 'x', date: '2026-11-20', kind: 'save', amount: 999 }];
+  assert.deepEqual(etfValue(p, moves), { value: 325000, estimated: true });
+  assert.deepEqual(etfValue(p, []), { value: 410000, estimated: false });
+  assert.deepEqual(etfValue({ id: 'e', marketValue: null }, moves), { value: null, estimated: false });
 });

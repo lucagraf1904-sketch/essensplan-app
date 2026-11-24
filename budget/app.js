@@ -5,7 +5,7 @@ import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, gr
 import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
-  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, etfGain, isValidIsin, groupPantry, similarTx, pantryDone,
+  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, etfGain, etfValue, isValidIsin, groupPantry, similarTx, pantryDone,
   inScope, defaultOwner, sumsToTx, byAccount, cashPending, cashRef,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
@@ -711,28 +711,31 @@ async function savePolicyForm() {
 const ETF_ICONS = ['📈', '🌍', '🇪🇺', '🇺🇸', '🌏', '🏭', '💡', '🌱', '🏦', '💹'];
 const signedEur = c => (c > 0 ? '+' : c < 0 ? '−' : '') + eur(Math.abs(c));
 const pct = v => v == null ? '' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('de-DE', { maximumFractionDigits: 1 })} %`;
+const pctIn = v => v == null ? '' : ` (${pct(v)})`;
 function etfCard(p, paid) {
-  const rate = potRate(p.id), g = etfGain(paid, p.marketValue);
+  const rate = potRate(p.id), cur = etfValue(p, state.potTx), g = etfGain(paid, cur.value);
   const old = p.marketValueAt && diffDays(p.marketValueAt, state.today) > 45;
   return `<li><button class="pot" data-pot="${esc(p.id)}">
     <span class="ic" aria-hidden="true">${esc(p.icon)}</span><span class="nm">${esc(p.name)}${p.owner ? ' 🔒' : ''}</span>
-    <span class="bal">${p.marketValue != null ? eur(p.marketValue) : eur(paid)}</span>
-    <span class="gl">${esc(p.isin || 'ETF')}</span><span class="gl r ${g ? (g.gain >= 0 ? 'gain-up' : 'gain-down') : ''}">${g ? `${g.gain >= 0 ? '▲' : '▼'} ${pct(g.pct)}` : 'Wert fehlt'}</span>
+    <span class="bal">${cur.value != null ? (cur.estimated ? 'ca. ' : '') + eur(cur.value) : eur(paid)}</span>
+    <span class="gl">${esc(p.isin || 'ETF')}</span><span class="gl r ${g ? (g.gain >= 0 ? 'gain-up' : 'gain-down') : ''}">${g ? `${g.gain >= 0 ? '▲' : '▼'} ${g.pct != null ? pct(g.pct) : signedEur(g.gain)}` : 'Wert fehlt'}</span>
     <span class="etf-grid"><span>Eingezahlt</span><span>${g ? 'Gewinn/Verlust' : 'Sparplan'}</span><b>${eur(paid)}</b><b class="${g ? (g.gain >= 0 ? 'gain-up' : 'gain-down') : ''}">${g ? signedEur(g.gain) : rate ? eur(rate) + ' im Monat' : '–'}</b></span>
-    <span class="note ${old ? 'behind' : ''}">${rate ? `Sparplan ${eur(rate)} im Monat` : 'Kein Sparplan'}${p.marketValueAt ? ` · Wert vom ${dateShort(p.marketValueAt)}${old ? ' (bitte aktualisieren)' : ''}` : ''}</span></button></li>`;
+    <span class="note ${old ? 'behind' : ''}">${rate ? `Sparplan ${eur(rate)} im Monat` : 'Kein Sparplan'}${p.marketValueAt ? ` · Wert vom ${dateShort(p.marketValueAt)}${cur.estimated ? ', seitdem Ein-/Auszahlungen dazugerechnet' : ''}${old ? ' (bitte aktualisieren)' : ''}` : ''}</span></button></li>`;
 }
 function etfSection() {
   const etfs = V.pots.filter(p => !p.archived && p.kind === 'etf');
   const bal = potBalances(state.pots, state.potTx);
   const paid = etfs.reduce((a, p) => a + (bal.get(p.id) ?? 0), 0);
   const allValued = etfs.length && etfs.every(p => p.marketValue != null);
-  const value = etfs.reduce((a, p) => a + (p.marketValue ?? bal.get(p.id) ?? 0), 0);
+  const value = etfs.reduce((a, p) => a + (etfValue(p, state.potTx).value ?? bal.get(p.id) ?? 0), 0);
   const g = allValued ? etfGain(paid, value) : null;
   const rate = etfs.reduce((a, p) => a + potRate(p.id), 0);
+  const otherEtf = state.scope === 'shared' ? [] : others().filter(m => sc(m.userId)).map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'etfbal').reduce((a, x) => a + x.total, 0) })).filter(x => x.total);
   return `<div class="section-head"><h2>ETFs${etfs.length ? ` · ${eur(value)}` : ''}</h2><button class="btn link" data-act="add-etf">${etfs.length ? 'Neuer ETF' : 'Anlegen'}</button></div>`
-    + (etfs.length ? `${etfs.length > 1 || g ? `<p class="tiny muted" style="margin:0 4px 8px">Eingezahlt ${eur(paid)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)} (${pct(g.pct)})</span>` : ''}${rate ? ` · Sparpläne ${eur(rate)} im Monat` : ''}</p>` : ''}<ul class="list">${etfs.map(p => etfCard(p, bal.get(p.id) ?? 0)).join('')}</ul>
+    + (etfs.length ? `${etfs.length > 1 || g ? `<p class="tiny muted" style="margin:0 4px 8px">Eingezahlt ${eur(paid)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)}${pctIn(g.pct)}</span>` : ''}${rate ? ` · Sparpläne ${eur(rate)} im Monat` : ''}</p>` : ''}<ul class="list">${etfs.map(p => etfCard(p, bal.get(p.id) ?? 0)).join('')}</ul>
       <p class="tiny muted" style="margin:6px 4px 0">Den Wert trägst du selbst ein, z. B. aus der Banking-App. Keine Anlageberatung.</p>`
-      : `<div class="card empty"><p>Trag deine ETF-Sparpläne ein: Die App zählt mit, wie viel du eingezahlt hast. Mit dem aktuellen Depotwert siehst du Gewinn oder Verlust.</p><button class="btn" data-act="add-etf">ETF anlegen</button></div>`);
+      : `<div class="card empty"><p>Trag deine ETF-Sparpläne ein: Die App zählt mit, wie viel du eingezahlt hast. Mit dem aktuellen Depotwert siehst du Gewinn oder Verlust.</p><button class="btn" data-act="add-etf">ETF anlegen</button></div>`)
+    + otherEtf.map(x => `<p class="tiny muted" style="margin:8px 4px 0">🔒 ${esc(x.m.displayName || 'Partner')} hat ${eur(x.total)} in eigene ETFs eingezahlt (nur Summe freigegeben).</p>`).join('');
 }
 
 // ---------- Bargeld-Umschläge ----------
@@ -900,7 +903,7 @@ function openPot(p = null, newKind = 'pot') {
   $('#etf-isin').value = p?.isin ?? ''; $('#etf-value').value = p?.marketValue != null ? amountInput(p.marketValue) : '';
   $('#pot-name').placeholder = isEtf ? 'z. B. MSCI World, FTSE All-World' : 'z. B. Urlaub, Notgroschen, neues Auto';
   const rec = p && state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active);
-  const roPot = whoWidget($('#pot-who'), { account: rec ? rec.accountId : lastAccount(), owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, hint: 'Ein privater Topf zählt nur für dich. Die Sparrate geht vom gewählten Konto ab.' });
+  const roPot = whoWidget($('#pot-who'), { account: rec ? rec.accountId : lastAccount(), owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, hint: isEtf ? 'Ein privater ETF zählt nur für dich. Der Sparplan geht vom gewählten Konto ab.' : 'Ein privater Topf zählt nur für dich. Die Sparrate geht vom gewählten Konto ab.' });
   const bal = p ? potBalances(state.pots, state.potTx).get(p.id) ?? 0 : 0;
   $('#pot-title').textContent = p ? `${p.icon} ${p.name}` : isEtf ? 'Neuer ETF' : 'Neuer Spartopf';
   $('#pot-name').value = p?.name ?? '';
@@ -919,8 +922,8 @@ function openPot(p = null, newKind = 'pot') {
   $('#pot-err').textContent = ''; $('#pot-hint').textContent = p?.archived ? 'Dieser Topf ist aufgelöst. Die Bewegungen bleiben zur Übersicht erhalten.' : '';
   const moves = p ? state.potTx.filter(t => t.potId === p.id).slice(0, 30) : [];
   $('#pot-summary').innerHTML = p ? `<div class="pot-head">
-      ${isEtf ? (() => { const g = etfGain(bal, p.marketValue); return `<span class="tiny muted">${p.marketValue != null ? `Wert vom ${dateShort(p.marketValueAt ?? state.today)}` : 'Eingezahlt'}</span><span class="big">${eur(p.marketValue ?? bal)}</span>
-        <span class="tiny">Eingezahlt ${eur(bal)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)} (${pct(g.pct)})</span>` : ''}</span>`; })()
+      ${isEtf ? (() => { const cur = etfValue(p, state.potTx), g = etfGain(bal, cur.value); return `<span class="tiny muted">${cur.value != null ? `${cur.estimated ? 'Geschätzt: ' : ''}Wert vom ${dateShort(p.marketValueAt ?? state.today)}${cur.estimated ? ' plus Ein-/Auszahlungen seitdem' : ''}` : 'Eingezahlt'}</span><span class="big">${eur(cur.value ?? bal)}</span>
+        <span class="tiny">Eingezahlt ${eur(bal)}${g ? ` · <span class="${g.gain >= 0 ? 'gain-up' : 'gain-down'}">${signedEur(g.gain)}${pctIn(g.pct)}</span>` : ''}</span>`; })()
       : `<span class="tiny muted">Stand</span><span class="big">${eur(bal)}</span>`}
       ${p.goal ? `<span class="meter"><i style="width:${Math.min(100, 100 * bal / p.goal).toFixed(1)}%;background:var(--good)"></i></span><span class="tiny">${Math.round(Math.min(1, bal / p.goal) * 100)} % von ${eur(p.goal)}</span>` : ''}
       ${p.archived || roPot ? '' : `<div class="row wrap"><button type="button" class="btn small primary" id="pot-in">${isEtf ? 'Einmal einzahlen' : 'Einzahlen'}</button><button type="button" class="btn small" id="pot-out">${isEtf ? 'Verkauf' : 'Entnehmen'}</button></div>`}</div>
@@ -940,18 +943,19 @@ let potEditing = null, potKind = 'pot';
 async function potMove(p, kind) {
   const etf = p.kind === 'etf';
   const v = await ask(kind === 'save' ? `In „${p.name}“ einzahlen` : etf ? `„${p.name}“ teilweise verkaufen` : `Aus „${p.name}“ entnehmen`,
-    `<label class="field">Betrag (€)<input id="mv-amount" inputmode="decimal" placeholder="0,00"></label><label class="field">Notiz <span class="muted">(optional)</span><input id="mv-note" maxlength="80" placeholder="${kind === 'save' ? 'z. B. Geburtstagsgeld' : 'z. B. Flug gebucht'}"></label>
-     <p class="tiny muted">${kind === 'save' ? 'Zählt im laufenden Monat als gespart und mindert, was frei ist.' : 'Das Geld steht dann im laufenden Monat wieder zur Verfügung.'}</p>`,
-    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: kind === 'save' ? 'Einzahlen' : 'Entnehmen', cls: 'primary' }]);
+    `<label class="field">${etf && kind === 'unsave' ? 'Verkaufserlös (€)' : 'Betrag (€)'}<input id="mv-amount" inputmode="decimal" placeholder="0,00"></label><label class="field">Notiz <span class="muted">(optional)</span><input id="mv-note" maxlength="80" placeholder="${kind === 'save' ? (etf ? 'z. B. Bonus angelegt' : 'z. B. Geburtstagsgeld') : etf ? 'z. B. Teilverkauf' : 'z. B. Flug gebucht'}"></label>
+     <p class="tiny muted">${kind === 'save' ? 'Zählt im laufenden Monat als gespart und mindert, was frei ist.' : 'Das Geld steht dann im laufenden Monat wieder zur Verfügung.'}${etf ? ' Der Depotwert wird um diesen Betrag fortgeschrieben, bis du einen neuen einträgst.' : ''}</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: kind === 'save' ? 'Einzahlen' : etf ? 'Verkauf buchen' : 'Entnehmen', cls: 'primary' }]);
   if (v !== 'ok') return;
   const amount = parseAmount($('#mv-amount').value);
   if (!amount) { toast('Kein gültiger Betrag'); return; }
   const bal = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
-  if (kind === 'unsave' && amount > bal && (await ask('Mehr als drauf ist', `<p>Im Topf sind nur ${eur(bal)}. Trotzdem ${eur(amount)} entnehmen?</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Trotzdem', cls: 'primary' }])) !== 'ok') return;
+  const limit = etf ? (etfValue(p, state.potTx).value ?? bal) : bal;
+  if (kind === 'unsave' && amount > limit && (await ask(etf ? 'Mehr als der Depotwert' : 'Mehr als drauf ist', `<p>${etf ? `Der ETF ist nach letztem Stand etwa ${eur(limit)} wert.` : `Im Topf sind nur ${eur(bal)}.`} Trotzdem ${eur(amount)} ${etf ? 'als Verkauf buchen' : 'entnehmen'}?</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Trotzdem', cls: 'primary' }])) !== 'ok') return;
   try {
     await store.saveTx({ id: uid(), owner: p.owner ?? null, date: state.today, amount, kind, category: p.kind === 'etf' ? 'fi-anlage' : 'fi-sparen', potId: p.id, note: $('#mv-note').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
     await loadAll({ book: false }); render(); openPot(potOf(p.id));
-    toast(kind === 'save' ? `${eur(amount)} eingezahlt` : `${eur(amount)} entnommen`);
+    toast(kind === 'save' ? `${eur(amount)} eingezahlt` : etf ? `Verkauf über ${eur(amount)} gebucht` : `${eur(amount)} entnommen`);
   } catch (e) { $('#pot-err').textContent = e.message; }
 }
 async function savePotForm() {
@@ -995,10 +999,11 @@ async function savePotForm() {
 async function dissolvePot() {
   const p = potEditing, isEtf = p.kind === 'etf';
   // ETF: zurück kommt der Verkaufserlös (aktueller Wert), nicht die eingezahlte Summe
-  const bal = isEtf && p.marketValue != null ? p.marketValue : potBalances(state.pots, state.potTx).get(p.id) ?? 0;
-  const hasMoves = state.potTx.some(t => t.potId === p.id);
+  const paidIn = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
+  const bal = isEtf ? (etfValue(p, state.potTx).value ?? paidIn) : paidIn;
+  const hasMoves = state.potTx.some(t => t.potId === p.id) || paidIn !== 0;
   const v = await ask(`„${p.name}“ auflösen?`, hasMoves || bal
-    ? `<p>${bal > 0 ? `Die ${eur(bal)} ${isEtf ? '(aktueller Wert, bitte vorher prüfen)' : ''} kommen als ${isEtf ? 'Verkauf' : 'Entnahme'} zurück in diesen Monat.` : 'Der Topf ist leer.'} ${isEtf ? 'Der Sparplan' : 'Die Sparrate'} endet. Bisherige Einzahlungen bleiben in der Auswertung sichtbar.</p>`
+    ? `<p>${bal > 0 ? `${eur(bal)}${isEtf ? ' (letzter Wert, bitte vorher prüfen)' : ''} kommen als ${isEtf ? 'Verkauf' : 'Entnahme'} zurück in diesen Monat.` : isEtf ? 'Es wird kein Verkaufserlös gebucht.' : 'Der Topf ist leer.'} ${isEtf ? 'Der Sparplan' : 'Die Sparrate'} endet. Bisherige Einzahlungen bleiben in der Auswertung sichtbar.</p>`
     : '<p>Der Topf hat noch keine Bewegungen und wird gelöscht.</p>',
     [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Auflösen', cls: 'danger' }]);
   if (v !== 'ok') return;

@@ -358,16 +358,16 @@ create or replace function budget_shared_sums(p_since date) returns table(owner 
 language sql stable security definer set search_path = public as $$
   with m as (select user_id, share from budget_members where household_id = my_household() and user_id <> auth.uid())
   select t.owner, case when t.pot_id is null then 'tx' else 'pots' end, to_char(t.date, 'YYYY-MM'), t.kind,
-         case when t.pot_id is null then t.category else 'fi-sparen' end, sum(t.amount)
+         t.category, sum(t.amount)
     from budget_tx t join m on m.user_id = t.owner
    where t.household_id = my_household() and t.date >= p_since and m.share->>(case when t.pot_id is null then 'tx' else 'pots' end) = 'sums'
    group by 1, 2, 3, 4, 5
   union all
-  select p.owner, 'potbal', null, null, null,
+  select p.owner, case when p.kind = 'etf' then 'etfbal' else 'potbal' end, null, null, null,
          sum(p.start_balance + coalesce((select sum(case when t.kind = 'save' then t.amount else -t.amount end) from budget_tx t where t.pot_id = p.id), 0))
     from budget_pots p join m on m.user_id = p.owner
    where p.household_id = my_household() and not p.archived and m.share->>'pots' = 'sums'
-   group by p.owner
+   group by p.owner, p.kind
   union all
   select r.owner, 'fixed', null, r.kind, null,
          sum(r.amount * case r.freq when 'weekly' then 52.0 / 12 when 'monthly' then 1 when 'quarterly' then 1.0 / 3 when 'halfyearly' then 1.0 / 6 else 1.0 / 12 end)

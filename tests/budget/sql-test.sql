@@ -176,3 +176,10 @@ do $$ begin
   begin insert into budget_pots(household_id, name, kind, isin) values (my_household(), 'Falsch', 'etf', 'keine-isin'); raise exception 'FEHLER: ungültige ISIN gespeichert';
   exception when check_violation then raise notice 'ok: ISIN wird geprüft'; end;
 end $$;
+-- Summen-Freigabe trennt Töpfe und ETFs
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"pots":"sums"}' where user_id = auth.uid();
+insert into budget_pots(household_id, name, kind, owner, start_balance) values (my_household(), 'Privat-ETF', 'etf', auth.uid(), 500);
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select (select sum(total) from budget_shared_sums(current_date - 40) where area = 'etfbal') = 500 as etf_sum_separate;
+select coalesce((select sum(total) from budget_shared_sums(current_date - 40) where area = 'potbal'), 0) <> 500 as potbal_without_etf;

@@ -289,7 +289,7 @@ function demoSeed() {
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push(fresh.rec.find(r => r.potId === etf.id)); } save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); } save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));

@@ -280,6 +280,17 @@ export function etfGain(paid, value) {
   const gain = value - paid;
   return { gain, pct: paid > 0 ? gain / paid * 100 : null };
 }
+// Geschätzter Wert heute: zuletzt eingetragener Depotwert plus alle Ein- und Auszahlungen nach diesem Datum
+// (Kursänderungen seitdem kennt die App nicht). estimated = true, wenn seitdem etwas dazukam oder abging.
+export function etfValue(p, moves) {
+  if (p.marketValue == null) return { value: null, estimated: false };
+  let v = p.marketValue, estimated = false;
+  for (const t of moves) {
+    if (t.potId !== p.id || !p.marketValueAt || t.date <= p.marketValueAt) continue;
+    v += t.kind === 'save' ? t.amount : t.kind === 'unsave' ? -t.amount : 0; estimated = true;
+  }
+  return { value: Math.max(0, v), estimated };
+}
 // ISIN prüfen (Format und Prüfziffer nach ISO 6166)
 export function isValidIsin(isin) {
   const s = String(isin ?? '').toUpperCase().replace(/\s/g, '');
