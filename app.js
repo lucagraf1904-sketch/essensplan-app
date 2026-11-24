@@ -1357,7 +1357,7 @@ $('#tab-kitchen').addEventListener('click', async e => {
   renderSettings(); renderPantry();
 });
 // Erzwungenes Speichern: schreibt Haushalts- und persönliche Einstellungen direkt zum Server, liest zurück und zeigt, was dort steht
-async function saveAllNow(btn) {
+async function saveAllNow(btn, showBudget = false) {
   if (store.mode !== 'supabase') return toast('Ohne Supabase liegt alles nur auf diesem Gerät, es ist gespeichert ✓');
   const old = btn?.textContent; if (btn) { btn.disabled = true; btn.textContent = 'Speichere …'; }
   const raw = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
@@ -1390,10 +1390,10 @@ async function saveAllNow(btn) {
     }
     const hh = await store.getShared('speisekammer.hhSettings');
     if (bad.length) toast(`⚠️ Nicht alles gespeichert: ${bad.join(' | ')}`, 9000);
-    else toast(`✓ Gespeichert. Server: Budget ${hh?.budget > 0 ? hh.budget + ' €' : 'aus'}, Warnen ab ${hh?.budgetWarnPct ?? 80} %`, 5000);
+    else toast(showBudget ? `✓ Gespeichert. Server: Budget ${hh?.budget > 0 ? hh.budget + ' €' : 'aus'}, Warnen ab ${hh?.budgetWarnPct ?? 80} %` : `✓ Alles gespeichert (${okKeys.length} Bereiche)`, 3500);
   } finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
 }
-document.addEventListener('click', e => { const b = e.target.closest('[data-save-all]'); if (b) saveAllNow(b); });
+document.addEventListener('click', e => { const b = e.target.closest('[data-save-all]'); if (b) saveAllNow(b, !!b.closest('#settings-budget')); });
 $('#tab-kitchen').addEventListener('change', e => {
   if (e.target.id === 'meds-filter') { saveMeds({ ...loadMeds(), filter: e.target.checked }); return renderSettings(); }
   if (e.target.classList.contains('switch')) setSetting(e.target.dataset.k, e.target.checked);
@@ -1431,7 +1431,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v65 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v66 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);
