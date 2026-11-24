@@ -74,12 +74,17 @@ export async function readPolicyFile(file, store, { onProgress = () => {}, confi
   const n = Math.min(numPages, maxScan);
   if (!(await confirmScan(numPages, n))) return { pages, source: 'pdf', note: 'Die PDF enthält kaum lesbaren Text (vermutlich eingescannt). Fragen funktionieren erst, wenn Text vorhanden ist: Seiten per KI abschreiben lassen oder Text selbst einfügen.' };
   const out = [];
+  let stop = null;
   for (let i = 1; i <= n; i++) {
-    const r = await store.askAi({ action: 'parse', kind: 'doc', image: await renderPdfPage(doc, i) });
-    out.push(String(r?.data?.text ?? '').trim());
+    try {
+      const r = await store.askAi({ action: 'parse', kind: 'doc', image: await renderPdfPage(doc, i) });
+      out.push(String(r?.data?.text ?? '').trim());
+    } catch (e) { stop = e; break; }
     onProgress(0.9 + 0.1 * i / n);
   }
-  return { pages: out, source: 'photo', note: `${n} von ${numPages} Seiten per KI abgeschrieben${numPages > n ? ' (Tageslimit für Fotos). Weitere Seiten später erneut hochladen.' : '.'} Bei wichtigen Punkten mit dem Original vergleichen.` };
+  if (!out.some(Boolean)) throw stop ?? new Error('Auf den Seiten wurde kein Text erkannt.');
+  const why = stop ? ` Abgebrochen bei Seite ${out.length + 1}: ${stop.message}` : numPages > n ? ` Mehr als ${n} Seiten werden nicht auf einmal abgeschrieben (Tageslimit für Fotos).` : '';
+  return { pages: out, source: 'photo', note: `${out.length} von ${numPages} Seiten per KI abgeschrieben.${why} Bei wichtigen Punkten mit dem Original vergleichen.` };
 }
 
 // Eingefügten Text in Seiten teilen (Trenner: Zeile mit ---- oder Seitenumbruch-Zeichen)
@@ -102,7 +107,7 @@ export function initChat(ctx) {
     .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
     .replace(/\[([^\[\]]{1,90}?),\s*S\.\s*(\d{1,3})\]/g, (m, name, page) => {
       const p = ctx.state.policies.find(x => esc(x.name) === name.trim()) ?? (ctx.state.policies.length === 1 ? ctx.state.policies[0] : null);
-      return `<button type="button" class="src" data-pol="${p ? esc(p.id) : ''}" data-page="${page}" title="Seite ${page} öffnen">${name.trim()}, S. ${page}</button>`;
+      return `<button type="button" class="src" data-src-pol="${p ? esc(p.id) : ''}" data-page="${page}" title="Seite ${page} öffnen">${name.trim()}, S. ${page}</button>`;
     })
     .replace(/\n/g, '<br>');
 
@@ -159,7 +164,7 @@ export function initChat(ctx) {
 
   $('#chat-form').addEventListener('submit', e => { e.preventDefault(); send($('#chat-input').value); });
   $('#chat-chips').addEventListener('click', e => { const b = e.target.closest('[data-q]'); if (b) send(b.dataset.q); });
-  $('#chat-msgs').addEventListener('click', e => { const b = e.target.closest('.src'); if (b?.dataset.pol) openSource(b.dataset.pol, b.dataset.page); });
+  $('#chat-msgs').addEventListener('click', e => { const b = e.target.closest('.src'); if (b?.dataset.srcPol) openSource(b.dataset.srcPol, b.dataset.page); });
   $('#chat-new').addEventListener('click', () => { history = []; draw(); $('#chat-input').focus(); });
   $('#chat-scope').addEventListener('change', () => { history = []; draw(); });
 

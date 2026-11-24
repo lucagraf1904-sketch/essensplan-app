@@ -59,7 +59,7 @@ export function columns(root, data, { highlight = data.length - 1, avg = null, h
   const tips = [];
   data.forEach((d, i) => {
     const x = L + slot * i + (slot - bw) / 2;
-    s += `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}" tabindex="0" aria-label="${esc(d.title)}: ${esc(eur(d.value))}"/>`;
+    s += `<rect class="hit" role="img" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}" tabindex="0" aria-label="${esc(d.title)}: ${esc(eur(d.value))}"/>`;
     s += `<path class="mark" d="${bar(x, y(0), y(d.value), bw)}" fill="${i === highlight ? color : dim}"/>`;
     s += `<text class="lbl" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(d.label)}</text>`;
     if (i === highlight && d.value > 0) s += `<text class="val" x="${x + bw / 2}" y="${y(d.value) - 5}" text-anchor="middle">${esc(eurShort(d.value).replace(/,\d\d\s/, ' '))}</text>`;
@@ -84,7 +84,7 @@ export function diverging(root, data, { height = 170 } = {}) {
   const tips = [];
   data.forEach((d, i) => {
     const x = L + slot * i + (slot - bw) / 2;
-    s += `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}" tabindex="0" aria-label="${esc(d.title)}: ${d.value >= 0 ? 'plus' : 'minus'} ${esc(eur(Math.abs(d.value)))}"/>`;
+    s += `<rect class="hit" role="img" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}" tabindex="0" aria-label="${esc(d.title)}: ${d.value >= 0 ? 'plus' : 'minus'} ${esc(eur(Math.abs(d.value)))}"/>`;
     s += `<path class="mark" d="${bar(x, y(0), y(d.value), bw)}" fill="${d.value >= 0 ? 'var(--pos)' : 'var(--neg)'}"/>`;
     s += `<text class="lbl" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(d.label)}</text>`;
     tips.push({ x: x + bw / 2, y: Math.min(y(d.value), y(0)), title: d.title, text: (d.value >= 0 ? '+' : '−') + eur(Math.abs(d.value)) });

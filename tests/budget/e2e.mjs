@@ -130,6 +130,15 @@ await page.click('#form-pol [type=submit]');
 await page.waitForFunction(() => window.__budget.state.policies.some(p => p.name === 'Hausrat Test' && p.pageCount === 2), null, { timeout: 5000 });
 assert.ok(await page.evaluate(() => window.__budget.state.recurring.some(r => r.name === 'Hausrat Test' && r.freq === 'yearly' && r.amount === 7920)), 'Beitrag als Fixkosten');
 
+// Bearbeiten einer Versicherung behält den Policentext (Review-Befund)
+await page.click('#view-ins [data-pol]');
+await page.click('#dlg-pol details.more summary >> nth=0');
+await page.fill('#pol-notes', 'geändert');
+await page.click('#form-pol [type=submit]');
+await page.waitForTimeout(300);
+assert.ok(await page.evaluate(() => window.__budget.state.policies.every(p => p.name !== 'Autoversicherung Golf' || p.pageCount === 3)), 'Seiten bleiben nach Bearbeiten');
+assert.equal(await page.evaluate(() => document.querySelector('#dlg-pol').open), false);
+
 await page.click('#view-ins [data-ask=""]');
 await page.selectOption('#chat-scope', { label: '🛡️ Hausrat Test' });
 await page.fill('#chat-input', 'Ist mein Fahrrad versichert, wenn es geklaut wird?');

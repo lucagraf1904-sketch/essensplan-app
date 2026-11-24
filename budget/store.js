@@ -61,6 +61,8 @@ export async function createSupabaseStore() {
     },
     me: () => userId,
     household: () => household,
+    // Offline-Start aus dem letzten Stand: Haushalt setzen, damit Buchungen in die Warteschlange können
+    useOffline(h) { household = h; },
     async sendCode(email) { must(await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })); },
     async verifyCode(email, token) { must(await sb.auth.verifyOtp({ email, token, type: 'email' })); },
     async signIn(email, password) { must(await sb.auth.signInWithPassword({ email, password })); },
@@ -205,7 +207,7 @@ export function createDemoStore() {
     },
     async listPolicies() { return delay(load().pol.map(p => ({ ...p, pages: null, pageCount: p.pages?.length ?? 0 }))); },
     async policyPages(id) { return load().pol.find(p => p.id === id)?.pages ?? []; },
-    async savePolicy(p) { const d = load(); const i = d.pol.findIndex(x => x.id === p.id); const row = { ...(i >= 0 ? d.pol[i] : {}), ...p, id: p.id ?? uid() };
+    async savePolicy(input) { const { pages: _p, pageCount: _c, ...p } = input; const d = load(); const i = d.pol.findIndex(x => x.id === p.id); const row = { ...(i >= 0 ? d.pol[i] : {}), ...p, id: p.id ?? uid() };
       delete row.pageCount; if (i >= 0) d.pol[i] = row; else d.pol.push(row); save(); return { ...row, pages: null, pageCount: row.pages?.length ?? 0 }; },
     async savePolicyPages(id, pages, source) { const p = load().pol.find(x => x.id === id); if (p) { p.pages = pages; p.textSource = source; save(); } },
     async uploadPolicyFile(id, file) { const p = load().pol.find(x => x.id === id); const path = 'demo/' + id + '/' + file.name; files.set(path, file); if (p) { p.filePath = path; p.fileName = file.name; save(); } return path; },

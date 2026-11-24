@@ -19,6 +19,7 @@ const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Mat
 const state = { tx: [], recurring: [], policies: [], config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
   txFilter: { q: '', kind: 'all', group: '' }, statsRange: 6, statsTable: false };
 let store = null, chat = null;
+const saving = new Map(); // Buchungs-ID → laufendes Speichern (Rückgängig wartet darauf)
 
 // ---------- Kleine Helfer ----------
 let toastTimer = null;
@@ -45,17 +46,23 @@ const setSync = (text, warn = false) => { const s = $('#sync'); s.textContent = 
 // ---------- Warteschlange für Buchungen ohne Netz ----------
 const OUTBOX = 'haushaltskasse.outbox';
 const outbox = { get: () => { try { return JSON.parse(localStorage.getItem(OUTBOX)) ?? []; } catch { return []; } }, set: l => localStorage.setItem(OUTBOX, JSON.stringify(l)) };
-function queue(op) { const l = outbox.get().filter(x => (x.tx?.id ?? x.id) !== (op.tx?.id ?? op.id)); l.push(op); outbox.set(l); showOutbox(); }
+function queue(op) { op.user = store.me(); const l = outbox.get().filter(x => (x.tx?.id ?? x.id) !== (op.tx?.id ?? op.id)); l.push(op); outbox.set(l); showOutbox(); }
 function showOutbox() { const n = store?.mode === 'supabase' ? outbox.get().length : 0; setSync(n ? `${n} ${n === 1 ? 'Änderung wartet' : 'Änderungen warten'} auf Netz` : '', !!n); }
 async function flushOutbox() {
   if (store.mode !== 'supabase') return;
   const l = outbox.get(); if (!l.length) return;
-  const rest = [];
+  const rest = [], failed = [];
   for (const op of l) {
+    if (op.user && op.user !== store.me()) continue; // Warteschlange einer anderen Person auf diesem Gerät: nie in diesen Haushalt schreiben
     try { if (op.op === 'save') await store.saveTx(op.tx); else await store.deleteTx(op.id); }
-    catch (e) { if (e.offline) rest.push(op); else console.warn('Verworfen', op, e); }
+    catch (e) { rest.push({ ...op, fails: (op.fails ?? 0) + (e.offline ? 0 : 1), lastError: e.message }); if (!e.offline) failed.push(e.message); }
   }
   outbox.set(rest); showOutbox();
+  if (failed.length) {
+    const v = await ask('Buchungen nicht gespeichert', `<p>${rest.length} unterwegs erfasste ${rest.length === 1 ? 'Änderung konnte' : 'Änderungen konnten'} nicht gespeichert werden: ${esc(failed[0])}</p><p class="tiny muted">Sie bleiben vorerst auf dem Handy und werden beim nächsten Öffnen erneut gesendet.</p>`,
+      [{ value: 'drop', label: 'Verwerfen', cls: 'danger' }, { value: '', label: 'Später erneut', cls: 'primary' }]);
+    if (v === 'drop') { outbox.set([]); showOutbox(); scheduleReload(); }
+  }
 }
 
 // ---------- Daten laden ----------
@@ -65,7 +72,7 @@ async function loadAll({ book = true } = {}) {
   const since = addMonths(state.today.slice(0, 7) + '-01', -24);
   const [tx, recurring, policies, config] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig()]);
   // Noch nicht gesendete Buchungen sichtbar lassen
-  const pending = outbox.get();
+  const pending = outbox.get().filter(o => !o.user || o.user === store.me());
   const del = new Set(pending.filter(o => o.op === 'delete').map(o => o.id));
   const saves = new Map(pending.filter(o => o.op === 'save').map(o => [o.tx.id, o.tx]));
   state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id))].sort(byDateDesc);
@@ -392,7 +399,8 @@ async function saveTxForm() {
   state.tx = [t, ...state.tx.filter(x => x.id !== t.id)].sort(byDateDesc);
   $('#dlg-tx').close(); render();
   toast(`${old ? 'Geändert' : 'Gespeichert'}: ${eur(amount)} ${cat(t.category).label}`, old ? null : { label: 'Rückgängig', fn: () => deleteTx(t, true) });
-  try { const saved = await store.saveTx(t); state.tx = state.tx.map(x => x.id === t.id ? { ...t, ...saved } : x); }
+  const p = store.saveTx(t); saving.set(t.id, p.catch(() => {}));
+  try { const saved = await p; state.tx = state.tx.map(x => x.id === t.id ? { ...t, ...saved } : x); }
   catch (e) {
     if (e.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); return; }
     state.tx = old ? state.tx.map(x => x.id === t.id ? old : x) : state.tx.filter(x => x.id !== t.id); render();
@@ -403,7 +411,7 @@ async function deleteTx(t, silent = false) {
   if (!silent && !(await confirmDelete('Buchung'))) return;
   state.tx = state.tx.filter(x => x.id !== t.id); $('#dlg-tx').open && $('#dlg-tx').close(); render();
   if (!silent) toast('Buchung gelöscht', { label: 'Rückgängig', fn: async () => { state.tx = [t, ...state.tx].sort(byDateDesc); render(); try { await store.saveTx(t); } catch (e) { e.offline ? queue({ op: 'save', tx: t }) : ask('Nicht wiederhergestellt', esc(e.message)); } } });
-  try { await store.deleteTx(t.id); } catch (e) { if (e.offline && store.mode === 'supabase') queue({ op: 'delete', id: t.id }); else { state.tx = [t, ...state.tx].sort(byDateDesc); render(); ask('Nicht gelöscht', `<p>${esc(e.message)}</p>`); } }
+  try { await saving.get(t.id); saving.delete(t.id); await store.deleteTx(t.id); } catch (e) { if (e.offline && store.mode === 'supabase') queue({ op: 'delete', id: t.id }); else { state.tx = [t, ...state.tx].sort(byDateDesc); render(); ask('Nicht gelöscht', `<p>${esc(e.message)}</p>`); } }
 }
 async function receiptPhoto(file) {
   const msg = $('#tx-photo-msg');
@@ -536,10 +544,12 @@ async function savePolicyForm() {
   const btn = $('#form-pol [type=submit]'); btn.disabled = true; btn.textContent = 'Speichert …';
   try {
     await store.savePolicy(p);
-    if (polFile) await store.uploadPolicyFile(p.id, polFile);
     const pasted = splitPastedText($('#pol-text').value);
     if (pasted.length) await store.savePolicyPages(p.id, pasted, 'manual');
     else if (polRead?.pages?.some(x => x.trim())) await store.savePolicyPages(p.id, polRead.pages, polRead.source);
+    else if (polFile) await store.savePolicyPages(p.id, [], null); // neue Datei ohne lesbaren Text: alter Text passt nicht mehr dazu
+    let fileErr = null;
+    if (polFile) { try { await store.uploadPolicyFile(p.id, polFile); } catch (e) { fileErr = e; } }
     // Beitrag als Fixkosten
     const r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
     const freq = $('#pol-freq').value;
@@ -552,7 +562,8 @@ async function savePolicyForm() {
     }
     $('#dlg-pol').close();
     await loadAll(); render();
-    toast('Versicherung gespeichert');
+    if (fileErr) ask('Datei nicht hochgeladen', `<p>Die Versicherung und der ausgelesene Text sind gespeichert, die Datei selbst aber nicht: ${esc(fileErr.message)}</p>`);
+    else toast('Versicherung gespeichert');
   } catch (e) { err(e.message); }
   finally { btn.disabled = false; btn.textContent = 'Speichern'; }
 }
@@ -641,7 +652,8 @@ function bindEvents() {
     else if (act === 'clear-filter') { state.txFilter = { q: '', kind: 'all', group: '' }; renderTx(); }
     else if (act === 'table') { state.statsTable = !state.statsTable; renderStats(); }
     else if (act === 'csv') downloadCsv();
-    else if (act === 'logout') { await store.signOut(); location.reload(); }
+    else if (act === 'logout') { if (outbox.get().length && (await ask('Abmelden?', '<p>Es gibt noch nicht gesendete Buchungen. Beim Abmelden gehen sie verloren.</p>', [{ value: '', label: 'Abbrechen' }, { value: 'yes', label: 'Trotzdem abmelden', cls: 'danger' }])) !== 'yes') return;
+      localStorage.removeItem(OUTBOX); localStorage.removeItem(SNAP); await store.signOut(); location.reload(); }
     else if (act === 'demo-reset') { store.reset(); await loadAll(); $('#dlg-settings').close(); render(); toast('Beispieldaten neu geladen'); }
     else if (act === 'demo-exit') exitDemo();
   });
@@ -742,7 +754,7 @@ async function start() {
 function startOffline(snap) {
   Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, config: { limits: {}, custom: [], ...snap.config } });
   setCustomCategories(state.config.custom);
-  store.household = () => snap.household;
+  store.useOffline(snap.household);
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
   show(state.view);
   setSync('Offline · Stand ' + new Date(snap.at).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }), true);
@@ -762,6 +774,7 @@ async function boot() {
   catch (e) {
     console.error(e);
     const snap = e.offline && loadSnapshot();
+    if (snap && snap.user !== store.me()) { showAuth('login'); authMsg('Keine Verbindung zum Server.'); return; }
     if (snap) { startOffline(snap); return; }
     if (e.offline) { showAuth('login'); authMsg('Keine Verbindung zum Server. Bitte später erneut öffnen.'); return; }
     $('#auth').classList.remove('hidden'); $('#auth-step-login').classList.add('hidden'); authMsg(e.message);

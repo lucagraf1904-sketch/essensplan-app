@@ -181,3 +181,12 @@ Automatisch nur noch einmal pro Woche: Freitag 14:00 Uhr deutscher Zeit (`cron.s
 
 ## v65: Wochenvorschau „Nächste Woche planen"
 Plan-Tab → „📅 Nächste Woche planen": Entwurf für Montag bis Sonntag der nächsten Woche (`draftWeek` mit derselben Bewertung wie der Plan: Lieblinge, Wochenziele, Vorrat/Ablauf, Angebote, „Nur Vorrat"). Pro Tag 🔄 Anderes, 🔒 Behalten, ✕ Mag ich nicht (nur für diesen Entwurf); 🎲 Neu mischen behält gesperrte Tage. Zeigt fehlende Zutaten der Woche und legt sie auf Wunsch auf die Einkaufsliste. Erst „Übernehmen" schreibt die Tage (mit `pinned`) in den Plan; gekochte/gewählte/angepasste Tage bleiben. Der Plan kann dadurch länger als 7 Tage sein (`build`/`rebuildFrom` behalten gepinnte Tage ab +7, Kopfzeilen-Zähler nur erste 7 Tage). Fr/Sa Hinweis „Einkaufstag".
+
+## Haushaltskasse (Budget-App unter `/budget`, 24.11.2026)
+Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeldung. Einrichtung: `anleitung/budget-setup.md` (SQL `supabase/budget.sql` ausführen, Function `ai` neu deployen). Ausprobieren ohne Konto: `budget/?demo=1`.
+- **Übersicht:** „Noch frei im Monat“ (Einnahmen − Ausgaben − noch offene Fixkosten), Betrag pro Tag, Kündigungsfristen, Budgets je Kategorie mit Ampel, was in 14 Tagen abgeht.
+- **Schnellerfassung:** Betrag, Kategorie antippen (16 Bereiche von Lebensmittel bis Dates & Geschenke, mit Unterkategorien), fertig. Bon-Foto füllt Betrag, Datum, Laden und Kategorie (KI). Gleiche Notiz wie früher („Aral“) schlägt die Kategorie vor. Ohne Netz landen Buchungen in einer Warteschlange.
+- **Fixkosten:** Miete, Abos, Versicherungen, Gehalt; werden beim Öffnen automatisch gebucht (`budget_book_due`, ohne Doppelbuchungen). Monatsanteil jährlicher Kosten, Vertragsende und Kündigungsfrist.
+- **Versicherungen:** Police als PDF (Text wird im Browser mit pdf.js gelesen) oder Foto/Scan (KI schreibt ab). „Police fragen“: die App sucht die passenden Stellen selbst heraus, die KI antwortet nur daraus und nennt die Seite.
+- **Auswertung:** Ausgaben je Monat, Plus/Minus je Monat, Kategorien im Vergleich zum Vormonat, Tabellenansicht, CSV-Export.
+- Tests: `tests/budget` (Logik, Oberfläche, SQL).

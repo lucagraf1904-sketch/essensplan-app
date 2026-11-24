@@ -149,7 +149,7 @@ end $$;
 
 -- ---------- Speicher für Policen (privat, je Haushalt ein Ordner) ----------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('budget-policies', 'budget-policies', false, 26214400, array['application/pdf', 'image/jpeg', 'image/png'])
+values ('budget-policies', 'budget-policies', false, 26214400, array['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 drop policy if exists budget_policies_files on storage.objects;
 create policy budget_policies_files on storage.objects for all to authenticated

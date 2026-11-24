@@ -51,6 +51,7 @@
   <!-- App -->
   <div id="app" class="hidden">
     <header class="top">
+      <h1 class="sr-only">Haushaltskasse</h1>
       <div class="month-switch" role="group" aria-label="Monat wählen">
         <button class="icon-btn" id="m-prev" aria-label="Vorheriger Monat">‹</button>
         <button class="month-label" id="m-label" title="Zum aktuellen Monat"></button>
@@ -62,7 +63,7 @@
       </button>
     </header>
 
-    <div id="demo-bar" class="demo-bar hidden">Demo mit Beispieldaten, nur auf diesem Gerät. <button class="btn link" id="btn-demo-exit">Beenden</button></div>
+    <aside id="demo-bar" class="demo-bar hidden" aria-label="Hinweis Demo">Demo mit Beispieldaten, nur auf diesem Gerät. <button class="btn link" id="btn-demo-exit">Beenden</button></aside>
 
     <main id="views">
       <section id="view-home" class="view" aria-label="Übersicht"></section>

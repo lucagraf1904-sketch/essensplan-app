@@ -10,7 +10,7 @@
   --card: #ffffff;
   --ink: #142429;
   --ink-2: #44565b;
-  --muted: #687a7f;
+  --muted: #56676c;
   --line: #d6dfdd;
   --line-2: #e6ecea;
   --brand: #0b5c63;
@@ -22,9 +22,9 @@
   --band-pending: rgba(255, 255, 255, .55);
   --band-pending-bg: rgba(255, 255, 255, .18);
   --band-track: rgba(255, 255, 255, .16);
-  --income: #1d7a46;
-  --good: #1d7a46;
-  --warn: #a56a00;
+  --income: #17683b;
+  --good: #17683b;
+  --warn: #8a5800;
   --warn-bg: #fdf3dc;
   --bad: #b3261e;
   --bad-bg: #fbe5e3;
