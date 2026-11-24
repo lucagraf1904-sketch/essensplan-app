@@ -3,7 +3,7 @@
 // bald Ablaufendes zuerst, Vorrat nutzen, aktuelle Angebote, Lieblingsgerichte, lange nicht Gegessenes, 2× Fisch, höchstens 2× Rind,
 // keine Wiederholung, lange Gerichte eher am Wochenende, Schichten (Nacht: leicht; Spät: Dose; Vortag: vorkochen).
 // Noch nicht drin: Nährstoffkonto (BLS-Daten), Kalorien je Zubereitungsart. Der Plan liegt unter 'speisekammer.plan' (Haushalt).
-import { isoLocal } from './categories.js';
+import { isoLocal, isFoodCat } from './categories.js';
 import { activeRecipes, loadRecipes, STARTERS, KINDS, TAGS, addStarters, upsertRecipe, updateRecipe, deleteRecipe, markCooked, recipeFromParts, parseRecipeText, needFromLine } from './recipes.js';
 import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setShift, mealAdvice, shiftDay, shiftConf, setShiftConf, setShiftDay } from './shifts.js';
 import { getSettings, setSetting } from './settings.js';
@@ -46,6 +46,7 @@ function savePlan(p) {
 // Tiefkühlware, die aufgetaut werden muss (nicht: Fischstäbchen, Pommes … laut Einstellung „noThaw“)
 const noThawWord = n => (getSettings().noThaw ?? []).find(w => String(n ?? '').toLowerCase().includes(w));
 const needsThaw = it => !!(it?.frozenAt && !noThawWord(it.name));
+const foodItems = async () => (await ctx.store.listItems()).filter(i => isFoodCat(i.category)); // Badezimmer/Haushalt nie im Plan
 const needOf = (d, r) => d?.need ?? r?.need ?? [];
 const needLabel = n => n[2] ? `${n[1]} (${n[2]})` : n[1];
 const recipe = id => loadRecipes().find(r => r.id === id) ?? STARTERS.find(r => r.id === id);
@@ -209,7 +210,7 @@ const tabsHtml = s => `<div class="seg wrap plan-views">
 
 export async function render() {
   const el = $('#tab-plan'); if (!el || !ctx) return;
-  [items, offers] = await Promise.all([ctx.store.listItems(), ctx.allOffers().catch(() => [])]);
+  [items, offers] = await Promise.all([foodItems(), ctx.allOffers().catch(() => [])]);
   const s = getSettings();
   el.innerHTML = `<h2>Essensplan</h2>${tabsHtml(s)}<div id="plan-body"></div>`;
   const body = $('#plan-body');
@@ -515,7 +516,7 @@ function openSheet(date, person) {
 // Plan neu prüfen: Vorschau, dann übernehmen (nichts wird ohne Bestätigung geändert)
 async function recheckPlan() {
   const old = loadPlan(); if (!old?.days?.length) { build(); return render(); }
-  [items, offers] = await Promise.all([ctx.store.listItems(), ctx.allOffers().catch(() => offers)]);
+  [items, offers] = await Promise.all([foodItems(), ctx.allOffers().catch(() => offers)]);
   const keep = old.days.filter(d => daysTo(d.date) >= 0), fresh = build(isoLocal(), keep, true);
   const title = d => d.leftover ? `Reste: ${d.leftover.name}` : (d.dinner ? (recipe(d.dinner)?.title ?? d.title) : 'kein Gericht');
   const rows = fresh.days.map(d => { const o = keep.find(x => x.date === d.date); const kept = o && (o.status !== 'geplant' || o.leftover || o.need);
@@ -607,7 +608,7 @@ function fillPick() {
     <p class="tiny muted">Fehlende Zutaten erscheinen wie bei jedem Gericht unter „Fehlt“ und können auf die Einkaufsliste.</p>`;
   applyPickFilter();
 }
-async function openPick(date) { pk = { date, sel: new Set(), name: '', extra: '', q: '', save: true }; [items] = await Promise.all([ctx.store.listItems()]); fillPick(); const d = pickEl(); if (!d.open) d.showModal(); }
+async function openPick(date) { pk = { date, sel: new Set(), name: '', extra: '', q: '', save: true }; items = (await foodItems()).filter(i => i.category !== 'Süßes & Snacks'); fillPick(); const d = pickEl(); if (!d.open) d.showModal(); }
 
 // Zutaten eines Tages anpassen (ersetzen, weglassen, ergänzen). Gilt nur für diesen Tag; „Im Rezept übernehmen“ ändert das Gerichte-Rezept.
 function needsEl() {
@@ -733,7 +734,7 @@ function fillEat() {
     <div class="tip-alts es-rec">${recs.slice(0, 60).map(x => `<button type="button" class="chip" data-e-pick="${x.id}" data-q="${esc(recText(x))}">${esc(x.title)}</button>`).join('') || '<span class="tiny muted">Noch keine weiteren Gerichte.</span>'}</div>`;
   applyEatFilter();
 }
-async function openEat(date) { const d = eatEl(); d.dataset.date = date; eatSel = new Set(); eatName = ''; eatQ = ''; eatR = ''; [items] = await Promise.all([ctx.store.listItems()]); fillEat(); if (!d.open) d.showModal(); }
+async function openEat(date) { const d = eatEl(); d.dataset.date = date; eatSel = new Set(); eatName = ''; eatQ = ''; eatR = ''; items = await foodItems(); fillEat(); if (!d.open) d.showModal(); }
 
 // ---------- Aktionen ----------
 async function onClick(e) {

@@ -1,6 +1,6 @@
 import { localStore } from './store.js';
 import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
-import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
+import { CATEGORIES, isFoodCat, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
 import { initShared, HOUSEHOLD_KEYS, MEMBER_KEYS, MERGE_KEYS, mergePlan, canon, BASEK, DIRTY } from './shared.js';
@@ -106,7 +106,7 @@ async function renderPantry(useCache) {
   $('#pantry-empty').classList.toggle('hidden', items.length > 0);
   if (!shown.length && items.length) $('#pantry-list').innerHTML = `<li class="muted">Nichts gefunden für „${esc($('#search').value)}“${loc ? ' in ' + esc(loc) : ''}.</li>`;
 
-  const soon = items.filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; });
+  const soon = items.filter(i => isFoodCat(i.category)).filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; });
   const soonW = soon.filter(i => !leftovers([i]).length);
   $('#warn-box').innerHTML = soonW.length && sh.showWarnBox
     ? `<div class="warn">⚠️ ${soonW.length} Artikel ${soonW.length === 1 ? 'läuft' : 'laufen'} bald ab: ${soonW.slice(0, 5).map(i => esc(i.name)).join(', ')}${soonW.length > 5 ? ' …' : ''}</div>`
@@ -468,6 +468,7 @@ function budgetState(spent, ym = ymOf(new Date())) {
   const pct = spent / s.budget, forecast = cur && day >= 5 ? spent / day * days : null;
   return { budget: s.budget, spent, pct, rest: s.budget - spent, forecast, warn: pct * 100 >= s.budgetWarnPct, over: pct >= 1, cur };
 }
+const bathOf = bal => bal.byCategory.find(c => c.category === 'Badezimmer')?.total ?? 0; // Badartikel zählen nicht zum Lebensmittel-Budget
 function budgetBar(spent, ym) {
   const b = budgetState(spent, ym); if (!b) return '';
   return `<div class="budget ${b.over ? 'over' : b.warn ? 'warn' : ''}">
@@ -480,7 +481,7 @@ function budgetBar(spent, ym) {
 async function budgetWarn() {
   const s = getSettings(); if (!(s.budget > 0)) return;
   const ym = ymOf(new Date()), bal = monthReport(await store.listLog(), ym, await store.getAliases());
-  const b = budgetState(bal.spent - (bal.deposit?.net ?? 0), ym); if (!b?.warn) return;
+  const b = budgetState(bal.spent - (bal.deposit?.net ?? 0) - bathOf(bal), ym); if (!b?.warn) return;
   const tag = `${ym}:${b.over ? 'over' : 'warn'}`;
   if (localStorage.getItem('budgetHidden') === tag) return;
   $('#warn-box').insertAdjacentHTML('beforeend', `<div class="warn ${b.over ? '' : 'info'}" id="budget-warn" data-tag="${tag}">💶 ${b.over ? `Monatsbudget überschritten: ${eur(b.spent)} von ${eur(b.budget)}.` : `${Math.round(b.pct * 100)} % vom Monatsbudget verbraucht, noch ${eur(b.rest)} frei.`} <small>(antippen zum Ausblenden)</small></div>`);
@@ -499,12 +500,13 @@ async function renderLog() {
   const hintText = h => h.kind === 'waste'
     ? `🗑️ <b>${esc(pretty(h.key))} ${esc(h.label)}</b>: ${pct(h.quota)} weggeworfen (${eur(h.wasted)}). Kleinere Packung oder seltener kaufen.`
     : `💡 <b>${esc(pretty(h.key))}</b>: Nur in ${esc(h.best)} gekauft (${eur(h.unitPrice.value)}/${h.unitPrice.per}) wären es ${eur(h.saving)} weniger gewesen.`;
-  $('#month-stats').innerHTML = `${budgetBar(bal.spent - (bal.deposit?.net ?? 0), ym)}
+  $('#month-stats').innerHTML = `${budgetBar(bal.spent - (bal.deposit?.net ?? 0) - bathOf(bal), ym)}
     <div class="stats">
       <div class="stat"><span class="muted">Ausgegeben</span><b>${eur(bal.spent)}</b>${arrow(bal.spentDiff)}</div>
       <div class="stat"><span class="muted">Weggeworfen</span><b>${eur(bal.wasted)}</b>${bal.hasPrev ? arrow(Math.round((bal.wasted - bal.prevWasted) * 100) / 100) : ''}</div>
     </div>
     ${drinksOn() ? (d => d ? `<p class="muted">🥤 Getränke: <b>${eur(d.total)}</b> (ohne Pfand)${drinkLevel() >= 2 && drinkKcal(rawLog, ym) ? ` · ca. ${drinkKcal(rawLog, ym)} kcal aus abgehakten Getränken` : ''}</p>` : '')(bal.byCategory.find(c => c.category === 'Getränke')) : ''}
+    ${bathOf(bal) ? `<p class="muted">🧴 Badezimmer: <b>${eur(bathOf(bal))}</b>. Ist in „Ausgegeben“ enthalten, zählt aber nicht zum Lebensmittel-Budget.</p>` : ''}
     ${bal.deposit.paid || bal.deposit.back ? `<p class="muted">♻️ Pfand: ${eur(bal.deposit.paid)} bezahlt, ${eur(bal.deposit.back)} zurück (netto ${eur(bal.deposit.net)}). Ist in „Ausgegeben“ enthalten, nicht bei den Lebensmitteln.</p>` : ''}
     ${bal.hasPrev || !sh.showBalCompare ? '' : '<p class="muted">Vergleich mit dem Vormonat erscheint, sobald es Daten aus dem Vormonat gibt.</p>'}
     ${bal.hints.length && sh.showBalHints ? `<h2>Spartipps</h2><ul class="list small hints">${bal.hints.slice(0, 6).map(h => `<li><div class="main">${hintText(h)}</div></li>`).join('')}</ul>` : ''}
@@ -580,7 +582,7 @@ function soonText(soon) {
   return soon.slice(0, 5).map(i => { const d = daysLeft(i.expiry); return `${i.name} (${d < 0 ? 'abgelaufen' : d === 0 ? 'heute' : d === 1 ? 'morgen' : 'in ' + d + ' T'})`; }).join(', ');
 }
 async function soonItems() {
-  return (await store.listItems()).filter(i => { const d = daysLeft(i.expiry); return d != null && d <= WARN_DAYS; })
+  return (await store.listItems()).filter(i => isFoodCat(i.category) && (d => d != null && d <= WARN_DAYS)(daysLeft(i.expiry)))
     .sort((a, b) => daysLeft(a.expiry) - daysLeft(b.expiry));
 }
 // Geplantes Abendessen (plan.js kommt mit dem Essensplan; bis dahin null)
@@ -935,7 +937,7 @@ function renderCheck(open, offers, log, st, acc) {
 // Ladenweg: Reihenfolge der Abteilungen je Laden (Haushalt, über shared.js). Standard = typischer Discounter-Weg (Annahme).
 const LAYOUT_KEY = 'speisekammer.layout';
 const AISLES = ['Obst', 'Gemüse', 'Brot & Backwaren', 'Milchprodukte', 'Eier', 'Fleisch & Fisch', 'Trockenware', 'Konserven',
-  'Gewürze & Öle', 'Süßes & Snacks', 'Getränke', 'Tiefkühl', 'Haushalt', 'Sonstiges'];
+  'Gewürze & Öle', 'Süßes & Snacks', 'Getränke', 'Tiefkühl', 'Badezimmer', 'Haushalt', 'Sonstiges'];
 const loadLayouts = () => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) ?? {}; } catch { return {}; } };
 const layoutStore = () => getSettings().shopLayoutStore || getSettings().homeStore;
 function layoutFor(storeId = layoutStore()) {
@@ -1460,7 +1462,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v69 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v70 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

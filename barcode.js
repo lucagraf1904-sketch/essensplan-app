@@ -97,6 +97,7 @@ const OFF_CATS = [
   [/en:(beverages|waters|juices|sodas)/, 'Getränke'],
   [/en:(pastas|rices|cereals-and-their-products|flours|legumes|breakfast-cereals)/, 'Trockenware'],
   [/en:(condiments|sauces|spices|oils|vinegars)/, 'Gewürze & Öle'],
+  [/en:(hygiene|soaps|shampoos|toothpastes|shower-gels|deodorants|body-care|personal-care)/, 'Badezimmer'],
   [/en:(snacks|sweets|chocolates|biscuits|confectioneries)/, 'Süßes & Snacks'],
 ];
 

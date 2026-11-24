@@ -13,10 +13,12 @@ export const CATEGORIES = {
   'Konserven':       { days: 540, location: 'Vorratsschrank', words: ['dose','konserve','passata','tomatenmark','mais','gehackte tomaten'] },
   'Getränke':        { days: 180, location: 'Vorratsschrank', words: ['wasser','saft','cola','limo','bier','wein','tee','kaffee','schorle','sprudel','sirup','sodastream','nektar','eistee','smoothie'] },
   'Gewürze & Öle':   { days: 365, location: 'Vorratsschrank', words: ['salz','pfeffer','öl','oel','essig','gewürz','senf','ketchup','mayo','soße','sauce','brühe'] },
-  'Süßes & Snacks':  { days: 120, location: 'Vorratsschrank', words: ['schoko','chips','keks','riegel','gummi','nüsse','nuss','cracker'] },
+  'Süßes & Snacks':  { days: 120, location: 'Vorratsschrank', words: ['schoko','chips','keks','riegel','gummi','nüsse','nuss','cracker','bonbon','lakritz','praline','marzipan','weingummi','fruchtgummi','haribo','kaugummi','süßigkeit','waffel','plätzchen','lolli','popcorn','salzstange','erdnuss'] },
   // Pfand wird nicht über Wörter erkannt, sondern direkt im Bon-Parser gesetzt (receipt.js)
-  'Pfand':           { days: null, location: 'Vorratsschrank', words: [] },
-  'Haushalt':        { days: null, location: 'Vorratsschrank', words: ['spül','toilettenpapier','küchenrolle','waschmittel','müllbeutel','schwamm','seife','shampoo','zahnpasta','tücher'] },
+  'Pfand':           { days: null, nonFood: true, location: 'Vorratsschrank', words: [] },
+  // Nicht-Lebensmittel (Luca 24.11.): kein Essensplan, keine Zutaten, keine Lebensmittel-Ablaufwarnung
+  'Badezimmer':      { days: null, location: 'Vorratsschrank', nonFood: true, words: ['zahnpasta','zahncreme','zahnbürste','zahnseide','mundwasser','mundspül','duschgel','duschbad','shampoo','haarspülung','haarspray','haargel','conditioner','seife','deo ','deodorant','rasier','handcreme','bodylotion','körperlotion','gesichtscreme','sonnencreme','wattepad','wattestäb','tampon','damenbinde','slipeinlage','taschentücher','feuchttücher','kosmetik','nagellack','parfum','badezusatz','schaumbad'] },
+  'Haushalt':        { days: null, location: 'Vorratsschrank', nonFood: true, words: ['spül','toilettenpapier','küchenrolle','waschmittel','müllbeutel','schwamm','tücher'] },
   // Reste gekochter Gerichte: höchstens 2 Tage im Kühlschrank (Verbraucherzentrale, Speisereste, Stand 02.12.2025)
   'Reste':           { days: 2,   location: 'Kühlschrank',    words: [] },
   'Sonstiges':       { days: 30,  location: 'Vorratsschrank', words: [] },
@@ -25,8 +27,12 @@ export const CATEGORIES = {
 // Datum als JJJJ-MM-TT in lokaler Zeit (toISOString wäre UTC und kurz nach Mitternacht einen Tag zu früh)
 export const isoLocal = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+// Nicht-Lebensmittel (Badezimmer, Haushalt, Pfand): nie im Essensplan, nie als Zutat
+export const isFoodCat = c => !CATEGORIES[c]?.nonFood;
 export function guessCategory(name) {
   const n = ' ' + name.toLowerCase() + ' ';
+  // Badezimmer zuerst („Mundwasser“ ist kein Getränk, „Haarspülung“ kein Spülmittel)
+  if (CATEGORIES['Badezimmer'].words.some(w => n.includes(w))) return 'Badezimmer';
   // Getränke vor Obst prüfen („Orangensaft“ ist ein Getränk, kein Obst)
   if (/(saft|nektar|smoothie|sirup|schorle|limo|cola|sprudel|mineralwasser|eistee)/.test(n)) return 'Getränke';
   for (const [cat, def] of Object.entries(CATEGORIES)) {
