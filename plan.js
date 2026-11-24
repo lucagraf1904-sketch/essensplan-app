@@ -153,6 +153,8 @@ function build(start = isoLocal(), keep = [], dry = false) {
     chosen.push(best.r);
     days.push({ date, dinner: best.r.id, title: best.r.title, why: best.sc.why.slice(0, 3), breakfast: breakfastFor(i, date, usedBf), status: 'geplant' });
   }
+  for (const k of keep) if (!days.some(x => x.date === k.date) && daysTo(k.date) >= 7 && k.pinned) days.push(k); // von Hand gewählte Tage der Folgewoche bleiben
+  days.sort((a, b) => a.date.localeCompare(b.date));
   const p = { start, days, made: new Date().toISOString() }; if (!dry) savePlan(p); return p;
 }
 function getPlan() {
@@ -167,13 +169,17 @@ function getPlan() {
 }
 // Bestehende Tage behalten, nur fehlende Tage am Ende neu planen
 function rebuildFrom(keep) {
-  const chosen = keep.map(d => recipe(d.dinner)).filter(Boolean), days = [...keep], usedBf = new Set();
-  for (let i = days.length; i < 7; i++) {
-    const date = addDays(isoLocal(), i), best = rank(i, date, chosen, 0)[0];
+  const today = isoLocal(), chosen = keep.filter(d => daysTo(d.date) < 7).map(d => recipe(d.dinner)).filter(Boolean), days = [], usedBf = new Set();
+  for (let i = 0; i < 7; i++) {
+    const date = addDays(today, i), k = keep.find(d => d.date === date);
+    if (k) { days.push(k); continue; }
+    const best = rank(i, date, chosen, 0)[0];
     if (best) chosen.push(best.r);
     days.push({ date, dinner: best?.r.id ?? null, title: best?.r.title, why: best?.sc.why.slice(0, 3) ?? [], breakfast: breakfastFor(i, date, usedBf), status: 'geplant' });
   }
-  const p = { start: isoLocal(), days, made: new Date().toISOString() }; savePlan(p); return p;
+  for (const k of keep) if (daysTo(k.date) >= 7) days.push(k); // schon geplante Folgewoche bleibt
+  days.sort((a, b) => a.date.localeCompare(b.date));
+  const p = { start: today, days, made: new Date().toISOString() }; savePlan(p); return p;
 }
 
 // Für die Abendessen-Erinnerung (app.js)
@@ -226,7 +232,7 @@ function renderWeek(body, s) {
     return;
   }
   const p = getPlan(), listed = new Set(loadShop().filter(x => !x.done).map(x => x.name.toLowerCase()));
-  const rs = p.days.filter(d => d.status !== 'uebersprungen' && !d.leftover).map(d => recipe(d.dinner)).filter(Boolean);
+  const rs = p.days.filter(d => daysTo(d.date) < 7 && d.status !== 'uebersprungen' && !d.leftover).map(d => recipe(d.dinner)).filter(Boolean);
   const fish = rs.filter(r => r.kind === 'fisch').length, meat = rs.filter(r => ['rind', 'schwein'].includes(r.kind)).length;
   const veg = Math.round(rs.reduce((a, r) => a + (r.veg ?? 0), 0) / Math.max(1, rs.length));
   const rests = items.filter(i => i.category === 'Reste' && !i.frozenAt && i.qty > 0 && !p.days.some(d => d.leftover?.id === i.id));
@@ -247,7 +253,7 @@ function renderWeek(body, s) {
       ${onlyBox}${goalRows}${info}
       <p class="tiny muted">Kalorien sind grobe Schätzungen pro Portion. Regeln: bald Ablaufendes und Vorrat zuerst, Angebote, Lieblingsgerichte, lange nicht Gegessenes, ${s.planHealthRules ? '2× Fisch, höchstens 2× Rind, ' : ''}lange Gerichte eher am Wochenende${s.shiftsOn ? ', Schichten (Hinweise nach ' + SHIFT_SOURCES + ')' : ''}. „Neu prüfen“ zeigt zuerst eine Vorschau; Gekochtes, Übersprungenes, angepasste Tage und eingeplante Reste bleiben.</p></details>
     <button id="plan-new" class="chip" title="Plan anhand Vorrat neu prüfen">🔄 Neu prüfen</button></div>
-    <div class="plan-mode"><button type="button" class="chip ${only ? 'accepted' : ''}" data-pantry-only>${only ? '🏠 Nur Vorrat: AN' : '🏠 Nur Vorrat: aus'}</button>${only ? ' <span class="tiny muted">Der Plan nutzt nur, was da ist.</span>' : ''}</div>`;
+    <div class="plan-mode"><button type="button" class="chip" data-week>📅 Nächste Woche planen</button><button type="button" class="chip ${only ? 'accepted' : ''}" data-pantry-only>${only ? '🏠 Nur Vorrat: AN' : '🏠 Nur Vorrat: aus'}</button>${only ? ' <span class="tiny muted">Der Plan nutzt nur, was da ist.</span>' : ''}${[5, 6].includes(new Date().getDay()) ? ' <span class="tiny muted">🛒 Einkaufstag: Plan für nächste Woche vorbereiten.</span>' : ''}</div>`;
   const firstOpen = p.days.find(x => x.status === 'geplant' && daysTo(x.date) >= 0)?.date;
   const isOpen = d => dayOpen.has(d.date) ? dayOpen.get(d.date) : (daysTo(d.date) === 0 || (!p.days.some(x => daysTo(x.date) === 0) && d.date === firstOpen));
   const wrap = (d, i, pre, sum, inner, cls = '') => `<li class="plan-day ${cls} ${d.status}" data-i="${i}">${pre}<details class="day" data-date="${d.date}" ${isOpen(d) ? 'open' : ''}><summary>${sum}</summary>${inner}</details></li>`;
@@ -505,6 +511,91 @@ async function recheckPlan() {
   render();
 }
 
+// ---------- Wochenvorschau: nächste Woche (Mo bis So) aus euren Vorlieben zusammenstellen, erst mit Bestätigung übernehmen ----------
+const nextMonday = () => { const wd = new Date(isoLocal() + 'T12:00').getDay(); return addDays(isoLocal(), (8 - wd) % 7 || 7); };
+let wk = null;
+function draftWeek(onlyDate) {
+  const days = [], usedBf = new Set(); let forgotten = 0;
+  const isKept = (date, old) => old && recipe(old.dinner) && (onlyDate ? date !== onlyDate : wk.locked.has(date));
+  // Behaltene Tage zuerst als „schon gewählt“ vormerken, damit kein Gericht doppelt vorkommt
+  const chosen = (wk.days ?? []).filter((old, k) => isKept(addDays(wk.start, k), old)).map(old => recipe(old.dinner));
+  for (let k = 0; k < 7; k++) {
+    const date = addDays(wk.start, k), old = wk.days?.[k], off = daysTo(date);
+    if (isKept(date, old)) { days.push(old); continue; }
+    const seen = wk.seen[date] ?? [];
+    let best = rank(off, date, chosen, forgotten, [...wk.rejected, ...seen])[0];
+    if (!best && seen.length) { wk.seen[date] = []; best = rank(off, date, chosen, forgotten, [...wk.rejected])[0]; }
+    if (best?.sc.why.some(w => w.startsWith('Lange nicht'))) forgotten++;
+    if (best) chosen.push(best.r);
+    days.push({ date, dinner: best?.r.id ?? null, title: best?.r.title, why: best?.sc.why.slice(0, 3) ?? [], breakfast: breakfastFor(off, date, usedBf), status: 'geplant' });
+  }
+  wk.days = days;
+}
+function weekEl() {
+  let d = document.getElementById('week-sheet'); if (d) return d;
+  d = Object.assign(document.createElement('dialog'), { id: 'week-sheet', className: 'sheet' });
+  document.body.appendChild(d);
+  d.addEventListener('click', async e => {
+    if (e.target === d) return d.close();
+    const b = e.target.closest('button'); if (!b || !wk) return;
+    const date = b.dataset.date, day = wk.days.find(x => x.date === date);
+    if (b.dataset.w === 'close') return d.close();
+    if (b.dataset.w === 'swap') { if (day?.dinner) (wk.seen[date] ??= []).push(day.dinner); wk.locked.delete(date); draftWeek(date); }
+    else if (b.dataset.w === 'reject') { if (day?.dinner) wk.rejected.add(day.dinner); wk.locked.delete(date); draftWeek(date); }
+    else if (b.dataset.w === 'lock') { wk.locked.has(date) ? wk.locked.delete(date) : wk.locked.add(date); }
+    else if (b.dataset.w === 'shuffle') { wk.seen = {}; draftWeek(); }
+    else if (b.dataset.w === 'only') { ctx.setSetting('planOnlyPantry', !getSettings().planOnlyPantry); wk.seen = {}; draftWeek(); }
+    else if (b.dataset.w === 'shop') wk.shop = !wk.shop;
+    else if (b.dataset.w === 'apply') return applyWeek(d);
+    fillWeek();
+  });
+  return d;
+}
+const weekMissing = () => { const m = new Map(); for (const d of wk.days) { const r = recipe(d.dinner); if (!r) continue; for (const [w, n] of needOf(d, r)) if (!has(items, w)) m.set(n, (m.get(n) ?? 0) + 1); } return m; };
+function fillWeek() {
+  const d = weekEl(), s = getSettings(), only = !!s.planOnlyPantry, miss = weekMissing();
+  const rs = wk.days.map(x => recipe(x.dinner)).filter(Boolean);
+  const fish = rs.filter(r => r.kind === 'fisch').length, beef = rs.filter(r => r.kind === 'rind').length;
+  const listed = new Set(loadShop().filter(x => !x.done).map(x => x.name.toLowerCase())), toBuy = [...miss.keys()].filter(n => !listed.has(n.toLowerCase()));
+  const last = addDays(wk.start, 6), fmt = iso => { const x = new Date(iso + 'T12:00'); return `${x.getDate()}.${x.getMonth() + 1}.`; };
+  d.innerHTML = `<div class="sheet-head"><button type="button" class="link" data-w="close">Schließen</button><b>Nächste Woche ${fmt(wk.start)} bis ${fmt(last)}</b><span></span></div>
+    <p class="tiny muted">Vorschlag aus euren Lieblingsgerichten, Wochenzielen, Vorrat, Ablaufdaten und Angeboten. Tauscht, sperrt oder lehnt Gerichte ab. Erst mit „Übernehmen" wird der Plan geändert.</p>
+    <div class="tip-alts"><button type="button" class="chip" data-w="shuffle">🎲 Neu mischen (Gesperrtes bleibt)</button>
+      <button type="button" class="chip ${only ? 'accepted' : ''}" data-w="only">${only ? '🏠 Nur Vorrat: AN' : '🏠 Nur Vorrat: aus'}</button></div>
+    <p class="tiny">🐟 Fisch ${fish}${s.planHealthRules ? '/' + (s.weekFish ?? 2) : ''}× · 🥩 Rind ${beef}${s.planHealthRules ? '/' + (s.weekBeef ?? 1) : ''}×${only ? ' · nur Gerichte, bei denen alles im Vorrat ist' : ''}</p>
+    <ul class="plan-diff wk-list">${wk.days.map(x => { const r = recipe(x.dinner), locked = wk.locked.has(x.date), m = r ? needOf(x, r).filter(([w]) => !has(items, w)).map(([, n]) => n) : [];
+      return `<li><b>${esc(dayLabel(x.date))}</b> ${r ? `${esc(r.title)}${r.fav ? ' ★' : ''}<br><small class="muted">${esc(KINDS[r.kind] ?? '')}${r.min ? ' · ' + fmtMin(r.min) : ''}${x.why?.[0] ? ' · ' + esc(x.why[0]) : ''}</small>${m.length ? `<br><small>🛒 fehlt: ${m.map(esc).join(', ')}</small>` : '<br><small class="good-tag">alles im Vorrat</small>'}`
+        : `<span class="muted">${only ? 'Mit dem Vorrat geht kein Gericht auf' : 'Kein passendes Gericht'}</span>`}
+        <div class="tip-alts"><button type="button" class="chip" data-w="swap" data-date="${x.date}">🔄 Anderes</button>
+          <button type="button" class="chip ${locked ? 'accepted' : ''}" data-w="lock" data-date="${x.date}">${locked ? '🔒 Gesperrt' : '🔓 Behalten'}</button>
+          ${r ? `<button type="button" class="chip" data-w="reject" data-date="${x.date}">✕ Mag ich nicht</button>` : ''}</div></li>`; }).join('')}</ul>
+    <p class="sheet-label">🛒 Einkauf für diese Woche (${miss.size} Zutaten fehlen im Vorrat)</p>
+    <p class="tiny">${miss.size ? [...miss].map(([n, c]) => `${esc(n)}${c > 1 ? ` ×${c}` : ''}`).join(', ') : 'Alles ist im Vorrat.'}</p>
+    ${miss.size ? `<button type="button" class="chip ${wk.shop ? 'accepted' : ''}" data-w="shop">${wk.shop ? '✓ ' : ''}Fehlendes auf die Einkaufsliste${toBuy.length < miss.size ? ` (${toBuy.length} neu)` : ''}</button>` : ''}
+    <button type="button" class="primary" data-w="apply">✓ Plan für nächste Woche übernehmen</button>
+    <p class="tiny muted">Übernommen werden die Tage in den Plan (Tab Woche), schon gekochte oder von Hand gewählte Tage bleiben. Der Vorrat wird nicht abgebucht, die Mengen werden nicht geprüft.</p>`;
+}
+function applyWeek(dlg) {
+  const p = loadPlan() ?? { days: [] }, days = p.days ?? [];
+  for (const nd of wk.days) {
+    if (!nd.dinner) continue;
+    const i = days.findIndex(x => x.date === nd.date), ex = days[i];
+    if (ex && (ex.status !== 'geplant' || ex.leftover || ex.free || ex.pinned || ex.need)) continue; // Bestehendes bleibt
+    const day = { ...nd, pinned: true }; if (i >= 0) days[i] = day; else days.push(day);
+  }
+  days.sort((a, b) => a.date.localeCompare(b.date));
+  savePlan({ ...p, days });
+  let added = 0;
+  if (wk.shop) for (const n of weekMissing().keys()) if (ctx.addShop(n)) added++;
+  dlg.close(); view = 'week'; toast(`📅 Nächste Woche übernommen${added ? `, ${added} Zutaten auf der Einkaufsliste` : ''}`); render();
+}
+async function openWeek() {
+  [items, offers] = await Promise.all([ctx.store.listItems(), ctx.allOffers().catch(() => offers)]);
+  wk = { start: nextMonday(), days: null, locked: new Set(), rejected: new Set(), seen: {}, shop: true };
+  if (!activeRecipes().length) return toast('Erst Gerichte anlegen (Tab Gerichte).');
+  draftWeek(); fillWeek(); const d = weekEl(); if (!d.open) d.showModal();
+}
+
 // Zutaten eines Tages anpassen (ersetzen, weglassen, ergänzen). Gilt nur für diesen Tag; „Im Rezept übernehmen“ ändert das Gerichte-Rezept.
 function needsEl() {
   let d = document.getElementById('need-sheet'); if (d) return d;
@@ -636,6 +727,7 @@ async function onClick(e) {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.view) { view = b.dataset.view; goalsOpen = false; return render(); }
   if (b.id === 'plan-new') return recheckPlan();
+  if ('week' in b.dataset) return openWeek();
   if ('pantryOnly' in b.dataset) {
     const on = !getSettings().planOnlyPantry; ctx.setSetting('planOnlyPantry', on);
     rebuildOpen(); await render();

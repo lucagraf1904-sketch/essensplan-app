@@ -178,3 +178,6 @@ Plan-Tab: Knopf „🏠 Nur Vorrat" (auch im Aufklappmenü der Kopfzeile erklär
 
 ## v64: Angebote gedrosselt (Luca 24.11., Marktguru-AGB)
 Automatisch nur noch einmal pro Woche: Freitag 14:00 Uhr deutscher Zeit (`cron.sql`: Einträge 12 und 13 Uhr UTC, die Function prüft die Berliner Uhrzeit und tut sonst nichts). Kein Abruf mehr beim Öffnen des Einkauf-Tabs. Von Hand höchstens einmal pro Tag (App merkt es sich, die Function gibt sonst die vorhandenen Angebote zurück). Die Sonntag-18-Uhr-Nachricht ist im Code nicht gebaut; Hinweis nach dem Freitagsabruf wäre ein späterer Schritt.
+
+## v65: Wochenvorschau „Nächste Woche planen"
+Plan-Tab → „📅 Nächste Woche planen": Entwurf für Montag bis Sonntag der nächsten Woche (`draftWeek` mit derselben Bewertung wie der Plan: Lieblinge, Wochenziele, Vorrat/Ablauf, Angebote, „Nur Vorrat"). Pro Tag 🔄 Anderes, 🔒 Behalten, ✕ Mag ich nicht (nur für diesen Entwurf); 🎲 Neu mischen behält gesperrte Tage. Zeigt fehlende Zutaten der Woche und legt sie auf Wunsch auf die Einkaufsliste. Erst „Übernehmen" schreibt die Tage (mit `pinned`) in den Plan; gekochte/gewählte/angepasste Tage bleiben. Der Plan kann dadurch länger als 7 Tage sein (`build`/`rebuildFrom` behalten gepinnte Tage ab +7, Kopfzeilen-Zähler nur erste 7 Tage). Fr/Sa Hinweis „Einkaufstag".
