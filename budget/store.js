@@ -8,14 +8,18 @@ import { toCents, fromCents, todayIso, addDays, addMonths, nthDue, bookDueLocal,
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 const toTx = r => ({ id: r.id, date: r.date, amount: toCents(r.amount), kind: r.kind, category: r.category, note: r.note ?? '', source: r.source,
-  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at });
+  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, potId: r.pot_id ?? null, extRef: r.ext_ref ?? null });
 const fromTx = (t, hh) => ({ id: t.id, household_id: hh, date: t.date, amount: fromCents(t.amount), kind: t.kind, category: t.category, note: t.note || null,
-  source: t.source || 'manual', ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
+  source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
 const toRec = r => ({ id: r.id, name: r.name, amount: toCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, startDate: r.start_date, nextDue: r.next_due,
-  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '' });
+  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null });
 const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: fromCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, start_date: r.startDate,
   next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
-  policy_id: r.policyId || null, note: r.note || null });
+  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null });
+const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.goal == null ? null : toCents(r.goal), targetDate: r.target_date ?? null,
+  startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived });
+const fromPot = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, icon: p.icon || '🐷', goal: p.goal ? fromCents(p.goal) : null, target_date: p.targetDate || null,
+  start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
   noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
   pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null });
@@ -82,7 +86,27 @@ export async function createSupabaseStore() {
       }
       return out;
     },
-    async saveTx(t) { const row = fromTx({ ...t, id: t.id ?? uid() }, hh()); return toTx(must(await sb.from('budget_tx').upsert(row).select().single())); },
+    async saveTx(t) {
+      const row = fromTx({ ...t, id: t.id ?? uid() }, hh());
+      const r = await sb.from('budget_tx').upsert(row).select().single();
+      // Monatsrest oder Speisekammer-Einkauf schon übernommen (z. B. vom anderen Handy): kein Fehler, nur Hinweis
+      if (r.error && /budget_tx_ext_ref|duplicate key/i.test(r.error.message)) throw Object.assign(new Error('Wurde schon übernommen.'), { duplicate: true });
+      return toTx(must(r));
+    },
+    // Alle Buchungen mit Spartopf (für den Stand, unabhängig vom Zeitraum)
+    async listPotTx() { return must(await sb.from('budget_tx').select('id,date,amount,kind,category,note,source,pot_id,ext_ref,recurring_id,created_at').not('pot_id', 'is', null).order('date', { ascending: false }).limit(10000)).map(toTx); },
+    async listPots() { return must(await sb.from('budget_pots').select('*').order('created_at')).map(toPot); },
+    async savePot(p) {
+      // Nur ein Topf bekommt den Monatsrest automatisch: beim Setzen die anderen zuerst abschalten
+      if (p.autoRest) must(await sb.from('budget_pots').update({ auto_rest: false }).eq('auto_rest', true).neq('id', p.id ?? '00000000-0000-0000-0000-000000000000'));
+      return toPot(must(await sb.from('budget_pots').upsert(fromPot({ ...p, id: p.id ?? uid() }, hh())).select().single()));
+    },
+    async deletePot(id) { must(await sb.from('budget_pots').delete().eq('id', id)); },
+    // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
+    async listPantryPurchases(sinceIso) {
+      const rows = must(await sb.from('log').select('id,item_name,price,at,by_user').eq('type', 'bought').not('price', 'is', null).gte('at', sinceIso).order('at').limit(2000));
+      return rows.map(r => ({ id: r.id, name: r.item_name, price: toCents(r.price), at: r.at, by: r.by_user }));
+    },
     async deleteTx(id) { must(await sb.from('budget_tx').delete().eq('id', id)); },
 
     async listRecurring() { return must(await sb.from('budget_recurring').select('*').order('name')).map(toRec); },
@@ -129,6 +153,8 @@ export async function createSupabaseStore() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_recurring', filter: f }, () => cb('recurring'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_policies', filter: f }, () => cb('policies'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_settings', filter: f }, () => cb('config'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_pots', filter: f }, () => cb('pots'))
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'log', filter: f }, () => cb('pantry'))
         .subscribe();
     },
   };
@@ -174,13 +200,24 @@ function demoSeed() {
   }
   const pol = [{ id: polId, name: 'Autoversicherung Golf', category: 'vers-kfz', insurer: 'Muster Versicherung AG', policyNo: 'KF-123456', contractEnd: `${+t.slice(0, 4) + 1}-01-01`,
     noticeMonths: 1, notes: 'Vollkasko 300 € SB, Teilkasko 150 € SB', filePath: null, fileName: 'Beispielpolice (Demo).pdf', pages: DEMO_POLICY, pageCount: DEMO_POLICY.length, textSource: 'manual' }];
-  const config = { limits: { lebensmittel: 45000, essen: 12000, liebe: 15000, mobilitaet: 20000, haushalt: 5000 }, custom: [] };
-  return { tx, rec, pol, config, files: {} };
+  // Spartöpfe: Urlaub mit Ziel und Sparrate, Notgroschen ohne Ziel
+  const urlaub = uid(), notgroschen = uid();
+  const pots = [
+    { id: urlaub, name: 'Urlaub', icon: '🏖️', goal: 150000, targetDate: `${+t.slice(0, 4) + 1}-07-01`, startBalance: 20000, autoRest: false, archived: false },
+    { id: notgroschen, name: 'Notgroschen', icon: '🛟', goal: null, targetDate: null, startBalance: 100000, autoRest: true, archived: false },
+  ];
+  r('Sparrate Urlaub', 10000, 'fi-sparen', 'monthly', addDays(s, 2), { kind: 'save', potId: urlaub });
+  // Einkäufe, die in der Speisekammer per Bon erfasst wurden (zum Übernehmen)
+  const at = (daysBack, h) => { const d = new Date(); d.setDate(d.getDate() - daysBack); d.setHours(h, 12, 0, 0); return d.toISOString(); };
+  const pantry = [['Milch', 119, 1], ['Haferflocken', 89, 1], ['Hähnchenbrust', 699, 1], ['Paprika', 249, 1], ['Joghurt', 179, 1], ['Nudeln', 99, 3], ['Tomaten', 229, 3], ['Parmesan', 349, 3]]
+    .map(([name, price, back], i) => ({ id: uid(), name, price, at: at(back, 17), by: 'demo', i }));
+  const config = { limits: { lebensmittel: 45000, essen: 12000, liebe: 15000, mobilitaet: 20000, haushalt: 5000 }, custom: [], pantrySince: addDays(t, -14) };
+  return { tx, rec, pol, config, pots, pantry, files: {} };
 }
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx) { db = demoSeed(); save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots) { db = demoSeed(); save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));
@@ -191,8 +228,17 @@ export function createDemoStore() {
     household: () => ({ name: 'Demo-Haushalt', join_code: 'DEMO00' }),
     async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
     reset() { localStorage.removeItem(DEMO_KEY); db = null; },
+    async listPotTx() { return delay(load().tx.filter(t => t.potId).map(t => ({ ...t }))); },
+    async listPots() { return delay((load().pots ?? []).map(p => ({ ...p }))); },
+    async savePot(p) { const d = load(); d.pots ??= []; const row = { startBalance: 0, archived: false, ...p, id: p.id ?? uid() };
+      if (row.autoRest) d.pots.forEach(x => { if (x.id !== row.id) x.autoRest = false; });
+      const i = d.pots.findIndex(x => x.id === row.id); if (i >= 0) d.pots[i] = row; else d.pots.push(row); save(); return { ...row }; },
+    async deletePot(id) { const d = load(); d.pots = d.pots.filter(p => p.id !== id); d.tx = d.tx.filter(t => t.potId !== id); d.rec = d.rec.filter(r => r.potId !== id); save(); },
+    async listPantryPurchases(since) { return delay((load().pantry ?? []).filter(r => r.at >= since).map(r => ({ ...r }))); },
     async listTx(since) { return delay(load().tx.filter(t => t.date >= since).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },
-    async saveTx(t) { const d = load(); const row = { createdAt: new Date().toISOString(), source: 'manual', recurringId: null, dueDate: null, ...t, id: t.id ?? uid() };
+    async saveTx(t) { const d = load();
+      if (t.extRef && d.tx.some(x => x.extRef === t.extRef && x.id !== t.id)) throw Object.assign(new Error('Wurde schon übernommen.'), { duplicate: true });
+      const row = { createdAt: new Date().toISOString(), source: 'manual', recurringId: null, dueDate: null, ...t, id: t.id ?? uid() };
       const i = d.tx.findIndex(x => x.id === row.id); if (i >= 0) d.tx[i] = { ...d.tx[i], ...row }; else d.tx.push(row); save(); return delay({ ...row }); },
     async deleteTx(id) { const d = load(); d.tx = d.tx.filter(t => t.id !== id); save(); },
     async listRecurring() { return delay(load().rec.map(r => ({ ...r })).sort((a, b) => a.name.localeCompare(b.name))); },

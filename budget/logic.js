@@ -90,7 +90,7 @@ export function bookDueLocal(recurring, today, existingKeys = new Set()) {
     let k = r.n, d = r.nextDue, guard = 0;
     while (d <= today && (!r.endDate || d <= r.endDate) && guard < 60) {
       const key = r.id + '|' + d;
-      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d }); existingKeys.add(key); }
+      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null }); existingKeys.add(key); }
       k++; guard++; d = nthDue(r.startDate, r.freq, k);
     }
     r.n = k; r.nextDue = d; r.active = !r.endDate || d <= r.endDate;
@@ -130,13 +130,17 @@ export const dateShortNoYear = s => { const d = parseIso(s); return `${d.getDate
 
 // Monatsübersicht. groupOf: Kategorie-ID → Gruppen-ID.
 // Ergebnis in Cent: income, expense (gebucht), pendingIncome/pendingExpense (Fixkosten, die in diesem Monat noch kommen),
-// free = income + pendingIncome − expense − pendingExpense, byGroup: Ausgaben je Gruppe (gebucht + noch offen getrennt).
+// saved/unsaved (in Spartöpfe gelegt bzw. herausgenommen), pendingSave (Sparraten, die noch kommen),
+// free = income + pendingIncome + unsaved − expense − pendingExpense − saved − pendingSave, byGroup: Ausgaben je Gruppe.
+// Sparen ist keine Ausgabe (zählt nicht in expense/byGroup), mindert aber, was frei ist.
 export function monthSummary({ tx, recurring, key, today, groupOf }) {
   const { from, to, days } = monthRange(key);
-  const s = { key, from, to, days, income: 0, expense: 0, fixedBooked: 0, pendingIncome: 0, pendingExpense: 0, byGroup: {}, pendingByGroup: {}, pendingList: [] };
+  const s = { key, from, to, days, income: 0, expense: 0, fixedBooked: 0, pendingIncome: 0, pendingExpense: 0, saved: 0, unsaved: 0, pendingSave: 0, byGroup: {}, pendingByGroup: {}, pendingList: [] };
   for (const t of tx) {
     if (t.date < from || t.date > to) continue;
     if (t.kind === 'income') s.income += t.amount;
+    else if (t.kind === 'save') s.saved += t.amount;
+    else if (t.kind === 'unsave') s.unsaved += t.amount;
     else {
       s.expense += t.amount;
       if (t.recurringId) s.fixedBooked += t.amount;
@@ -146,13 +150,14 @@ export function monthSummary({ tx, recurring, key, today, groupOf }) {
   for (const r of recurring) {
     for (const d of occurrences(r, from, to)) {
       if (r.kind === 'income') s.pendingIncome += r.amount;
+      else if (r.kind === 'save') s.pendingSave += r.amount;
       else { s.pendingExpense += r.amount; const g = groupOf(r.category); s.pendingByGroup[g] = (s.pendingByGroup[g] ?? 0) + r.amount; }
       s.pendingList.push({ date: d, r });
     }
   }
   s.pendingList.sort((a, b) => a.date.localeCompare(b.date));
   s.plannedIncome = s.income + s.pendingIncome;
-  s.free = s.plannedIncome - s.expense - s.pendingExpense;
+  s.free = s.plannedIncome + s.unsaved - s.expense - s.pendingExpense - s.saved - s.pendingSave;
   // Tage bis Monatsende inklusive heute (nur im laufenden Monat), sonst null
   s.daysLeft = today >= from && today <= to ? diffDays(today, to) + 1 : null;
   s.dayIndex = today >= from && today <= to ? diffDays(from, today) + 1 : today > to ? days : 0;
@@ -179,6 +184,56 @@ export function noticeInfo(contractEnd, noticeMonths, today) {
   return { end, deadline, daysLeft: diffDays(today, deadline), missed };
 }
 
+// ---------- Spartöpfe ----------
+// Stand je Topf in Cent: Startbetrag + Einzahlungen − Entnahmen (potTx = alle Buchungen mit Topf, nicht nur die letzten Monate)
+export function potBalances(pots, potTx) {
+  const b = new Map(pots.map(p => [p.id, p.startBalance ?? 0]));
+  for (const t of potTx) if (b.has(t.potId)) b.set(t.potId, b.get(t.potId) + (t.kind === 'save' ? t.amount : t.kind === 'unsave' ? -t.amount : 0));
+  return b;
+}
+// Monate bis zum Zieldatum, ab dem laufenden Monat gezählt (Zieldatum im laufenden Monat = 1, schon vorbei = 0)
+export function monthsUntil(today, target) {
+  if (!target) return null;
+  const [y, m] = today.split('-').map(Number), [ty, tm] = target.split('-').map(Number);
+  return target < today ? 0 : Math.max(1, (ty - y) * 12 + (tm - m) + (target.slice(8) >= today.slice(8) ? 1 : 0));
+}
+// Ziel-Rechnung: was fehlt, wie viel pro Monat nötig ist, und ob die Sparrate reicht
+export function potPlan({ goal, targetDate }, balance, monthlyRate, today) {
+  if (!goal) return { hasGoal: false };
+  const missing = Math.max(0, goal - balance), ratio = Math.min(1, Math.max(0, balance / goal));
+  const months = monthsUntil(today, targetDate);
+  const need = months ? Math.ceil(missing / months) : null;
+  let status = 'open';
+  if (!missing) status = 'done';
+  else if (months === 0) status = 'late';
+  else if (need != null && monthlyRate) status = monthlyRate >= need ? 'ontrack' : 'behind';
+  const etaMonths = monthlyRate > 0 ? Math.ceil(missing / monthlyRate) : null;
+  return { hasGoal: true, missing, ratio, months, need, status, etaMonths };
+}
+export const lastDayOfMonth = key => monthRange(key).to;
+
+// ---------- Einkäufe aus der Speisekammer ----------
+// Bons der Speisekammer stehen dort als einzelne Artikelzeilen (log, type 'bought'). Zeilen derselben Person, die kurz hintereinander
+// gespeichert wurden (höchstens 3 Minuten Abstand), sind ein Einkauf. Schlüssel 'sk:<erste Zeilen-ID>' verhindert doppeltes Übernehmen.
+export function groupPantry(rows, gapMin = 3) {
+  const sorted = [...rows].filter(r => r.price > 0).sort((a, b) => a.at.localeCompare(b.at));
+  const out = [];
+  let cur = null;
+  for (const r of sorted) {
+    if (!cur || r.by !== cur.by || (new Date(r.at) - new Date(cur.lastAt)) > gapMin * 60000) {
+      cur = { key: 'sk:' + r.id, at: r.at, date: iso(new Date(r.at)), lastAt: r.at, by: r.by, amount: 0, items: [] };
+      out.push(cur);
+    }
+    cur.amount += r.price; cur.items.push(r.name); cur.lastAt = r.at;
+  }
+  return out;
+}
+// Mögliche Doppelbuchung: Lebensmittel am selben Tag mit ähnlichem Betrag (±1 € bzw. ±3 %)
+export function similarTx(tx, purchase, groupOf) {
+  return tx.find(t => t.kind === 'expense' && t.date === purchase.date && groupOf(t.category) === 'lebensmittel' && t.extRef !== purchase.key
+    && Math.abs(t.amount - purchase.amount) <= Math.max(100, purchase.amount * 0.03)) ?? null;
+}
+
 // ---------- Suche ----------
 export const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 export function matches(text, query) {
@@ -197,9 +252,9 @@ const csvCell = (v, text = true) => {
 export function toCsv(tx, catPath) {
   const head = ['Datum', 'Art', 'Kategorie', 'Betrag', 'Notiz', 'Quelle'];
   const rows = [...tx].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
-    dateShort(t.date), t.kind === 'income' ? 'Einnahme' : 'Ausgabe', catPath(t.category),
-    (t.kind === 'income' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
-    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import' }[t.source] ?? t.source,
+    dateShort(t.date), { income: 'Einnahme', expense: 'Ausgabe', save: 'In Spartopf', unsave: 'Aus Spartopf' }[t.kind] ?? t.kind, catPath(t.category),
+    (t.kind === 'income' || t.kind === 'unsave' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
+    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import', rest: 'Monatsrest', pantry: 'Speisekammer' }[t.source] ?? t.source,
   ]);
   return '﻿' + [head, ...rows].map(r => r.map((v, i) => csvCell(v, i !== 3)).join(';')).join('\r\n');
 }

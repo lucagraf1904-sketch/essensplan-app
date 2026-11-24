@@ -204,6 +204,32 @@
     </form>
   </dialog>
 
+  <!-- Spartopf -->
+  <dialog id="dlg-pot" class="sheet" aria-labelledby="pot-title">
+    <form id="form-pot" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="pot-title">Spartopf</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <div id="pot-summary"></div>
+      <label class="field">Name<input id="pot-name" required maxlength="40" placeholder="z. B. Urlaub, Notgroschen, neues Auto"></label>
+      <div class="icon-pick" id="pot-icons" role="radiogroup" aria-label="Symbol"></div>
+      <div class="grid2">
+        <label class="field">Ziel (€) <span class="muted">optional</span><input id="pot-goal" inputmode="decimal" placeholder="z. B. 1.500"></label>
+        <label class="field">Bis wann <span class="muted">optional</span><input type="date" id="pot-date"></label>
+      </div>
+      <div class="grid2">
+        <label class="field">Sparrate pro Monat<input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Nächste Sparrate am<input type="date" id="pot-next"></label>
+      </div>
+      <label class="field" id="pot-start-wrap">Schon drauf (€)<input id="pot-start" inputmode="decimal" placeholder="0,00"></label>
+      <label class="check"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
+      <p id="pot-hint" class="tiny muted"></p>
+      <p id="pot-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="pot-delete">Auflösen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Police fragen -->
   <dialog id="dlg-chat" class="sheet tall" aria-labelledby="chat-title">
     <div class="chat">

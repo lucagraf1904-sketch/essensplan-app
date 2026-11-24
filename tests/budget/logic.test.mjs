@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -110,4 +110,46 @@ test('Auszüge: Versicherungsschein immer dabei, Grenze eingehalten', () => {
   assert.ok(excerpts.reduce((a, x) => a + x.text.length, 0) <= 400);
   const long = chunkPages(['x'.repeat(5000)], {});
   assert.ok(long.every(c => c.text.length <= 1440));
+});
+
+test('Sparen mindert „frei“, ist aber keine Ausgabe', () => {
+  const tx = [
+    { date: '2026-11-01', amount: 200000, kind: 'income', category: 'ei-gehalt' },
+    { date: '2026-11-02', amount: 50000, kind: 'expense', category: 'wo-miete' },
+    { date: '2026-11-03', amount: 10000, kind: 'save', category: 'fi-sparen', potId: 'p' },
+    { date: '2026-11-04', amount: 3000, kind: 'unsave', category: 'fi-sparen', potId: 'p' },
+  ];
+  const rec = [{ id: 'r', amount: 5000, kind: 'save', category: 'fi-sparen', freq: 'monthly', startDate: '2026-11-28', nextDue: '2026-11-28', n: 0, active: true, potId: 'p' }];
+  const s = monthSummary({ tx, recurring: rec, key: '2026-11', today: '2026-11-24', groupOf: () => 'x' });
+  assert.equal(s.expense, 50000); assert.equal(s.saved, 10000); assert.equal(s.unsaved, 3000); assert.equal(s.pendingSave, 5000);
+  assert.equal(s.free, 200000 - 50000 - 10000 + 3000 - 5000);
+  assert.deepEqual(Object.keys(s.byGroup), ['x']);
+});
+
+test('Spartopf: Stand und Ziel', () => {
+  const b = potBalances([{ id: 'p', startBalance: 20000 }], [{ potId: 'p', kind: 'save', amount: 5000 }, { potId: 'p', kind: 'unsave', amount: 1000 }, { potId: 'q', kind: 'save', amount: 999 }]);
+  assert.equal(b.get('p'), 24000); assert.equal(b.has('q'), false);
+  assert.equal(monthsUntil('2026-11-24', '2027-08-01'), 9);   // Dez … Aug
+  assert.equal(monthsUntil('2026-11-24', '2026-11-30'), 1);
+  assert.equal(monthsUntil('2026-11-24', '2026-10-01'), 0);
+  const plan = potPlan({ goal: 150000, targetDate: '2027-08-01' }, 24000, 10000, '2026-11-24');
+  assert.equal(plan.missing, 126000); assert.equal(plan.need, 14000); assert.equal(plan.status, 'behind'); assert.equal(plan.etaMonths, 13);
+  assert.equal(potPlan({ goal: 1000 }, 1500, 0, '2026-11-24').status, 'done');
+  assert.equal(potPlan({ goal: null }, 0, 0, '2026-11-24').hasGoal, false);
+});
+
+test('Speisekammer-Einkäufe: Artikel zu Einkäufen bündeln, Doppelbuchung erkennen', () => {
+  const rows = [
+    { id: 'a', name: 'Milch', price: 119, at: '2026-11-20T10:00:00Z', by: 'u1' },
+    { id: 'b', name: 'Brot', price: 249, at: '2026-11-20T10:00:30Z', by: 'u1' },
+    { id: 'c', name: 'Käse', price: 399, at: '2026-11-20T10:02:00Z', by: 'u1' },
+    { id: 'd', name: 'Äpfel', price: 299, at: '2026-11-20T10:02:10Z', by: 'u2' },
+    { id: 'e', name: 'Wein', price: 599, at: '2026-11-20T18:00:00Z', by: 'u1' },
+    { id: 'f', name: 'Ohne Preis', price: null, at: '2026-11-20T18:00:01Z', by: 'u1' },
+  ];
+  const g = groupPantry(rows);
+  assert.deepEqual(g.map(x => [x.key, x.amount, x.items.length]), [['sk:a', 767, 3], ['sk:d', 299, 1], ['sk:e', 599, 1]]);
+  const tx = [{ kind: 'expense', date: g[0].date, category: 'lm-supermarkt', amount: 780 }];
+  assert.ok(similarTx(tx, g[0], () => 'lebensmittel'));
+  assert.equal(similarTx(tx, g[2], () => 'lebensmittel'), null);
 });

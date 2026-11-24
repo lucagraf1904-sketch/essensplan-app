@@ -5,7 +5,7 @@ import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, gr
 import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
-  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays,
+  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, groupPantry, similarTx,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
@@ -16,7 +16,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
-const state = { tx: [], recurring: [], policies: [], config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
+const state = { tx: [], recurring: [], policies: [], pots: [], potTx: [], pantry: [], config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
   txFilter: { q: '', kind: 'all', group: '' }, statsRange: 6, statsTable: false };
 let store = null, chat = null;
 const saving = new Map(); // Buchungs-ID → laufendes Speichern (Rückgängig wartet darauf)
@@ -40,7 +40,9 @@ function ask(title, html, buttons = [{ value: 'ok', label: 'OK', cls: 'primary' 
 }
 const confirmDelete = async what => (await ask(`${what} löschen?`, '<p>Das lässt sich nicht rückgängig machen.</p>', [{ value: '', label: 'Abbrechen' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes';
 const amountClass = t => t.kind === 'income' ? 'amt-in' : '';
-const signed = t => (t.kind === 'income' ? '+' : '−') + eur(t.amount).replace('-', '');
+const signed = t => (t.kind === 'income' ? '+' : t.kind === 'save' ? '→ ' : t.kind === 'unsave' ? '← ' : '−') + eur(t.amount).replace('-', '');
+const potOf = id => state.pots.find(p => p.id === id);
+const potRate = id => state.recurring.filter(r => r.kind === 'save' && r.potId === id && r.active).reduce((a, r) => a + monthlyCents(r), 0);
 const setSync = (text, warn = false) => { const s = $('#sync'); s.textContent = text; s.classList.toggle('warn', warn); };
 
 // ---------- Warteschlange für Buchungen ohne Netz ----------
@@ -70,16 +72,17 @@ async function loadAll({ book = true } = {}) {
   if (book) { try { const n = await store.bookDue(); if (n && !(store.mode === 'demo' && n > 20)) toast(`${n} ${n === 1 ? 'Fixkosten-Buchung' : 'Fixkosten-Buchungen'} automatisch eingetragen`); } catch (e) { if (!e.offline) throw e; } }
   await flushOutbox();
   const since = addMonths(state.today.slice(0, 7) + '-01', -24);
-  const [tx, recurring, policies, config] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig()]);
+  const [tx, recurring, policies, config, pots, potTx] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig(), store.listPots(), store.listPotTx()]);
   // Noch nicht gesendete Buchungen sichtbar lassen
   const pending = outbox.get().filter(o => !o.user || o.user === store.me());
   const del = new Set(pending.filter(o => o.op === 'delete').map(o => o.id));
   const saves = new Map(pending.filter(o => o.op === 'save').map(o => [o.tx.id, o.tx]));
   state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id))].sort(byDateDesc);
-  state.recurring = recurring; state.policies = policies;
+  state.recurring = recurring; state.policies = policies; state.pots = pots; state.potTx = potTx;
   state.config = { limits: {}, custom: [], ...config };
   setCustomCategories(state.config.custom);
   chat?.clearCache();
+  await loadPantry();
   saveSnapshot();
 }
 // Letzter Stand für unterwegs ohne Netz (13 Monate Buchungen, ohne Seitentexte der Policen)
@@ -87,7 +90,7 @@ const SNAP = 'haushaltskasse.snapshot';
 function saveSnapshot() {
   if (store.mode !== 'supabase') return;
   const since = addMonths(state.today.slice(0, 7) + '-01', -13);
-  try { localStorage.setItem(SNAP, JSON.stringify({ at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config })); }
+  try { localStorage.setItem(SNAP, JSON.stringify({ at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config, pots: state.pots, potTx: state.potTx })); }
   catch { /* Speicher voll: dann eben ohne Offline-Stand */ }
 }
 function loadSnapshot() { try { return JSON.parse(localStorage.getItem(SNAP)); } catch { return null; } }
@@ -129,6 +132,12 @@ function deadlines(days = 60) {
 }
 
 function txItem(t) {
+  if (t.potId) {
+    const p = potOf(t.potId);
+    return `<li><button class="item" data-pot="${esc(t.potId)}"><span class="ic" aria-hidden="true">${esc(p?.icon ?? '🐷')}</span>
+      <span><span class="t">${esc(p?.name ?? 'Spartopf')}</span><span class="s">${t.kind === 'save' ? 'In den Spartopf' : 'Aus dem Spartopf'}${t.note && t.note !== p?.name ? ' · ' + esc(t.note) : ''}</span></span>
+      <span class="a">${signed(t)}</span></button></li>`;
+  }
   const c = cat(t.category);
   return `<li><button class="item" data-tx="${esc(t.id)}">
     <span class="ic" aria-hidden="true">${c.icon}</span>
@@ -157,13 +166,15 @@ function renderHome() {
       <p class="band-label">${esc(label)}</p>
       <p class="band-value ${s.free < 0 ? 'neg' : ''}">${s.free < 0 ? '−' : ''}${eur(Math.abs(s.free))}</p>
       <p class="band-sub">${esc(sub)}</p>
-      ${band({ spent: s.expense, pending: s.pendingExpense, total: s.plannedIncome, progress: cur ? (s.dayIndex - 0.5) / s.days : null })}
-      <div class="band-legend"><span><i class="k-spent"></i>Ausgegeben ${eur(s.expense)}</span>${s.pendingExpense ? `<span><i class="k-pending"></i>Fixkosten offen ${eur(s.pendingExpense)}</span>` : ''}<span><i class="k-free"></i>Frei ${eur(Math.max(0, s.free))}</span></div>
+      ${band({ spent: s.expense, pending: s.pendingExpense, saved: Math.max(0, s.saved + s.pendingSave - s.unsaved), total: s.plannedIncome, progress: cur ? (s.dayIndex - 0.5) / s.days : null })}
+      <div class="band-legend"><span><i class="k-spent"></i>Ausgegeben ${eur(s.expense)}</span>${s.pendingExpense ? `<span><i class="k-pending"></i>Fixkosten offen ${eur(s.pendingExpense)}</span>` : ''}${s.saved + s.pendingSave ? `<span><i class="k-saved"></i>Gespart ${eur(s.saved + s.pendingSave)}</span>` : ''}<span><i class="k-free"></i>Frei ${eur(Math.max(0, s.free))}</span></div>
       <details><summary class="tiny" style="cursor:pointer;margin-top:10px;opacity:.9">So rechnet die App</summary>
       <dl class="band-math">
         <dt>Einnahmen${s.pendingIncome ? ' (inkl. erwartet)' : ''}</dt><dd>${eur(s.plannedIncome)}</dd>
         <dt>Ausgaben bisher${s.fixedBooked ? `, davon Fixkosten ${eur(s.fixedBooked)}` : ''}</dt><dd>−${eur(s.expense)}</dd>
         ${s.pendingExpense ? `<dt>Fixkosten noch offen</dt><dd>−${eur(s.pendingExpense)}</dd>` : ''}
+        ${s.saved + s.pendingSave ? `<dt>In Spartöpfe${s.pendingSave ? ' (inkl. Sparrate, die noch kommt)' : ''}</dt><dd>−${eur(s.saved + s.pendingSave)}</dd>` : ''}
+        ${s.unsaved ? `<dt>Aus Spartöpfen genommen</dt><dd>+${eur(s.unsaved)}</dd>` : ''}
         <dt class="sum">Frei</dt><dd class="sum">${s.free < 0 ? '−' : ''}${eur(Math.abs(s.free))}</dd>
       </dl></details></div>`;
   }
@@ -196,13 +207,15 @@ function renderHome() {
   const recent = state.tx.filter(t => monthKey(t.date) === state.month).slice(0, 5);
 
   $('#view-home').innerHTML = bandHtml
+    + restCard() + pantryCard()
     + (alerts ? `<div class="section-head"><h2>Fristen</h2></div>${alerts}` : '')
+    + potsSection()
     + `<div class="section-head"><h2>Budgets</h2><button class="btn link" data-act="limits">${limited.length ? 'Ändern' : 'Festlegen'}</button></div>`
     + (limited.length ? `<ul class="list">${budgets}</ul><p class="tiny muted" style="margin:6px 4px 0">${pace != null ? 'Der Strich zeigt, wie weit der Monat ist. Liegt der Balken davor, bist du im Plan.' : ''}</p>`
       : `<div class="card empty"><p>Lege fest, wie viel du im Monat z. B. für Lebensmittel oder Essen gehen ausgeben willst. Die App warnt, bevor es knapp wird.</p><button class="btn primary" data-act="limits">Budgets festlegen</button></div>`)
     + `<div class="section-head"><h2>In den nächsten 14 Tagen</h2><button class="btn link" data-act="fixed">Fixkosten</button></div>`
-    + (upcoming.length ? `<ul class="list">${upcoming.map(({ d, r }) => `<li><button class="item" data-rec="${esc(r.id)}"><span class="ic" aria-hidden="true">${cat(r.category).icon}</span>
-        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
+    + (upcoming.length ? `<ul class="list">${upcoming.map(({ d, r }) => `<li><button class="item" ${r.potId ? `data-pot="${esc(r.potId)}"` : `data-rec="${esc(r.id)}"`}><span class="ic" aria-hidden="true">${r.potId ? esc(potOf(r.potId)?.icon ?? '🐷') : cat(r.category).icon}</span>
+        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : r.kind === 'save' ? '→ ' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
       : `<div class="card empty"><p>In den nächsten zwei Wochen ist nichts fällig.</p>${state.recurring.length ? '' : '<button class="btn" data-act="add-rec">Fixkosten eintragen</button>'}</div>`)
     + `<div class="section-head"><h2>Letzte Buchungen</h2>${recent.length ? '<button class="btn link" data-act="tx">Alle</button>' : ''}</div>`
     + (recent.length ? `<ul class="list">${recent.map(txItem).join('')}</ul>` : `<div class="card empty"><p>In diesem Monat ist noch nichts gebucht.</p><button class="btn primary" data-act="add">Erste Ausgabe erfassen</button></div>`);
@@ -252,14 +265,14 @@ function recItem(r) {
   const n = noticeInfo(r.contractEnd ?? pol?.contractEnd, r.noticeMonths ?? pol?.noticeMonths, state.today);
   const nb = n ? `<span class="badge ${n.daysLeft <= 14 ? 'bad' : n.daysLeft <= 60 ? 'warn' : ''}">kündbar bis ${dateShortNoYear(n.deadline)}${n.deadline.slice(0, 4) !== state.today.slice(0, 4) ? n.deadline.slice(0, 4) : ''}</span>` : '';
   const sub = r.active ? `${FREQS[r.freq].label} · nächste ${r.nextDue.slice(0, 4) === state.today.slice(0, 4) ? dateShortNoYear(r.nextDue) : dateShort(r.nextDue)}` : `beendet${r.endDate ? ' am ' + dateShort(r.endDate) : ''}`;
-  return `<li><button class="item" data-rec="${esc(r.id)}"><span class="ic" aria-hidden="true">${c.icon}</span>
+  return `<li><button class="item" ${r.potId ? `data-pot="${esc(r.potId)}"` : `data-rec="${esc(r.id)}"`}><span class="ic" aria-hidden="true">${r.potId ? esc(potOf(r.potId)?.icon ?? '🐷') : c.icon}</span>
     <span><span class="t">${esc(r.name)}</span><span class="s">${esc(sub)}</span>${nb ? `<span style="display:block;margin-top:3px">${nb}</span>` : ''}</span>
     <span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${eur(r.amount)}<small>${r.freq === 'monthly' ? 'im Monat' : `≈ ${eur(monthlyCents(r))}/Monat`}</small></span></button></li>`;
 }
 function renderFixed() {
   const act = state.recurring.filter(r => r.active), ended = state.recurring.filter(r => !r.active);
-  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income');
-  const mExp = exp.reduce((a, r) => a + monthlyCents(r), 0), mInc = inc.reduce((a, r) => a + monthlyCents(r), 0);
+  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income'), sav = act.filter(r => r.kind === 'save');
+  const mExp = exp.reduce((a, r) => a + monthlyCents(r), 0), mInc = inc.reduce((a, r) => a + monthlyCents(r), 0), mSav = sav.reduce((a, r) => a + monthlyCents(r), 0);
   const ins = exp.filter(r => groupOf(r.category) === 'versicherung').reduce((a, r) => a + monthlyCents(r), 0);
   const nonMonthly = exp.filter(r => r.freq !== 'monthly').reduce((a, r) => a + monthlyCents(r), 0);
   const byGroup = new Map();
@@ -269,12 +282,14 @@ function renderFixed() {
     <div class="kpis" style="margin-top:6px">
       <div class="kpi"><span>Fixkosten</span><b>${eur(mExp)}</b><small>pro Monat</small></div>
       <div class="kpi"><span>Regelmäßig rein</span><b class="amt-in">${eur(mInc)}</b><small>pro Monat</small></div>
-      <div class="kpi"><span>Bleibt</span><b>${mInc ? eur(mInc - mExp) : '–'}</b><small>${mInc ? 'für alles andere' : 'Einnahme fehlt'}</small></div>
+      <div class="kpi"><span>Bleibt</span><b>${mInc ? eur(mInc - mExp - mSav) : '–'}</b><small>${mInc ? (mSav ? 'nach Sparraten' : 'für alles andere') : 'Einnahme fehlt'}</small></div>
     </div>
     ${nonMonthly ? `<p class="tiny muted" style="margin:10px 4px 0">Darin stecken ${eur(nonMonthly)} pro Monat für jährliche oder vierteljährliche Kosten${ins ? `, ${eur(ins)} davon für Versicherungen` : ''}. Diesen Betrag am besten monatlich zurücklegen.</p>` : ''}
     <div class="section-head"><h2>Ausgaben</h2><button class="btn link" data-act="add-rec">Hinzufügen</button></div>
     ${exp.length ? ordered.map(g => `<div class="day-head"><span>${g.icon} ${esc(g.label)}</span><span>${eur(byGroup.get(g.id).reduce((a, r) => a + monthlyCents(r), 0))}/Monat</span></div><ul class="list">${byGroup.get(g.id).map(recItem).join('')}</ul>`).join('')
       : `<div class="card empty"><p>Trag hier ein, was regelmäßig abgeht: Miete, Strom, Handy, Streaming, Versicherungen. Die App bucht es dann jeden Monat automatisch.</p><button class="btn primary" data-act="add-rec">Fixkosten eintragen</button></div>`}
+    <div class="section-head"><h2>Sparraten</h2><button class="btn link" data-act="add-pot">Spartopf anlegen</button></div>
+    ${sav.length ? `<ul class="list">${sav.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Eine feste Sparrate legt jeden Monat automatisch Geld in einen Spartopf.</p><button class="btn" data-act="add-pot">Spartopf anlegen</button></div>`}
     <div class="section-head"><h2>Regelmäßige Einnahmen</h2><button class="btn link" data-act="add-income">Hinzufügen</button></div>
     ${inc.length ? `<ul class="list">${inc.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Gehalt, BAföG oder Nebenjob eintragen, dann weiß die App, wie viel im Monat frei ist.</p><button class="btn" data-act="add-income">Einnahme eintragen</button></div>`}
     ${ended.length ? `<div class="section-head"><h2>Beendet</h2></div><ul class="list">${ended.map(recItem).join('')}</ul>` : ''}`;
@@ -333,13 +348,13 @@ function renderStats() {
       <div class="kpi"><span>Ø Einnahmen</span><b>${avgI ? eur(avgI) : '–'}</b><small>pro Monat</small></div>
       <div class="kpi"><span>Sparquote</span><b>${rate != null ? rate + ' %' : '–'}</b><small>${done.length ? `aus ${done.length} abgeschl. Monaten` : 'noch kein ganzer Monat'}</small></div>
     </div>
-    ${state.statsTable ? `<div class="card" style="margin-top:14px"><table class="data-table"><thead><tr><th>Monat</th><th>Einnahmen</th><th>Ausgaben</th><th>Plus/Minus</th></tr></thead><tbody>
-      ${sums.map(x => `<tr><td>${esc(monthName(x.key))}</td><td>${eur(x.income)}</td><td>${eur(x.expense)}</td><td>${x.income - x.expense >= 0 ? '+' : '−'}${eur(Math.abs(x.income - x.expense))}</td></tr>`).join('')}</tbody></table></div>`
+    ${state.statsTable ? `<div class="card" style="margin-top:14px"><table class="data-table"><thead><tr><th>Monat</th><th>Einnahmen</th><th>Ausgaben</th><th>Gespart</th><th>Plus/Minus</th></tr></thead><tbody>
+      ${sums.map(x => `<tr><td>${esc(monthName(x.key))}</td><td>${eur(x.income)}</td><td>${eur(x.expense)}</td><td>${eur(x.saved - x.unsaved)}</td><td>${x.income - x.expense >= 0 ? '+' : '−'}${eur(Math.abs(x.income - x.expense))}</td></tr>`).join('')}</tbody></table></div>`
     : `<div class="card" style="margin-top:14px"><h2>Ausgaben je Monat</h2><p class="tiny muted">Hervorgehoben: ${esc(monthName(state.month))}${avgE ? `. Linie: Durchschnitt ${eur(avgE)} (abgeschlossene Monate)` : ''}${keys.includes(curKey) ? '. Der laufende Monat ist noch nicht fertig.' : ''}</p><div id="ch-exp" style="margin-top:8px"></div></div>
-       <div class="card"><h2>Plus oder Minus je Monat</h2><p class="tiny muted">Einnahmen minus Ausgaben. Blau: Geld übrig, orange: mehr ausgegeben als eingenommen.</p><div id="ch-bal" style="margin-top:8px"></div>
+       <div class="card"><h2>Plus oder Minus je Monat</h2><p class="tiny muted">Einnahmen minus Ausgaben. Blau: Geld übrig (Gespartes zählt dazu), orange: mehr ausgegeben als eingenommen.</p><div id="ch-bal" style="margin-top:8px"></div>
        <div class="legend"><span><i style="background:var(--pos)"></i>Plus</span><span><i style="background:var(--neg)"></i>Minus</span></div></div>`}
     <div class="card"><h2>Wofür im ${esc(monthName(state.month).split(' ')[0])}</h2>
-      <p class="tiny muted">${s.expense ? `${eur(s.expense)} ausgegeben, ${fixedShare} % davon Fixkosten. Vergleich mit dem Vormonat darunter.` : 'Noch keine Ausgaben in diesem Monat.'}${Object.keys(limits).length ? ' Strich = Budget.' : ''}</p>
+      <p class="tiny muted">${s.expense ? `${eur(s.expense)} ausgegeben, ${fixedShare} % davon Fixkosten. Vergleich mit dem Vormonat darunter.` : 'Noch keine Ausgaben in diesem Monat.'}${s.saved - s.unsaved > 0 ? ` Dazu ${eur(s.saved - s.unsaved)} in Spartöpfe gelegt.` : ''}${Object.keys(limits).length ? ' Strich = Budget.' : ''}</p>
       <div class="rank" style="margin-top:12px">${rows.map(r => {
         const d = r.v - r.p, dTxt = !r.p ? 'im Vormonat nichts' : d === 0 ? 'wie im Vormonat' : `${d > 0 ? '+' : '−'}${eur(Math.abs(d))} zum Vormonat`;
         return `<button class="rank-row" data-group="${r.g.id}" style="border:0;background:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit">
@@ -568,6 +583,206 @@ async function savePolicyForm() {
   finally { btn.disabled = false; btn.textContent = 'Speichern'; }
 }
 
+// ---------- Spartöpfe ----------
+const POT_ICONS = ['🐷', '🏖️', '🛟', '🚗', '🏠', '🎁', '💍', '🎓', '👶', '💻', '🚲', '🎄'];
+function potCard(p, bal) {
+  const rate = potRate(p.id), plan = potPlan(p, bal, rate, state.today);
+  const until = p.targetDate ? ` bis ${monthShort(p.targetDate.slice(0, 7))} ${p.targetDate.slice(0, 4)}` : '';
+  let note = '', cls = plan.status ?? '';
+  if (!plan.hasGoal) note = rate ? `Sparrate ${eur(rate)} im Monat` : 'Ohne Ziel';
+  else if (plan.status === 'done') note = '🎉 Ziel erreicht';
+  else if (plan.status === 'late') note = `⚠️ Zieldatum vorbei, es fehlen noch ${eur(plan.missing)}`;
+  else if (plan.status === 'ontrack') note = `Im Plan: ${eur(rate)} im Monat reichen`;
+  else if (plan.status === 'behind') note = `⚠️ Fürs Ziel ${eur(plan.need)} im Monat nötig, Sparrate ist ${eur(rate)}`;
+  else if (plan.need) note = `Noch ${eur(plan.missing)}: ${eur(plan.need)} im Monat${until}`;
+  else note = rate ? `Mit ${eur(rate)} im Monat in ca. ${plan.etaMonths} ${plan.etaMonths === 1 ? 'Monat' : 'Monaten'} erreicht` : `Noch ${eur(plan.missing)} bis zum Ziel`;
+  return `<li><button class="pot" data-pot="${esc(p.id)}">
+    <span class="ic" aria-hidden="true">${esc(p.icon)}</span><span class="nm">${esc(p.name)}</span><span class="bal">${eur(bal)}</span>
+    <span class="gl">${plan.hasGoal ? `Ziel ${eur(p.goal)}${until}` : p.autoRest ? 'bekommt den Monatsrest' : ''}</span><span class="gl r">${plan.hasGoal ? Math.round(plan.ratio * 100) + ' %' : ''}</span>
+    ${plan.hasGoal ? `<span class="meter"><i style="width:${(plan.ratio * 100).toFixed(1)}%"></i></span>` : ''}
+    <span class="note ${cls}">${note}</span></button></li>`;
+}
+function potsSection() {
+  const pots = state.pots.filter(p => !p.archived);
+  const bal = potBalances(state.pots, state.potTx);
+  const total = pots.reduce((a, p) => a + (bal.get(p.id) ?? 0), 0);
+  return `<div class="section-head"><h2>Spartöpfe${pots.length ? ` · ${eur(total)}` : ''}</h2><button class="btn link" data-act="add-pot">${pots.length ? 'Neuer Topf' : 'Anlegen'}</button></div>`
+    + (pots.length ? `<ul class="list">${pots.map(p => potCard(p, bal.get(p.id) ?? 0)).join('')}</ul>`
+      : `<div class="card empty"><p>Leg Geld für Urlaub, Auto oder einen Notgroschen zur Seite. Mit fester Sparrate und dem, was am Monatsende übrig bleibt.</p><button class="btn primary" data-act="add-pot">Spartopf anlegen</button></div>`);
+}
+
+// Was am Ende eines Monats übrig blieb. Nur für Monate, in denen die App wirklich genutzt wurde (mindestens 5 eigene Buchungen).
+function restCandidate() {
+  const m = shiftMonth(state.today.slice(0, 7), -1);
+  const pots = state.pots.filter(p => !p.archived);
+  if (!pots.length || state.config.closed?.[m] || state.tx.some(t => t.extRef === 'rest:' + m)) return null;
+  const used = state.tx.filter(t => monthKey(t.date) === m && t.source !== 'recurring' && !t.potId).length;
+  const s = summary(m);
+  if (used < 5 || !s.income || s.free <= 0) return null;
+  return { month: m, amount: s.free };
+}
+function restCard() {
+  const c = restCandidate(); if (!c || state.month !== state.today.slice(0, 7)) return '';
+  const pots = state.pots.filter(p => !p.archived);
+  return `<div class="card" style="margin-top:14px;display:grid;gap:10px">
+    <p><b>Im ${esc(monthName(c.month).split(' ')[0])} sind ${eur(c.amount)} übrig geblieben.</b></p>
+    <p class="tiny muted">In einen Spartopf legen? Gebucht wird am letzten Tag des Monats, der laufende Monat bleibt unverändert.</p>
+    <div class="row wrap"><select id="rest-pot" aria-label="Spartopf" style="flex:1;min-width:140px">${pots.map(p => `<option value="${esc(p.id)}">${esc(p.icon)} ${esc(p.name)}</option>`).join('')}</select>
+      <button class="btn primary" data-act="rest-book" data-month="${c.month}" data-amount="${c.amount}">In Topf legen</button>
+      <button class="btn" data-act="rest-keep" data-month="${c.month}">Behalten</button></div></div>`;
+}
+async function bookRest(month, pot, amount, auto = false) {
+  const t = { id: uid(), date: lastDayOfMonth(month), amount, kind: 'save', category: 'fi-sparen', potId: pot.id, note: `Rest aus ${monthName(month)}`, source: 'rest', extRef: 'rest:' + month, createdAt: new Date().toISOString() };
+  try { await store.saveTx(t); toast(`${eur(amount)} aus dem ${monthName(month).split(' ')[0]} ${auto ? 'automatisch ' : ''}in „${pot.name}“ gelegt`); }
+  catch (e) { if (!e.duplicate) { ask('Nicht gebucht', `<p>${esc(e.message)}</p>`); return; } }
+  await loadAll({ book: false }); render();
+}
+async function autoRest() {
+  const pot = state.pots.find(p => p.autoRest && !p.archived), c = restCandidate();
+  if (pot && c) await bookRest(c.month, pot, c.amount, true);
+}
+
+function openPot(p = null) {
+  potEditing = p;
+  const rec = p && state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active);
+  const bal = p ? potBalances(state.pots, state.potTx).get(p.id) ?? 0 : 0;
+  $('#pot-title').textContent = p ? `${p.icon} ${p.name}` : 'Neuer Spartopf';
+  $('#pot-name').value = p?.name ?? '';
+  const icon = p?.icon ?? '🐷';
+  $('#pot-icons').innerHTML = POT_ICONS.map(i => `<label><input type="radio" name="pot-icon" value="${i}" ${i === icon ? 'checked' : ''} aria-label="Symbol ${i}"><span aria-hidden="true">${i}</span></label>`).join('');
+  $('#pot-goal').value = p?.goal ? amountInput(p.goal).replace(',00', '') : '';
+  $('#pot-date').value = p?.targetDate ?? '';
+  $('#pot-rate').value = rec ? amountInput(rec.amount) : '';
+  $('#pot-next').value = rec?.nextDue ?? addMonths(state.today.slice(0, 7) + '-01', 1);
+  $('#pot-start').value = p ? amountInput(p.startBalance) : '';
+  $('#pot-start-wrap').firstChild.textContent = p ? 'Startbetrag beim Anlegen (€)' : 'Schon drauf (€)';
+  $('#pot-auto').checked = !!p?.autoRest;
+  $('#pot-delete').classList.toggle('hidden', !p);
+  $('#pot-err').textContent = ''; $('#pot-hint').textContent = '';
+  const moves = p ? state.potTx.filter(t => t.potId === p.id).slice(0, 30) : [];
+  $('#pot-summary').innerHTML = p ? `<div class="pot-head">
+      <span class="tiny muted">Stand</span><span class="big">${eur(bal)}</span>
+      ${p.goal ? `<span class="meter"><i style="width:${Math.min(100, 100 * bal / p.goal).toFixed(1)}%;background:var(--good)"></i></span><span class="tiny">${Math.round(Math.min(1, bal / p.goal) * 100)} % von ${eur(p.goal)}</span>` : ''}
+      <div class="row wrap"><button type="button" class="btn small primary" id="pot-in">Einzahlen</button><button type="button" class="btn small" id="pot-out">Entnehmen</button></div></div>
+    ${moves.length ? `<details class="more"><summary>Bewegungen (${moves.length})</summary><ul class="list">${moves.map(t => `<li class="item" style="cursor:default"><span class="ic" aria-hidden="true">${t.kind === 'save' ? '↘' : '↗'}</span>
+      <span><span class="t">${t.kind === 'save' ? 'Eingezahlt' : 'Entnommen'}</span><span class="s">${dateShort(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</span></span>
+      <span class="a">${t.kind === 'save' ? '+' : '−'}${eur(t.amount)} <button type="button" class="btn small danger" data-del-move="${esc(t.id)}" aria-label="Bewegung löschen">✕</button></span></li>`).join('')}</ul></details>` : ''}` : '';
+  if (p) {
+    $('#pot-in').onclick = () => potMove(p, 'save');
+    $('#pot-out').onclick = () => potMove(p, 'unsave');
+    $$('[data-del-move]').forEach(b => b.onclick = async () => {
+      if (!(await confirmDelete('Bewegung'))) return;
+      try { await store.deleteTx(b.dataset.delMove); await loadAll({ book: false }); render(); openPot(potOf(p.id)); } catch (e) { $('#pot-err').textContent = e.message; }
+    });
+  }
+  if (!$('#dlg-pot').open) $('#dlg-pot').showModal();
+}
+let potEditing = null;
+async function potMove(p, kind) {
+  const v = await ask(kind === 'save' ? `In „${p.name}“ einzahlen` : `Aus „${p.name}“ entnehmen`,
+    `<label class="field">Betrag (€)<input id="mv-amount" inputmode="decimal" placeholder="0,00"></label><label class="field">Notiz <span class="muted">(optional)</span><input id="mv-note" maxlength="80" placeholder="${kind === 'save' ? 'z. B. Geburtstagsgeld' : 'z. B. Flug gebucht'}"></label>
+     <p class="tiny muted">${kind === 'save' ? 'Zählt im laufenden Monat als gespart und mindert, was frei ist.' : 'Das Geld steht dann im laufenden Monat wieder zur Verfügung.'}</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: kind === 'save' ? 'Einzahlen' : 'Entnehmen', cls: 'primary' }]);
+  if (v !== 'ok') return;
+  const amount = parseAmount($('#mv-amount').value);
+  if (!amount) { toast('Kein gültiger Betrag'); return; }
+  const bal = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
+  if (kind === 'unsave' && amount > bal && (await ask('Mehr als drauf ist', `<p>Im Topf sind nur ${eur(bal)}. Trotzdem ${eur(amount)} entnehmen?</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Trotzdem', cls: 'primary' }])) !== 'ok') return;
+  try {
+    await store.saveTx({ id: uid(), date: state.today, amount, kind, category: 'fi-sparen', potId: p.id, note: $('#mv-note').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
+    await loadAll({ book: false }); render(); openPot(potOf(p.id));
+    toast(kind === 'save' ? `${eur(amount)} eingezahlt` : `${eur(amount)} entnommen`);
+  } catch (e) { $('#pot-err').textContent = e.message; }
+}
+async function savePotForm() {
+  const err = m => { $('#pot-err').textContent = m; };
+  const name = $('#pot-name').value.trim();
+  if (!name) return err('Bitte einen Namen eingeben.');
+  const read = id => { const v = $(id).value.trim(); if (!v) return { ok: true, c: null }; const c = parseAmount(v); return { ok: c != null, c }; };
+  const goal = read('#pot-goal'), rate = read('#pot-rate'), start = read('#pot-start');
+  if (!goal.ok) return err('Das Ziel ist keine gültige Zahl.');
+  if (!rate.ok) return err('Die Sparrate ist keine gültige Zahl.');
+  if (!start.ok) return err('Der Betrag bei „Schon drauf“ ist keine gültige Zahl.');
+  const date = $('#pot-date').value, next = $('#pot-next').value;
+  if (date && !isIso(date)) return err('Bitte ein gültiges Zieldatum wählen.');
+  if (rate.c && !isIso(next)) return err('Bitte angeben, wann die nächste Sparrate abgeht.');
+  if (rate.c && next < state.today && (await ask('Sparrate nachbuchen?', `<p>Die erste Sparrate am ${dateShort(next)} liegt in der Vergangenheit. Alle Raten seit dann werden gebucht.</p>`, [{ value: '', label: 'Datum ändern' }, { value: 'ok', label: 'Nachbuchen', cls: 'primary' }])) !== 'ok') return;
+  const old = potEditing;
+  const p = { ...(old ?? {}), id: old?.id ?? uid(), name, icon: $$('[name=pot-icon]').find(x => x.checked)?.value ?? '🐷', goal: goal.c || null, targetDate: date || null,
+    startBalance: start.c ?? 0, autoRest: $('#pot-auto').checked, archived: false };
+  try {
+    await store.savePot(p);
+    const rec = state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active);
+    if (rate.c) {
+      const changed = !rec || rec.nextDue !== next;
+      await store.saveRecurring({ ...(rec ?? {}), name: `Sparrate ${name}`, amount: rate.c, kind: 'save', category: 'fi-sparen', freq: 'monthly', potId: p.id, active: true,
+        endDate: null, contractEnd: null, noticeMonths: null, ...(changed ? { startDate: next, nextDue: next, n: 0 } : {}) });
+    } else if (rec) await store.deleteRecurring(rec.id);
+    $('#dlg-pot').close();
+    await loadAll(); render();
+    toast(old ? 'Spartopf gespeichert' : `Spartopf „${name}“ angelegt`);
+  } catch (e) { err(e.message); }
+}
+async function dissolvePot() {
+  const p = potEditing, bal = potBalances(state.pots, state.potTx).get(p.id) ?? 0;
+  const hasMoves = state.potTx.some(t => t.potId === p.id);
+  const v = await ask(`„${p.name}“ auflösen?`, hasMoves || bal
+    ? `<p>${bal > 0 ? `Die ${eur(bal)} kommen als Entnahme zurück in diesen Monat.` : 'Der Topf ist leer.'} Die Sparrate endet. Bisherige Einzahlungen bleiben in der Auswertung sichtbar.</p>`
+    : '<p>Der Topf hat noch keine Bewegungen und wird gelöscht.</p>',
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Auflösen', cls: 'danger' }]);
+  if (v !== 'ok') return;
+  try {
+    for (const r of state.recurring.filter(r => r.potId === p.id && r.active)) await store.saveRecurring({ ...r, active: false, endDate: state.today < r.startDate ? r.startDate : state.today });
+    if (!hasMoves && !bal) await store.deletePot(p.id);
+    else {
+      if (bal > 0) await store.saveTx({ id: uid(), date: state.today, amount: bal, kind: 'unsave', category: 'fi-sparen', potId: p.id, note: 'Topf aufgelöst', source: 'manual', createdAt: new Date().toISOString() });
+      await store.savePot({ ...p, archived: true, autoRest: false });
+    }
+    $('#dlg-pot').close(); await loadAll({ book: false }); render(); toast(`„${p.name}“ aufgelöst`);
+  } catch (e) { $('#pot-err').textContent = e.message; }
+}
+
+// ---------- Einkäufe aus der Speisekammer ----------
+async function loadPantry() {
+  if (!store.listPantryPurchases) return;
+  if (!state.config.pantrySince) { // ab Einführung: nur Einkäufe der letzten 14 Tage vorschlagen, keine ganze Historie
+    state.config.pantrySince = addDays(state.today, -14);
+    try { await store.setConfig(state.config); } catch { /* nächstes Mal */ }
+  }
+  try {
+    const since = [state.config.pantrySince, addDays(state.today, -45)].sort().pop();
+    const rows = await store.listPantryPurchases(since + 'T00:00:00');
+    const done = new Set([...state.tx.map(t => t.extRef).filter(Boolean), ...(state.config.pantryDismissed ?? [])]);
+    state.pantry = groupPantry(rows).filter(p => !done.has(p.key)).map(p => ({ ...p, similar: similarTx(state.tx, p, groupOf) }));
+  } catch (e) { console.warn('Speisekammer-Einkäufe', e); state.pantry = []; }
+}
+function pantryCard() {
+  if (!state.pantry.length) return '';
+  const list = state.pantry.slice(-5).reverse();
+  const plain = state.pantry.filter(p => !p.similar).length;
+  return `<div class="section-head"><h2>Aus der Speisekammer</h2>${plain > 1 ? `<button class="btn link" data-act="pantry-all">Alle ${plain} übernehmen</button>` : ''}</div>
+    <div class="card" style="padding:0">${list.map(p => `<div class="suggest">
+      <div class="top"><span><b>🛒 Einkauf ${esc(dayLabel(p.date, state.today))}</b><span class="tiny muted" style="display:block">${p.items.length} ${p.items.length === 1 ? 'Artikel' : 'Artikel'}: ${esc(p.items.slice(0, 3).join(', '))}${p.items.length > 3 ? ' …' : ''}</span></span><b>${eur(p.amount)}</b></div>
+      ${p.similar ? `<p class="warnline">⚠️ Am selben Tag hast du schon ${eur(p.similar.amount)}${p.similar.note ? ` „${esc(p.similar.note)}“` : ''} erfasst. Derselbe Einkauf?</p>` : ''}
+      <div class="row wrap">${p.similar
+        ? `<button class="btn small" data-act="pantry-skip" data-key="${esc(p.key)}">Ja, schon erfasst</button><button class="btn small" data-act="pantry-take" data-key="${esc(p.key)}">Nein, übernehmen</button>`
+        : `<button class="btn small primary" data-act="pantry-take" data-key="${esc(p.key)}">Übernehmen</button><button class="btn small" data-act="pantry-skip" data-key="${esc(p.key)}">Ignorieren</button>`}</div></div>`).join('')}</div>`;
+}
+async function takePantry(list) {
+  let n = 0, sum = 0;
+  for (const p of list) {
+    try { await store.saveTx({ id: uid(), date: p.date, amount: p.amount, kind: 'expense', category: 'lm-supermarkt', note: 'Einkauf (Speisekammer)', source: 'pantry', extRef: p.key, createdAt: new Date().toISOString() }); n++; sum += p.amount; }
+    catch (e) { if (!e.duplicate) { ask('Nicht übernommen', `<p>${esc(e.message)}</p>`); break; } }
+  }
+  await loadAll({ book: false }); render();
+  if (n) toast(`${n === 1 ? 'Einkauf' : n + ' Einkäufe'} übernommen: ${eur(sum)} Lebensmittel`);
+}
+function dismissPantry(keys) {
+  state.config.pantryDismissed = [...(state.config.pantryDismissed ?? []), ...keys].slice(-300);
+  state.pantry = state.pantry.filter(p => !keys.includes(p.key));
+  saveConfigSoon(); render();
+}
+
 // ---------- Einstellungen ----------
 let cfgTimer = null;
 function saveConfigSoon() { clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); setSync(''); } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, 600); }
@@ -633,8 +848,10 @@ function bindEvents() {
 
   // Klicks in allen Ansichten und Dialogen
   document.addEventListener('click', async e => {
-    const el = e.target.closest('[data-tx],[data-rec],[data-pol],[data-ask],[data-file],[data-act],[data-group]');
+    const el = e.target.closest('[data-tx],[data-pot],[data-rec],[data-pol],[data-ask],[data-file],[data-act],[data-group]');
+    if (el?.closest('#dlg-pot')) return;
     if (!el || el.closest('#dlg-tx')) return;
+    if (el.dataset.pot) return openPot(potOf(el.dataset.pot));
     if (el.dataset.tx) return openTx(state.tx.find(t => t.id === el.dataset.tx));
     if (el.dataset.rec) return openRec(state.recurring.find(r => r.id === el.dataset.rec));
     if (el.dataset.pol) return openPolicy(state.policies.find(p => p.id === el.dataset.pol));
@@ -646,6 +863,12 @@ function bindEvents() {
     else if (act === 'add-rec') openRec();
     else if (act === 'add-income') openRec(null, { kind: 'income', name: 'Gehalt', category: 'ei-gehalt' });
     else if (act === 'add-pol') openPolicy();
+    else if (act === 'add-pot') openPot();
+    else if (act === 'rest-book') { const pot = potOf($('#rest-pot').value); if (pot) bookRest(el.dataset.month, pot, +el.dataset.amount); }
+    else if (act === 'rest-keep') { state.config.closed = { ...(state.config.closed ?? {}), [el.dataset.month]: 'keep' }; saveConfigSoon(); render(); }
+    else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
+    else if (act === 'pantry-all') takePantry(state.pantry.filter(p => !p.similar));
+    else if (act === 'pantry-skip') { dismissPantry([el.dataset.key]); }
     else if (act === 'fixed') show('fixed');
     else if (act === 'tx') show('tx');
     else if (act === 'limits') openSettings('limits');
@@ -684,6 +907,10 @@ function bindEvents() {
     if (!(await confirmDelete(recEditing.kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten'))) return;
     try { await store.deleteRecurring(recEditing.id); $('#dlg-rec').close(); await loadAll({ book: false }); render(); toast('Gelöscht. Bisherige Buchungen bleiben erhalten.'); } catch (e) { $('#rec-err').textContent = e.message; }
   };
+
+  // Spartopf
+  $('#form-pot').onsubmit = e => { e.preventDefault(); savePotForm(); };
+  $('#pot-delete').onclick = () => dissolvePot();
 
   // Versicherung
   $('#form-pol').onsubmit = e => { e.preventDefault(); savePolicyForm(); };
@@ -745,6 +972,7 @@ async function start() {
   $('#demo-bar').classList.toggle('hidden', store.mode !== 'demo');
   setSync('Lädt …');
   await loadAll();
+  await autoRest();
   showOutbox();
   store.onChange(() => scheduleReload());
   show(state.view);
@@ -752,7 +980,7 @@ async function start() {
 
 // Ohne Netz: letzten Stand zeigen, neue Buchungen landen in der Warteschlange und gehen raus, sobald wieder Netz da ist
 function startOffline(snap) {
-  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, config: { limits: {}, custom: [], ...snap.config } });
+  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, pots: snap.pots ?? [], potTx: snap.potTx ?? [], config: { limits: {}, custom: [], ...snap.config } });
   setCustomCategories(state.config.custom);
   store.useOffline(snap.household);
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');

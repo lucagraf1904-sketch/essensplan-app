@@ -16,6 +16,22 @@ select next_due > (now() at time zone 'Europe/Berlin')::date as next_in_future, 
 -- Neustart des Rhythmus mit gleichem Startdatum bucht nichts doppelt (eindeutiger Index)
 update budget_recurring set n = 0, next_due = start_date;
 select budget_book_due() = 0 as restart_no_double;
+-- Spartopf mit monatlicher Sparrate: wird gebucht, Topf-Pflicht wird geprüft
+insert into budget_pots(household_id, name, goal) values (my_household(), 'Urlaub', 1500);
+insert into budget_recurring(household_id, name, amount, kind, category, freq, start_date, next_due, pot_id)
+  select my_household(), 'Sparrate Urlaub', 50, 'save', 'fi-sparen', 'monthly', (now() at time zone 'Europe/Berlin')::date - interval '40 days', (now() at time zone 'Europe/Berlin')::date - interval '40 days', id from budget_pots;
+select budget_book_due() = 2 as savings_booked;
+select count(*) = 2 as save_tx_have_pot from budget_tx where kind = 'save' and pot_id is not null;
+do $$ begin
+  begin insert into budget_tx(household_id, date, amount, kind, category) values (my_household(), current_date, 1, 'save', 'fi-sparen'); raise exception 'FEHLER: Sparen ohne Topf möglich';
+  exception when check_violation then raise notice 'ok: Sparen braucht einen Topf'; end;
+end $$;
+-- Monatsrest nur einmal je Monat
+insert into budget_tx(household_id, date, amount, kind, category, pot_id, ext_ref, source) select my_household(), current_date, 10, 'save', 'fi-sparen', id, 'rest:2026-10', 'rest' from budget_pots;
+do $$ begin
+  begin insert into budget_tx(household_id, date, amount, kind, category, pot_id, ext_ref, source) select my_household(), current_date, 10, 'save', 'fi-sparen', id, 'rest:2026-10', 'rest' from budget_pots; raise exception 'FEHLER: Monatsrest doppelt';
+  exception when unique_violation then raise notice 'ok: Monatsrest nur einmal'; end;
+end $$;
 -- Police mit Seitenzahl
 insert into budget_policies(household_id, name, pages) values (my_household(), 'Kfz', '["a","b","c"]');
 select page_count = 3 as page_count_ok from budget_policies;
@@ -26,6 +42,7 @@ select (create_household('B')).id is not null as b_household;
 select count(*) = 0 as b_sees_no_tx from budget_tx;
 select count(*) = 0 as b_sees_no_policies from budget_policies;
 select count(*) = 0 as b_sees_no_settings from budget_settings;
+select count(*) = 0 as b_sees_no_pots from budget_pots;
 -- B darf nicht in A schreiben
 do $$ declare a uuid; begin
   select household_id into a from members where user_id = '00000000-0000-0000-0000-00000000000a';

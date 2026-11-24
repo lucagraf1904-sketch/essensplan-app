@@ -95,9 +95,9 @@ export function diverging(root, data, { height = 170 } = {}) {
 }
 
 // Monatsband: ausgegeben | Fixkosten noch offen | frei, mit Markierung „heute“ (Anteil des Monats). Als HTML, damit es scharf bleibt.
-export function band({ spent, pending, total, progress }) {
-  const sum = Math.max(total, spent + pending, 1);
-  const ps = Math.max(0, Math.min(100, 100 * spent / sum)), pp = Math.max(0, Math.min(100 - ps, 100 * pending / sum));
-  return `<div class="bandbar" aria-hidden="true"><i class="s" style="width:${ps.toFixed(2)}%"></i><i class="p" style="width:${pp.toFixed(2)}%"></i>`
+export function band({ spent, pending, saved = 0, total, progress }) {
+  const sum = Math.max(total, spent + pending + saved, 1);
+  const ps = Math.max(0, Math.min(100, 100 * spent / sum)), pp = Math.max(0, Math.min(100 - ps, 100 * pending / sum)), pv = Math.max(0, Math.min(100 - ps - pp, 100 * saved / sum));
+  return `<div class="bandbar" aria-hidden="true"><i class="s" style="width:${ps.toFixed(2)}%"></i><i class="p" style="width:${pp.toFixed(2)}%"></i><i class="v" style="width:${pv.toFixed(2)}%"></i>`
     + (progress != null ? `<b class="today" style="left:${(100 * Math.max(0, Math.min(1, progress))).toFixed(2)}%"></b>` : '') + '</div>';
 }

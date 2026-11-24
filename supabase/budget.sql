@@ -73,11 +73,52 @@ create table if not exists budget_settings (
   updated_at timestamptz not null default now()
 );
 
+-- ---------- Spartöpfe (Version 2, 24.11.2026) ----------
+-- Stand eines Topfs = start_balance + Einzahlungen (budget_tx.kind = 'save') − Entnahmen ('unsave').
+create table if not exists budget_pots (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references households(id) on delete cascade,
+  name text not null,
+  icon text not null default '🐷',
+  goal numeric(12,2) check (goal is null or goal > 0),   -- Sparziel, optional
+  target_date date,                                      -- bis wann, optional
+  start_balance numeric(12,2) not null default 0,        -- was schon drauf war, als der Topf angelegt wurde
+  auto_rest boolean not null default false,              -- Monatsrest automatisch hierher
+  archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- Nur ein Topf bekommt den Monatsrest automatisch
+create unique index if not exists budget_pots_auto_rest on budget_pots(household_id) where auto_rest;
+
+alter table budget_tx add column if not exists pot_id uuid references budget_pots(id) on delete cascade;
+alter table budget_tx add column if not exists ext_ref text;   -- z. B. 'rest:2026-10' (Monatsrest) oder 'sk:<log-id>' (Einkauf aus der Speisekammer)
+alter table budget_recurring add column if not exists pot_id uuid references budget_pots(id) on delete cascade;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'budget_tx_ext_ref') then
+    alter table budget_tx add constraint budget_tx_ext_ref unique (household_id, ext_ref); end if;
+end $$;
+-- Neue Arten: save = in den Spartopf, unsave = aus dem Spartopf. Beide brauchen einen Topf, die anderen keinen.
+alter table budget_tx drop constraint if exists budget_tx_kind_check;
+alter table budget_tx add constraint budget_tx_kind_check check (kind in ('expense', 'income', 'save', 'unsave'));
+alter table budget_tx drop constraint if exists budget_tx_pot_check;
+alter table budget_tx add constraint budget_tx_pot_check check ((kind in ('save', 'unsave')) = (pot_id is not null));
+alter table budget_tx drop constraint if exists budget_tx_source_check;
+alter table budget_tx add constraint budget_tx_source_check check (source in ('manual', 'receipt', 'recurring', 'import', 'rest', 'pantry'));
+alter table budget_recurring drop constraint if exists budget_recurring_kind_check;
+alter table budget_recurring add constraint budget_recurring_kind_check check (kind in ('expense', 'income', 'save'));
+alter table budget_recurring drop constraint if exists budget_recurring_pot_check;
+alter table budget_recurring add constraint budget_recurring_pot_check check ((kind = 'save') = (pot_id is not null));
+create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is not null;
+
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
 alter table budget_recurring enable row level security;
 alter table budget_tx        enable row level security;
 alter table budget_settings  enable row level security;
+alter table budget_pots      enable row level security;
+drop policy if exists budget_pots_all on budget_pots;
+create policy budget_pots_all on budget_pots for all using (household_id = my_household()) with check (household_id = my_household());
 drop policy if exists budget_policies_all on budget_policies;
 create policy budget_policies_all on budget_policies for all using (household_id = my_household()) with check (household_id = my_household());
 drop policy if exists budget_recurring_all on budget_recurring;
@@ -92,6 +133,10 @@ create or replace function budget_check_links() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   -- getrennte IFs: PL/pgSQL würde sonst new.recurring_id auch bei budget_recurring auswerten (Feld fehlt dort)
+  if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
+     and not exists (select 1 from budget_pots where id = new.pot_id and household_id = new.household_id) then
+    raise exception 'Spartopf gehört nicht zu diesem Haushalt';
+  end if;
   if tg_table_name = 'budget_tx' then
     if new.recurring_id is not null and not exists (select 1 from budget_recurring where id = new.recurring_id and household_id = new.household_id) then
       raise exception 'Fixkosten-Eintrag gehört nicht zu diesem Haushalt';
@@ -135,8 +180,8 @@ begin
   for r in select * from budget_recurring where household_id = hh and active and next_due <= today for update skip locked loop
     d := r.next_due; k := r.n; guard := 0;
     while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
-      insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date)
-        values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d)
+      insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id)
+        values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id)
         on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
       if found then cnt := cnt + 1; end if;
       k := k + 1; guard := guard + 1;
@@ -157,8 +202,8 @@ create policy budget_policies_files on storage.objects for all to authenticated
   with check (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text);
 
 -- ---------- Rechte und Live-Abgleich ----------
-grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings to authenticated;
-grant all on budget_policies, budget_recurring, budget_tx, budget_settings to service_role;
+grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots to authenticated;
+grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots to service_role;
 grant execute on function budget_nth_due(date, text, int), budget_book_due() to authenticated;
 do $$ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_tx') then
@@ -169,5 +214,7 @@ do $$ begin
     alter publication supabase_realtime add table budget_policies; end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_settings') then
     alter publication supabase_realtime add table budget_settings; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_pots') then
+    alter publication supabase_realtime add table budget_pots; end if;
 end $$;
 notify pgrst, 'reload schema';

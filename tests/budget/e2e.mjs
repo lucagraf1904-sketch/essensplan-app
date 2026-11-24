@@ -165,6 +165,43 @@ assert.equal(await page.evaluate(() => window.__budget.state.config.limits.freiz
 await shot(page, '09-einstellungen', false);
 await page.keyboard.press('Escape');
 
+// Spartöpfe: Monatsrest wurde automatisch in den Notgroschen gelegt (Demo: Monatsrest automatisch an)
+await page.click('.tabs [data-view=home]');
+const rest = await page.evaluate(() => window.__budget.state.tx.find(t => t.source === 'rest'));
+assert.ok(rest && rest.kind === 'save' && rest.amount > 0, 'Monatsrest automatisch gespart');
+assert.ok(rest.date.endsWith(String(new Date(new Date().getFullYear(), new Date().getMonth(), 0).getDate())), 'am letzten Tag des Vormonats');
+await shot(page, '13-spartoepfe');
+// Einzahlen in „Urlaub“
+const potBal = () => page.evaluate(() => { const s = window.__budget.state, p = s.pots.find(x => x.name === 'Urlaub'); return p.startBalance + s.potTx.filter(t => t.potId === p.id).reduce((a, t) => a + (t.kind === 'save' ? t.amount : -t.amount), 0); });
+const before = await potBal();
+await page.click('#view-home .pot >> text=Urlaub');
+await page.waitForSelector('#dlg-pot[open]');
+await page.waitForTimeout(400);
+await shot(page, '14-topf', false);
+await page.click('#pot-in');
+await page.fill('#mv-amount', '50');
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(b => { const s = window.__budget.state, p = s.pots.find(x => x.name === 'Urlaub'); return p.startBalance + s.potTx.filter(t => t.potId === p.id).reduce((a, t) => a + (t.kind === 'save' ? t.amount : -t.amount), 0) === b + 5000; }, before);
+await page.waitForFunction(() => /eingezahlt/.test(document.querySelector('#toast').textContent));
+await page.keyboard.press('Escape');
+await page.waitForFunction(() => !document.querySelector('#dlg-pot').open);
+// Neuen Topf mit Ziel und Sparrate anlegen
+await page.click('#view-home [data-act=add-pot]');
+await page.fill('#pot-name', 'Neues Fahrrad');
+await page.fill('#pot-goal', '900');
+await page.fill('#pot-rate', '75');
+await page.click('#form-pot [type=submit]');
+await page.waitForFunction(() => window.__budget.state.pots.some(p => p.name === 'Neues Fahrrad' && p.goal === 90000));
+assert.ok(await page.evaluate(() => window.__budget.state.recurring.some(r => r.kind === 'save' && r.name === 'Sparrate Neues Fahrrad' && r.amount === 7500)));
+await page.waitForFunction(() => [...document.querySelectorAll('#view-home .pot')].some(e => /Neues Fahrrad[\s\S]*Ziel 900/.test(e.textContent)));
+// Einkäufe aus der Speisekammer übernehmen
+const sugg = await page.$$eval('#view-home .suggest', els => els.length);
+assert.ok(sugg >= 1, 'Speisekammer-Einkäufe werden vorgeschlagen');
+await shot(page, '15-speisekammer');
+await page.click('#view-home .suggest [data-act=pantry-take] >> nth=0');
+await page.waitForFunction(() => window.__budget.state.tx.some(t => t.source === 'pantry'));
+await page.waitForFunction(n => document.querySelectorAll('#view-home .suggest').length === n - 1, sugg, { timeout: 5000 }); // übernommener Einkauf verschwindet aus den Vorschlägen
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');
