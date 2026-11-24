@@ -55,8 +55,8 @@ Deno.serve(async req => {
     const eatBf = dueEatBf && hasParts, eatDin = dueEatDin && hasParts;
     if (!dueExpiry && !dueDinner && !dueEatBf && !dueEatDin) continue;
 
-    const { data: items } = await sb.from('items').select('name, expiry')
-      .eq('household_id', s.household_id).not('expiry', 'is', null).lte('expiry', addDays(date, s.warn_days ?? 3)).order('expiry');
+    const { data: items } = await sb.from('items').select('name, expiry, category')
+      .eq('household_id', s.household_id).not('category', 'in', '("Badezimmer","Haushalt","Pfand")').not('expiry', 'is', null).lte('expiry', addDays(date, s.warn_days ?? 3)).order('expiry');
     const label = (i: { name: string; expiry: string }) => {
       const d = daysBetween(date, i.expiry);
       return `${i.name} (${d < 0 ? 'abgelaufen' : d === 0 ? 'heute' : d === 1 ? 'morgen' : 'in ' + d + ' T'})`;

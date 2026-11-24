@@ -2,7 +2,7 @@
 // Die Teile je Packung gelten pro Artikelname im Haushalt ('speisekammer.parts'). Gegessene Teile verringern die Menge im Vorrat
 // (qty bleibt in Packungen, auch als Bruchteil, damit Preis-Anteil, Bilanz und Ablauf wie gewohnt weiterlaufen).
 import { parseSize } from './balance.js';
-import { isoLocal } from './categories.js';
+import { isoLocal, isFoodCat } from './categories.js';
 
 const KEY = 'speisekammer.parts';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -47,7 +47,7 @@ async function bookParts(item, n) {
 
 // Zähler-Dialog. meal: 'bf' | 'din' | 'cook' | 'manual'; list: Artikel (leer = alle mit bekannten Teilen)
 export async function openEaten(meal = 'manual', list = null, title = '') {
-  const all = await ctx.store.listItems();
+  const all = (await ctx.store.listItems()).filter(i => isFoodCat(i.category));
   const rows = (list ?? all.filter(i => i.qty > 0 && partsOf(i))).filter(i => i.qty > 0);
   const sub = { bf: 'Antippen, wie viel gegessen wurde. Die Packungen im Vorrat werden entsprechend kleiner.', din: 'Zum Beispiel Brot oder Beilagen. Gekochtes aus dem Plan buchst du dort mit „Gekocht“.',
     cook: 'Wie viel wurde verbraucht?', manual: 'Wie viel wurde entnommen?' }[meal];
@@ -105,7 +105,7 @@ async function check() {
   if (!ctx || document.querySelector('dialog[open]')) return;
   for (const m of ['bf', 'din']) {
     if (!due(m)) continue;
-    const items = await ctx.store.listItems();
+    const items = (await ctx.store.listItems()).filter(i => isFoodCat(i.category));
     if (!items.some(i => i.qty > 0 && partsOf(i))) { localStorage.setItem(flag(m, 'asked'), isoLocal()); continue; }
     if (document.hidden) {
       if (ctx.canNotify() && localStorage.getItem(flag(m, 'note')) !== isoLocal()) { localStorage.setItem(flag(m, 'note'), isoLocal()); ctx.showNote(m === 'bf' ? 'Was hast du gefrühstückt?' : 'Was wurde zum Abendessen gegessen?', 'Kurz antippen, dann stimmt der Vorrat.', 'gegessen-' + m); }
