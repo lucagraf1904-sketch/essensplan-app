@@ -63,7 +63,13 @@ do $$ begin
   exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: %', sqlerrm; end;
 end $$;
 -- Storage: nur eigener Ordner
-insert into storage.objects(bucket_id, name) values ('budget-policies', my_household()::text || '/p/x.pdf');
+insert into budget_policies(household_id, name) values (my_household(), 'B-Police');
+insert into storage.objects(bucket_id, name) select 'budget-policies', my_household()::text || '/' || id::text || '/x.pdf' from budget_policies where name = 'B-Police';
+-- Datei zu nicht vorhandener Police wird abgelehnt
+do $$ begin
+  begin insert into storage.objects(bucket_id, name) values ('budget-policies', my_household()::text || '/p/x.pdf'); raise exception 'FEHLER: Datei ohne Police';
+  exception when insufficient_privilege then raise notice 'ok: keine Datei ohne Police'; end;
+end $$;
 do $$ begin
   begin insert into storage.objects(bucket_id, name) values ('budget-policies', gen_random_uuid()::text || '/p/x.pdf'); raise exception 'FEHLER: fremder Ordner beschreibbar';
   exception when insufficient_privilege then raise notice 'ok: fremder Ordner gesperrt'; end;
@@ -97,7 +103,10 @@ select count(*) = 0 as c_no_private_policy from budget_policies where name = 'Pr
 select count(*) = 0 as c_no_private_file from storage.objects where name like '%/p.pdf';
 select count(*) = 2 as c_sees_account_names from budget_accounts;
 -- C öffnet die App: As private Fixkosten werden trotzdem gebucht (C sieht sie nicht)
-select budget_book_due() >= 1 as c_books_private_of_a;
+select budget_book_due() = 0 as c_count_without_private;
+reset role;
+select count(*) >= 1 as c_books_private_of_a from budget_tx where note = 'Privat-Abo';
+set role authenticated;
 -- C darf nichts in As Namen anlegen
 do $$ begin
   begin insert into budget_tx(household_id, date, amount, category, owner) values (my_household(), current_date, 1, 'x', '00000000-0000-0000-0000-00000000000a'); raise exception 'FEHLER: im fremden Namen gebucht';
@@ -122,3 +131,26 @@ select count(*) = 1 as c_sees_shared_policy_file from storage.objects where name
 -- C kann As Freigabe nicht ändern
 update budget_members set share = '{}' where user_id = '00000000-0000-0000-0000-00000000000a';
 select share->>'tx' = 'all' as c_cannot_change_share from budget_members where user_id = '00000000-0000-0000-0000-00000000000a';
+-- Review-Befunde Version 3
+-- C darf die Datei einer nur freigegebenen Police nicht löschen
+delete from storage.objects where name like '%/p.pdf';
+reset role;
+select count(*) = 1 as file_survives_viewer_delete from storage.objects where name like '%/p.pdf';
+set role authenticated;
+-- Zähler verrät keine privaten Buchungen anderer
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner)
+  values (my_household(), 'Privat-Abo 2', 5, 'ab-musik', 'monthly', current_date, current_date, auth.uid());
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select budget_book_due() = 0 as count_hides_private;
+-- Besitzwechsel eines Topfs mit Buchungen wird abgelehnt, das automatische Buchen läuft trotzdem
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+do $$ begin
+  begin update budget_pots set owner = auth.uid() where name = 'Urlaub'; raise exception 'FEHLER: Besitzwechsel möglich';
+  exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: Besitzwechsel gesperrt'; end;
+end $$;
+-- Monatsrest automatisch: je Person ein Topf, gemeinsam einer
+insert into budget_pots(household_id, name, owner, auto_rest) values (my_household(), 'A privat', auth.uid(), true);
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+insert into budget_pots(household_id, name, owner, auto_rest) values (my_household(), 'C privat', auth.uid(), true);
+select count(*) = 1 as c_has_own_auto_pot from budget_pots where auto_rest and owner = auth.uid();

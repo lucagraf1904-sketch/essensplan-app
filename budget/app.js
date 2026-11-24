@@ -101,6 +101,8 @@ function loadSnapshot() { try { return JSON.parse(localStorage.getItem(SNAP)); }
 const byDateDesc = (a, b) => b.date.localeCompare(a.date) || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
 
 let reloadTimer = null;
+// Wird ein Eintrag woanders privat gemacht, kommt kein Live-Ereignis an: daher alle 2 Minuten (nur sichtbar) neu laden
+setInterval(() => { if (document.visibilityState === 'visible' && store && !document.querySelector('dialog[open]')) scheduleReload(); }, 120000);
 function scheduleReload() { clearTimeout(reloadTimer); reloadTimer = setTimeout(async () => { try { await loadAll({ book: false }); render(); } catch (e) { console.warn(e); } }, 500); }
 
 // ---------- Navigation ----------
@@ -189,11 +191,11 @@ const summary = (key = state.month) => monthSummary({ tx: V.tx, recurring: V.rec
 // ---------- Übersicht ----------
 function deadlines(days = 60) {
   const out = [], seenPolicy = new Set();
-  for (const p of state.policies) {
+  for (const p of V.policies) {
     const n = noticeInfo(p.contractEnd, p.noticeMonths, state.today);
     if (n && n.daysLeft <= days) { out.push({ name: p.name, icon: cat(p.category).icon, ...n, open: () => openPolicy(p) }); seenPolicy.add(p.id); }
   }
-  for (const r of state.recurring) {
+  for (const r of V.recurring) {
     if (!r.active || (r.policyId && seenPolicy.has(r.policyId))) continue;
     const pol = r.policyId && state.policies.find(p => p.id === r.policyId);
     const n = noticeInfo(r.contractEnd ?? pol?.contractEnd, r.noticeMonths ?? pol?.noticeMonths, state.today);
@@ -512,6 +514,7 @@ async function saveTxForm() {
     if (e.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); return; }
     state.tx = old ? state.tx.map(x => x.id === t.id ? old : x) : state.tx.filter(x => x.id !== t.id); render();
     ask('Nicht gespeichert', `<p>${esc(e.message)}</p>`);
+    if (e.stale) scheduleReload();
   }
 }
 async function deleteTx(t, silent = false) {
@@ -558,6 +561,7 @@ function openRec(r = null, preset = {}) {
   const kind = r?.kind ?? preset.kind ?? 'expense';
   const ro = whoWidget($('#rec-who'), { account: r ? r.accountId : lastAccount(), owner: r ? r.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!r });
   $('#form-rec [type=submit]').classList.toggle('hidden', ro);
+  recReadOnly = ro;
   $$('[name=rkind]').forEach(x => x.checked = x.value === kind);
   $('#rec-title').textContent = r ? (kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten') : kind === 'income' ? 'Neue regelmäßige Einnahme' : 'Neue Fixkosten';
   $('#rec-name').value = r?.name ?? preset.name ?? '';
@@ -570,7 +574,7 @@ function openRec(r = null, preset = {}) {
   $('#rec-cend').value = r?.contractEnd ?? '';
   $('#rec-notice').innerHTML = noticeOptions(r?.noticeMonths);
   $('#rec-contract').open = !!(r?.contractEnd || r?.noticeMonths != null);
-  $('#rec-delete').classList.toggle('hidden', !r);
+  $('#rec-delete').classList.toggle('hidden', !r || recReadOnly);
   $('#rec-err').textContent = '';
   const pol = r?.policyId && state.policies.find(p => p.id === r.policyId);
   recHint();
@@ -602,11 +606,12 @@ async function saveRecForm() {
 }
 
 // ---------- Versicherung bearbeiten ----------
-let polEditing = null, polFile = null, polRead = null;
+let polEditing = null, polFile = null, polRead = null, polReadOnly = false, recReadOnly = false;
 function openPolicy(p = null) {
   polEditing = p; polFile = null; polRead = null;
   const roPol = whoWidget($('#pol-who'), { account: undefined, owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, accounts: false, hint: 'Eine private Police (auch die Datei) sieht dein Partner nur, wenn du Versicherungen freigibst.' });
   $('#form-pol [type=submit]').classList.toggle('hidden', roPol);
+  polReadOnly = roPol;
   const r = p && (state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id));
   $('#pol-title').textContent = p ? p.name : 'Neue Versicherung';
   $('#pol-name').value = p?.name ?? '';
@@ -623,7 +628,8 @@ function openPolicy(p = null) {
   $('#pol-file').value = '';
   $('#pol-file-state').textContent = p?.pageCount ? `Hinterlegt: ${p.fileName ?? 'Text'} (${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}${p.textSource === 'photo' ? ', per KI abgeschrieben' : p.textSource === 'manual' ? ', Text eingefügt' : ''}). Neue Datei ersetzt sie.` : p?.filePath ? `Datei hinterlegt (${p.fileName}), aber kein lesbarer Text.` : 'Noch keine Police hinterlegt. Am besten das PDF aus dem Kundenportal oder der E-Mail des Versicherers.';
   $('#pol-file-msg').textContent = ''; $('#pol-progress').classList.add('hidden');
-  $('#pol-delete').classList.toggle('hidden', !p);
+  $('#pol-delete').classList.toggle('hidden', !p || polReadOnly);
+  $('#pol-file').closest('fieldset').querySelectorAll('input,textarea,button').forEach(x => { x.disabled = polReadOnly; });
   $('#pol-err').textContent = '';
   $('#dlg-pol').showModal();
 }
@@ -714,37 +720,48 @@ function potsSection() {
 }
 
 // Was am Ende eines Monats übrig blieb. Nur für Monate, in denen die App wirklich genutzt wurde (mindestens 5 eigene Buchungen).
-const restPots = () => state.pots.filter(p => !p.archived && canWrite(p.owner));
-function restCandidate() {
+// Monatsrest: Gibt es mehrere Personen, wird getrennt gerechnet: was gemeinsam übrig blieb (gemeinsame Einnahmen − gemeinsame Ausgaben)
+// und was jeder privat übrig hat. So zählt nichts doppelt, und niemand verteilt das Geld des anderen. Allein: alles zusammen.
+// Nur für Monate, in denen die App wirklich genutzt wurde (mindestens 5 eigene Buchungen).
+function restScopes() {
+  return multi()
+    ? [{ id: 'shared', label: 'gemeinsam', filter: o => o == null, ref: m => `rest:${m}:shared`, pots: () => state.pots.filter(p => !p.archived && p.owner == null) },
+       { id: me(), label: 'bei dir privat', filter: o => o === me(), ref: m => `rest:${m}:${me()}`, pots: () => state.pots.filter(p => !p.archived && canWrite(p.owner)) }]
+    : [{ id: 'all', label: '', filter: o => canWrite(o), ref: m => `rest:${m}`, pots: () => state.pots.filter(p => !p.archived && canWrite(p.owner)) }];
+}
+const closedKey = (m, sc) => sc.id === 'all' ? m : `${m}:${sc.id}`;
+function restCandidates() {
   const m = shiftMonth(state.today.slice(0, 7), -1);
-  const pots = restPots();
-  if (!pots.length || state.config.closed?.[m] || state.tx.some(t => t.extRef === 'rest:' + m)) return null; // closed: schon einmal erledigt (gebucht, behalten oder automatisch)
-  const used = real(state.tx).filter(t => monthKey(t.date) === m && t.source !== 'recurring' && !t.potId).length;
-  // Nur eigenes und gemeinsames Geld (nicht die freigegebenen Summen anderer)
-  const s = monthSummary({ tx: state.tx.filter(t => canWrite(t.owner)), recurring: state.recurring.filter(r => canWrite(r.owner)), key: m, today: state.today, groupOf });
-  if (used < 5 || !s.income || s.free <= 0) return null;
-  return { month: m, amount: s.free };
+  return restScopes().map(sc => {
+    if (!sc.pots().length || state.config.closed?.[closedKey(m, sc)] || state.tx.some(t => t.extRef === sc.ref(m))) return null;
+    const used = real(state.tx).filter(t => monthKey(t.date) === m && t.source !== 'recurring' && !t.potId && sc.filter(t.owner)).length;
+    const s = monthSummary({ tx: real(state.tx).filter(t => sc.filter(t.owner)), recurring: state.recurring.filter(r => sc.filter(r.owner)), key: m, today: state.today, groupOf });
+    if (used < 5 || !s.income || s.free <= 0) return null;
+    return { month: m, amount: s.free, sc };
+  }).filter(Boolean);
 }
 function restCard() {
-  const c = restCandidate(); if (!c || state.month !== state.today.slice(0, 7)) return '';
-  const pots = restPots();
-  return `<div class="card" style="margin-top:14px;display:grid;gap:10px">
-    <p><b>Im ${esc(monthName(c.month).split(' ')[0])} sind ${eur(c.amount)} übrig geblieben.</b></p>
+  if (state.month !== state.today.slice(0, 7)) return '';
+  return restCandidates().map(c => `<div class="card" style="margin-top:14px;display:grid;gap:10px">
+    <p><b>Im ${esc(monthName(c.month).split(' ')[0])} sind ${c.sc.label ? esc(c.sc.label) + ' ' : ''}${eur(c.amount)} übrig geblieben.</b></p>
     <p class="tiny muted">In einen Spartopf legen? Gebucht wird am letzten Tag des Monats, der laufende Monat bleibt unverändert.</p>
-    <div class="row wrap"><select id="rest-pot" aria-label="Spartopf" style="flex:1;min-width:140px">${pots.map(p => `<option value="${esc(p.id)}">${esc(p.icon)} ${esc(p.name)}</option>`).join('')}</select>
-      <button class="btn primary" data-act="rest-book" data-month="${c.month}" data-amount="${c.amount}">In Topf legen</button>
-      <button class="btn" data-act="rest-keep" data-month="${c.month}">Behalten</button></div></div>`;
+    <div class="row wrap"><select id="rest-pot-${esc(c.sc.id)}" aria-label="Spartopf" style="flex:1;min-width:140px">${c.sc.pots().map(p => `<option value="${esc(p.id)}">${esc(p.icon)} ${esc(p.name)}${p.owner ? ' 🔒' : ''}</option>`).join('')}</select>
+      <button class="btn primary" data-act="rest-book" data-scope-id="${esc(c.sc.id)}">In Topf legen</button>
+      <button class="btn" data-act="rest-keep" data-scope-id="${esc(c.sc.id)}">Behalten</button></div></div>`).join('');
 }
-async function bookRest(month, pot, amount, auto = false) {
-  const t = { id: uid(), owner: pot.owner ?? null, date: lastDayOfMonth(month), amount, kind: 'save', category: 'fi-sparen', potId: pot.id, note: `Rest aus ${monthName(month)}`, source: 'rest', extRef: 'rest:' + month, createdAt: new Date().toISOString() };
-  state.config.closed = { ...(state.config.closed ?? {}), [month]: auto ? 'auto' : 'pot' }; saveConfigSoon(0);
+async function bookRest(c, pot, auto = false) {
+  const { month, amount, sc } = c;
+  const t = { id: uid(), owner: pot.owner ?? null, date: lastDayOfMonth(month), amount, kind: 'save', category: 'fi-sparen', potId: pot.id, note: `Rest aus ${monthName(month)}`, source: 'rest', extRef: sc.ref(month), createdAt: new Date().toISOString() };
+  state.config.closed = { ...(state.config.closed ?? {}), [closedKey(month, sc)]: auto ? 'auto' : 'pot' }; saveConfigSoon(0);
   try { await store.saveTx(t); toast(`${eur(amount)} aus dem ${monthName(month).split(' ')[0]} ${auto ? 'automatisch ' : ''}in „${pot.name}“ gelegt`); }
   catch (e) { if (!e.duplicate) { ask('Nicht gebucht', `<p>${esc(e.message)}</p>`); return; } }
   await loadAll({ book: false }); render();
 }
 async function autoRest() {
-  const pot = restPots().find(p => p.autoRest), c = restCandidate();
-  if (pot && c) await bookRest(c.month, pot, c.amount, true);
+  for (const c of restCandidates()) {
+    const pot = c.sc.pots().find(p => p.autoRest && (c.sc.id === 'shared' ? p.owner == null : c.sc.id === 'all' || p.owner === me()));
+    if (pot) await bookRest(c, pot, true);
+  }
 }
 
 function openPot(p = null) {
@@ -774,7 +791,7 @@ function openPot(p = null) {
       ${p.archived || roPot ? '' : '<div class="row wrap"><button type="button" class="btn small primary" id="pot-in">Einzahlen</button><button type="button" class="btn small" id="pot-out">Entnehmen</button></div>'}</div>
     ${moves.length ? `<details class="more"><summary>Bewegungen (${moves.length})</summary><ul class="list">${moves.map(t => `<li class="item" style="cursor:default"><span class="ic" aria-hidden="true">${t.kind === 'save' ? '↘' : '↗'}</span>
       <span><span class="t">${t.kind === 'save' ? 'Eingezahlt' : 'Entnommen'}</span><span class="s">${dateShort(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</span></span>
-      <span class="a">${t.kind === 'save' ? '+' : '−'}${eur(t.amount)} <button type="button" class="btn small danger" data-del-move="${esc(t.id)}" aria-label="Bewegung löschen">✕</button></span></li>`).join('')}</ul></details>` : ''}` : '';
+      <span class="a">${t.kind === 'save' ? '+' : '−'}${eur(t.amount)}${roPot || p.archived ? '' : ` <button type="button" class="btn small danger" data-del-move="${esc(t.id)}" aria-label="Bewegung löschen">✕</button>`}</span></li>`).join('')}</ul></details>` : ''}` : '';
   if (p) {
     if ($('#pot-in')) { $('#pot-in').onclick = () => potMove(p, 'save'); $('#pot-out').onclick = () => potMove(p, 'unsave'); }
     $$('[data-del-move]').forEach(b => b.onclick = async () => {
@@ -1034,8 +1051,8 @@ function bindEvents() {
     else if (act === 'add-income') openRec(null, { kind: 'income', name: 'Gehalt', category: 'ei-gehalt' });
     else if (act === 'add-pol') openPolicy();
     else if (act === 'add-pot') openPot();
-    else if (act === 'rest-book') { const pot = potOf($('#rest-pot').value); if (pot) bookRest(el.dataset.month, pot, +el.dataset.amount); }
-    else if (act === 'rest-keep') { state.config.closed = { ...(state.config.closed ?? {}), [el.dataset.month]: 'keep' }; saveConfigSoon(0); render(); }
+    else if (act === 'rest-book') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId), pot = c && potOf($(`#rest-pot-${CSS.escape(c.sc.id)}`).value); if (pot) bookRest(c, pot); }
+    else if (act === 'rest-keep') { const c = restCandidates().find(x => x.sc.id === el.dataset.scopeId); if (c) { state.config.closed = { ...(state.config.closed ?? {}), [closedKey(c.month, c.sc)]: 'keep' }; saveConfigSoon(0); render(); } }
     else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
     else if (act === 'pantry-all') takePantry(state.pantry.filter(p => !p.similar));
     else if (act === 'pantry-skip') { dismissPantry([el.dataset.key]); }
@@ -1166,7 +1183,7 @@ async function boot() {
   const demo = localStorage.getItem('haushaltskasse.mode') === 'demo' || !SUPABASE_URL;
   try { store = demo ? createDemoStore() : await createSupabaseStore(); }
   catch { store = null; }
-  chat = initChat({ state, store, toast, ask });
+  chat = initChat({ state: V, store, toast, ask });
   bindEvents(); bindAuth();
   if (!store) { showAuth('login'); authMsg('Keine Verbindung zum Server. Ohne Netz kannst du die Demo ausprobieren.'); return; }
   try { await start(); }

@@ -39,6 +39,7 @@ async function fnError(error) {
 }
 const friendly = e => {
   const m = String(e?.message ?? e);
+  if (/row-level security/i.test(m)) return Object.assign(new Error('Das geht nicht: Der Eintrag gehört jemand anderem oder ist inzwischen privat. Die Ansicht wird neu geladen.'), { stale: true });
   if (/relation .*budget_|budget_book_due|schema cache/i.test(m)) return new Error('Die Datenbank für die Haushaltskasse ist noch nicht eingerichtet: supabase/budget.sql im Supabase SQL Editor ausführen (siehe anleitung/budget-setup.md).');
   if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return Object.assign(new Error('Keine Verbindung zum Server.'), { offline: true });
   return e instanceof Error ? e : new Error(m);
@@ -51,6 +52,9 @@ export async function createSupabaseStore() {
   const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
   let household = null, userId = null, userEmail = '';
   const must = ({ data, error }) => { if (error) throw friendly(error); return data; };
+  const must0 = r => { if (r.error) throw friendly(r.error); return r.count; };
+  // 0 gelöschte Zeilen: Eintrag gehört jemand anderem oder ist schon weg
+  const gone = n => { if (n === 0) throw new Error('Nicht gelöscht: Der Eintrag gehört jemand anderem oder wurde schon gelöscht.'); };
   const hh = () => household.id;
 
   return {
@@ -101,7 +105,7 @@ export async function createSupabaseStore() {
       return toTx(must(r));
     },
     // Alle Buchungen mit Spartopf (für den Stand, unabhängig vom Zeitraum)
-    async listPotTx() { return must(await sb.from('budget_tx').select('id,date,amount,kind,category,note,source,pot_id,ext_ref,recurring_id,created_at').not('pot_id', 'is', null).order('date', { ascending: false }).limit(10000)).map(toTx); },
+    async listPotTx() { return must(await sb.from('budget_tx').select('id,date,amount,kind,category,note,source,pot_id,ext_ref,recurring_id,created_at,owner,account_id').not('pot_id', 'is', null).order('date', { ascending: false }).limit(10000)).map(toTx); },
     async listPots() { return must(await sb.from('budget_pots').select('*').order('created_at')).map(toPot); },
     async savePot(p) {
       // Erst den Topf speichern (ohne Monatsrest), dann die anderen abschalten, dann hier einschalten.
@@ -109,7 +113,8 @@ export async function createSupabaseStore() {
       const id = p.id ?? uid();
       let row = must(await sb.from('budget_pots').upsert(fromPot({ ...p, id, autoRest: false }, hh())).select().single());
       if (p.autoRest) {
-        must(await sb.from('budget_pots').update({ auto_rest: false }).eq('auto_rest', true).neq('id', id));
+        const q = sb.from('budget_pots').update({ auto_rest: false }).eq('auto_rest', true).neq('id', id);
+        must(await (p.owner ? q.eq('owner', p.owner) : q.is('owner', null)));
         row = must(await sb.from('budget_pots').update({ auto_rest: true }).eq('id', id).select().single());
       }
       return toPot(row);
@@ -139,11 +144,11 @@ export async function createSupabaseStore() {
       const rows = must(await sb.from('log').select('id,item_name,category,price,at,by_user').eq('type', 'bought').not('price', 'is', null).gte('at', sinceIso).order('at').limit(2000));
       return rows.map(r => ({ id: r.id, name: r.item_name, category: r.category, price: toCents(r.price), at: r.at, by: r.by_user }));
     },
-    async deleteTx(id) { must(await sb.from('budget_tx').delete().eq('id', id)); },
+    async deleteTx(id) { gone(must0(await sb.from('budget_tx').delete({ count: 'exact' }).eq('id', id))); },
 
     async listRecurring() { return must(await sb.from('budget_recurring').select('*').order('name')).map(toRec); },
     async saveRecurring(r) { return toRec(must(await sb.from('budget_recurring').upsert(fromRec({ ...r, id: r.id ?? uid() }, hh())).select().single())); },
-    async deleteRecurring(id) { must(await sb.from('budget_recurring').delete().eq('id', id)); },
+    async deleteRecurring(id) { gone(must0(await sb.from('budget_recurring').delete({ count: 'exact' }).eq('id', id))); },
     async bookDue() { return must(await sb.rpc('budget_book_due')); },
 
     // Liste ohne Seitentexte (die können groß sein), Seitenzahl wird mitgeliefert
@@ -164,8 +169,9 @@ export async function createSupabaseStore() {
     },
     async policyFileUrl(path) { return must(await sb.storage.from('budget-policies').createSignedUrl(path, 600)).signedUrl; },
     async deletePolicy(p) {
+      // Erst die Datei (Storage erlaubt das nur bei eigener oder gemeinsamer Police), dann die Zeile (0 Zeilen = nicht erlaubt)
       if (p.filePath) await sb.storage.from('budget-policies').remove([p.filePath]);
-      must(await sb.from('budget_policies').delete().eq('id', p.id));
+      gone(must0(await sb.from('budget_policies').delete({ count: 'exact' }).eq('id', p.id)));
     },
 
     async getConfig() { const r = must(await sb.from('budget_settings').select('value').maybeSingle()); return r?.value ?? {}; },
@@ -290,7 +296,7 @@ export function createDemoStore() {
     async listPotTx() { return delay(load().tx.filter(t => t.potId).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },
     async listPots() { return delay((load().pots ?? []).map(p => ({ ...p }))); },
     async savePot(p) { const d = load(); d.pots ??= []; const row = { startBalance: 0, archived: false, ...p, id: p.id ?? uid() };
-      if (row.autoRest) d.pots.forEach(x => { if (x.id !== row.id) x.autoRest = false; });
+      if (row.autoRest) d.pots.forEach(x => { if (x.id !== row.id && (x.owner ?? null) === (row.owner ?? null)) x.autoRest = false; });
       const i = d.pots.findIndex(x => x.id === row.id); if (i >= 0) d.pots[i] = row; else d.pots.push(row); save(); return { ...row }; },
     async deletePot(id) { const d = load(); if (d.tx.some(t => t.potId === id)) throw new Error('Der Topf hat Buchungen und kann nur aufgelöst werden.'); d.pots = d.pots.filter(p => p.id !== id); d.rec = d.rec.filter(r => r.potId !== id); save(); },
     async listPantryPurchases(since) { return delay((load().pantry ?? []).filter(r => r.at >= since).map(r => ({ ...r }))); },

@@ -89,7 +89,7 @@ create table if not exists budget_pots (
   updated_at timestamptz not null default now()
 );
 -- Nur ein Topf bekommt den Monatsrest automatisch
-create unique index if not exists budget_pots_auto_rest on budget_pots(household_id) where auto_rest;
+-- (Index für „Monatsrest automatisch“ steht ab Version 3 weiter unten, je Person)
 
 alter table budget_tx add column if not exists pot_id uuid references budget_pots(id) on delete cascade;
 alter table budget_tx add column if not exists ext_ref text;   -- z. B. 'rest:2026-10' (Monatsrest) oder 'sk:<log-id>' (Einkauf aus der Speisekammer)
@@ -146,6 +146,9 @@ alter table budget_recurring add column if not exists owner uuid references auth
 alter table budget_recurring add column if not exists account_id uuid references budget_accounts(id) on delete set null;
 alter table budget_pots      add column if not exists owner uuid references auth.users(id) on delete cascade;
 alter table budget_policies  add column if not exists owner uuid references auth.users(id) on delete cascade;
+-- Version 3: je Person ein Topf für den eigenen Rest, dazu einer für den gemeinsamen Rest (owner null)
+drop index if exists budget_pots_auto_rest;
+create unique index if not exists budget_pots_auto_rest_owner on budget_pots(household_id, coalesce(owner, '00000000-0000-0000-0000-000000000000'::uuid)) where auto_rest;
 
 -- Darf ich einen Eintrag von p_owner im Bereich p_area sehen? Eigene und gemeinsame immer, fremde private nur bei Freigabe 'all'.
 create or replace function budget_can_see(p_owner uuid, p_area text) returns boolean
@@ -211,7 +214,8 @@ begin
   end if;
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
      and new.owner is distinct from (select owner from budget_pots where id = new.pot_id) then
-    raise exception 'Buchungen eines Spartopfs gehören dem Besitzer des Topfs';
+    -- gleiche Meldung wie „nicht gefunden“, damit niemand erfährt, ob es einen fremden privaten Topf mit dieser ID gibt
+    raise exception 'Spartopf gehört nicht zu diesem Haushalt';
   end if;
   if tg_table_name = 'budget_tx' then
     if new.recurring_id is not null and not exists (select 1 from budget_recurring where id = new.recurring_id and household_id = new.household_id) then
@@ -229,6 +233,18 @@ drop trigger if exists budget_tx_links on budget_tx;
 create trigger budget_tx_links before insert or update on budget_tx for each row execute function budget_check_links();
 drop trigger if exists budget_recurring_links on budget_recurring;
 create trigger budget_recurring_links before insert or update on budget_recurring for each row execute function budget_check_links();
+
+-- Ein Topf mit Buchungen oder Sparrate kann nicht mehr zwischen privat und gemeinsam wechseln
+create or replace function budget_pot_owner_lock() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.owner is distinct from old.owner and (exists (select 1 from budget_tx where pot_id = old.id) or exists (select 1 from budget_recurring where pot_id = old.id)) then
+    raise exception 'Ein Spartopf mit Buchungen kann nicht zwischen privat und gemeinsam wechseln.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists budget_pots_owner_lock on budget_pots;
+create trigger budget_pots_owner_lock before update on budget_pots for each row execute function budget_pot_owner_lock();
 
 -- ---------- Fixkosten automatisch buchen ----------
 -- Monatsende wird abgefangen: Start 31.01. → 28./29.02. → 31.03. (Postgres rechnet date + interval so).
@@ -255,16 +271,22 @@ declare
 begin
   if hh is null then raise exception 'Kein Haushalt'; end if;
   for r in select * from budget_recurring where household_id = hh and active and next_due <= today for update skip locked loop
-    d := r.next_due; k := r.n; guard := 0;
-    while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
-      insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id)
-        values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, r.account_id)
-        on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
-      if found then cnt := cnt + 1; end if;
-      k := k + 1; guard := guard + 1;
-      d := budget_nth_due(r.start_date, r.freq, k);
-    end loop;
-    update budget_recurring set next_due = d, n = k, active = (r.end_date is null or d <= r.end_date) where id = r.id;
+    -- Jede Fixkosten-Position für sich: ein fehlerhafter Eintrag hält die anderen nicht auf
+    begin
+      d := r.next_due; k := r.n; guard := 0;
+      while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
+        insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id)
+          values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, r.account_id)
+          on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
+        -- nur mitzählen, was die aufrufende Person sehen darf (sonst verrät die Zahl private Buchungen anderer)
+        if found and (r.owner is null or r.owner = auth.uid()) then cnt := cnt + 1; end if;
+        k := k + 1; guard := guard + 1;
+        d := budget_nth_due(r.start_date, r.freq, k);
+      end loop;
+      update budget_recurring set next_due = d, n = k, active = (r.end_date is null or d <= r.end_date) where id = r.id;
+    exception when others then
+      raise warning 'budget_book_due: Eintrag % übersprungen: %', r.id, sqlerrm;
+    end;
   end loop;
   return cnt;
 end $$;
@@ -274,10 +296,23 @@ insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 values ('budget-policies', 'budget-policies', false, 26214400, array['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 drop policy if exists budget_policies_files on storage.objects;
-create policy budget_policies_files on storage.objects for all to authenticated
-  using (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text
-         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2]))  -- objects.name: sonst nähme Postgres p.name
-  with check (bucket_id = 'budget-policies' and (storage.foldername(name))[1] = public.my_household()::text);
+-- Lesen: wenn die Police sichtbar ist. Hochladen, ändern, löschen: nur bei eigener oder gemeinsamer Police.
+-- objects.name ausdrücklich, sonst nähme Postgres in der Unterabfrage p.name.
+create policy budget_policies_files on storage.objects for select to authenticated
+  using (bucket_id = 'budget-policies' and (storage.foldername(objects.name))[1] = public.my_household()::text
+         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2]));
+drop policy if exists budget_policies_files_ins on storage.objects;
+create policy budget_policies_files_ins on storage.objects for insert to authenticated
+  with check (bucket_id = 'budget-policies' and (storage.foldername(objects.name))[1] = public.my_household()::text
+         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2] and public.budget_can_write(p.owner)));
+drop policy if exists budget_policies_files_upd on storage.objects;
+create policy budget_policies_files_upd on storage.objects for update to authenticated
+  using (bucket_id = 'budget-policies' and (storage.foldername(objects.name))[1] = public.my_household()::text
+         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2] and public.budget_can_write(p.owner)));
+drop policy if exists budget_policies_files_del on storage.objects;
+create policy budget_policies_files_del on storage.objects for delete to authenticated
+  using (bucket_id = 'budget-policies' and (storage.foldername(objects.name))[1] = public.my_household()::text
+         and exists (select 1 from public.budget_policies p where p.id::text = (storage.foldername(objects.name))[2] and public.budget_can_write(p.owner)));
 
 -- ---------- Freigabe „nur Summen“ ----------
 -- Liefert für Personen, die einen Bereich nur als Summe freigeben, Monatssummen je Kategorie (Buchungen), je Art (Spartöpfe),
