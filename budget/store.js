@@ -1,0 +1,224 @@
+// Datenhaltung der Haushaltskasse. Zwei Varianten mit gleicher Schnittstelle:
+//   supabaseStore: gemeinsamer Haushalt über Supabase (gleiche Anmeldung und gleicher Haushalt wie die Speisekammer)
+//   demoStore:     nur auf diesem Gerät (localStorage) mit Beispieldaten, zum Ausprobieren ohne Konto
+// Beträge sind in der App Cent (ganze Zahl), in der Datenbank numeric(12,2) in Euro.
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
+import { toCents, fromCents, todayIso, addDays, addMonths, nthDue, bookDueLocal, nextFrom } from './logic.js';
+
+const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+
+const toTx = r => ({ id: r.id, date: r.date, amount: toCents(r.amount), kind: r.kind, category: r.category, note: r.note ?? '', source: r.source,
+  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at });
+const fromTx = (t, hh) => ({ id: t.id, household_id: hh, date: t.date, amount: fromCents(t.amount), kind: t.kind, category: t.category, note: t.note || null,
+  source: t.source || 'manual', ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
+const toRec = r => ({ id: r.id, name: r.name, amount: toCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, startDate: r.start_date, nextDue: r.next_due,
+  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '' });
+const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: fromCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, start_date: r.startDate,
+  next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
+  policy_id: r.policyId || null, note: r.note || null });
+const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
+  noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
+  pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null });
+const fromPol = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, category: p.category, insurer: p.insurer || null, policy_no: p.policyNo || null,
+  contract_end: p.contractEnd || null, notice_months: p.noticeMonths ?? null, notes: p.notes || null });
+
+// Fehlermeldung einer Edge Function lesbar machen
+async function fnError(error) {
+  let msg = error.message, detail = '';
+  try { const t = await error.context.clone().text(); try { const j = JSON.parse(t); msg = j.error ?? j.message ?? t; detail = j.detail ?? ''; } catch { msg = t || msg; } } catch { /* nicht lesbar */ }
+  return Object.assign(new Error(String(msg).slice(0, 300)), { detail: String(detail).slice(0, 500) });
+}
+const friendly = e => {
+  const m = String(e?.message ?? e);
+  if (/relation .*budget_|budget_book_due|schema cache/i.test(m)) return new Error('Die Datenbank für die Haushaltskasse ist noch nicht eingerichtet: supabase/budget.sql im Supabase SQL Editor ausführen (siehe anleitung/budget-setup.md).');
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return Object.assign(new Error('Keine Verbindung zum Server.'), { offline: true });
+  return e instanceof Error ? e : new Error(m);
+};
+
+const POL_COLS = 'id,name,category,insurer,policy_no,contract_end,notice_months,notes,file_path,file_name,text_source,page_count';
+
+export async function createSupabaseStore() {
+  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
+  let household = null, userId = null;
+  const must = ({ data, error }) => { if (error) throw friendly(error); return data; };
+  const hh = () => household.id;
+
+  return {
+    mode: 'supabase',
+    async init() {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) return { needsLogin: true };
+      userId = session.user.id;
+      const m = await sb.from('members').select('household_id').eq('user_id', userId).maybeSingle();
+      if (m.error) throw friendly(m.error);
+      if (!m.data) return { needsHousehold: true };
+      const h = await sb.from('households').select('*').eq('id', m.data.household_id).maybeSingle();
+      if (h.error) throw friendly(h.error);
+      if (!h.data) throw new Error('Der Haushalt ist nicht lesbar (Zugriffsregeln). supabase/schema.sql erneut ausführen.');
+      household = h.data;
+      return { ready: true };
+    },
+    me: () => userId,
+    household: () => household,
+    // Offline-Start aus dem letzten Stand: Haushalt setzen, damit Buchungen in die Warteschlange können
+    useOffline(h) { household = h; },
+    async sendCode(email) { must(await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })); },
+    async verifyCode(email, token) { must(await sb.auth.verifyOtp({ email, token, type: 'email' })); },
+    async signIn(email, password) { must(await sb.auth.signInWithPassword({ email, password })); },
+    async signUp(email, password) {
+      const data = must(await sb.auth.signUp({ email, password }));
+      if (!data.session) throw new Error('Konto angelegt, Supabase verlangt aber eine Bestätigungs-Mail. Mail bestätigen und dann anmelden.');
+    },
+    async signOut() { await sb.auth.signOut(); },
+    async createHousehold(name) { household = must(await sb.rpc('create_household', { p_name: name || 'Unser Haushalt' })); },
+    async joinHousehold(code) { household = must(await sb.rpc('join_household', { p_code: code })); },
+
+    async listTx(since) {
+      const out = []; let from = 0;
+      for (;;) { // in Seiten zu 1000 lesen (Grenze von Supabase je Abfrage)
+        const rows = must(await sb.from('budget_tx').select('*').gte('date', since).order('date', { ascending: false }).order('created_at', { ascending: false }).range(from, from + 999));
+        out.push(...rows.map(toTx)); if (rows.length < 1000) break; from += 1000;
+      }
+      return out;
+    },
+    async saveTx(t) { const row = fromTx({ ...t, id: t.id ?? uid() }, hh()); return toTx(must(await sb.from('budget_tx').upsert(row).select().single())); },
+    async deleteTx(id) { must(await sb.from('budget_tx').delete().eq('id', id)); },
+
+    async listRecurring() { return must(await sb.from('budget_recurring').select('*').order('name')).map(toRec); },
+    async saveRecurring(r) { return toRec(must(await sb.from('budget_recurring').upsert(fromRec({ ...r, id: r.id ?? uid() }, hh())).select().single())); },
+    async deleteRecurring(id) { must(await sb.from('budget_recurring').delete().eq('id', id)); },
+    async bookDue() { return must(await sb.rpc('budget_book_due')); },
+
+    // Liste ohne Seitentexte (die können groß sein), Seitenzahl wird mitgeliefert
+    async listPolicies() {
+      return must(await sb.from('budget_policies').select(POL_COLS).order('name')).map(toPol);
+    },
+    async policyPages(id) { const r = must(await sb.from('budget_policies').select('pages').eq('id', id).single()); return Array.isArray(r.pages) ? r.pages : []; },
+    async savePolicy(p) { return toPol(must(await sb.from('budget_policies').upsert(fromPol({ ...p, id: p.id ?? uid() }, hh())).select(POL_COLS).single())); },
+    async savePolicyPages(id, pages, source) { must(await sb.from('budget_policies').update({ pages, text_source: source }).eq('id', id)); },
+    async uploadPolicyFile(id, file) {
+      const safe = file.name.normalize('NFD').replace(/[^\w.-]+/g, '_').slice(-80) || 'police.pdf';
+      const path = `${hh()}/${id}/${Date.now()}-${safe}`;
+      must(await sb.storage.from('budget-policies').upload(path, file, { contentType: file.type || 'application/pdf', upsert: false }));
+      const old = must(await sb.from('budget_policies').select('file_path').eq('id', id).single())?.file_path;
+      must(await sb.from('budget_policies').update({ file_path: path, file_name: file.name.slice(0, 120) }).eq('id', id));
+      if (old && old !== path) await sb.storage.from('budget-policies').remove([old]);
+      return path;
+    },
+    async policyFileUrl(path) { return must(await sb.storage.from('budget-policies').createSignedUrl(path, 600)).signedUrl; },
+    async deletePolicy(p) {
+      if (p.filePath) await sb.storage.from('budget-policies').remove([p.filePath]);
+      must(await sb.from('budget_policies').delete().eq('id', p.id));
+    },
+
+    async getConfig() { const r = must(await sb.from('budget_settings').select('value').maybeSingle()); return r?.value ?? {}; },
+    async setConfig(value) { must(await sb.from('budget_settings').upsert({ household_id: hh(), value, updated_at: new Date().toISOString() })); },
+
+    async askAi(body) {
+      const { data, error } = await sb.functions.invoke('ai', { body });
+      if (error) throw await fnError(error);
+      if (data?.error) throw Object.assign(new Error(data.error), { detail: data.detail ?? '' });
+      return data;
+    },
+
+    onChange(cb) {
+      const f = `household_id=eq.${hh()}`;
+      sb.channel('budget-' + hh())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_tx', filter: f }, () => cb('tx'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_recurring', filter: f }, () => cb('recurring'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_policies', filter: f }, () => cb('policies'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_settings', filter: f }, () => cb('config'))
+        .subscribe();
+    },
+  };
+}
+
+// ---------- Demo: nur dieses Gerät, mit Beispieldaten ----------
+const DEMO_KEY = 'haushaltskasse.demo';
+const DEMO_POLICY = [
+  `Versicherungsschein Kfz-Versicherung\nVersicherungsnehmer: Max Muster\nFahrzeug: VW Golf, amtl. Kennzeichen M-XY 123\nVersicherungsbeginn: 01.01.2026, Ablauf: 01.01.2027, Hauptfälligkeit 01.01. Der Vertrag verlängert sich jeweils um ein Jahr, wenn er nicht spätestens einen Monat vor Ablauf gekündigt wird.\nUmfang: Kfz-Haftpflicht (Deckungssumme 100 Mio. EUR pauschal, je Person höchstens 15 Mio. EUR), Vollkasko mit 300 EUR Selbstbeteiligung, Teilkasko mit 150 EUR Selbstbeteiligung. Schutzbrief: nicht vereinbart.\nJahresbeitrag: 486,00 EUR, Zahlungsweise jährlich.`,
+  `A.2.2 Teilkasko – welche Ereignisse sind versichert?\nA.2.2.1 Brand und Explosion. A.2.2.2 Entwendung: Versichert ist die Entwendung, insbesondere durch Diebstahl und Raub. A.2.2.3 Sturm, Hagel, Blitzschlag, Überschwemmung.\nA.2.2.4 Zusammenstoß mit Tieren: Versichert ist der Zusammenstoß des in Bewegung befindlichen Fahrzeugs mit Tieren aller Art.\nA.2.2.5 Glasbruch: Versichert sind Bruchschäden an der Verglasung des Fahrzeugs. Bei Reparatur statt Austausch der Scheibe entfällt die Selbstbeteiligung.\nA.2.2.6 Tierbiss: Versichert sind Schäden an Kabeln, Schläuchen und Leitungen durch Tierbiss, z. B. Marderbiss. Folgeschäden sind bis 3.000 EUR mitversichert.`,
+  `A.2.3 Vollkasko: Versichert sind zusätzlich Unfallschäden am Fahrzeug sowie mut- oder böswillige Handlungen fremder Personen (Vandalismus).\nA.2.4 Geltungsbereich: Versicherungsschutz besteht in den geografischen Grenzen Europas sowie den außereuropäischen Gebieten, die zum Geltungsbereich der Europäischen Union gehören.\nA.2.9 Nicht versichert sind Schäden, die durch Rennen entstehen, sowie Schäden durch Abnutzung, Bremsvorgänge und reine Betriebsschäden. Bei grob fahrlässiger Herbeiführung des Schadens verzichten wir auf den Einwand der groben Fahrlässigkeit, außer bei Entwendung und bei Fahren unter Alkohol- oder Drogeneinfluss.`,
+];
+function demoSeed() {
+  const t = todayIso(), m0 = t.slice(0, 7) + '-01';
+  const tx = [], rec = [];
+  const add = (date, amount, category, note, kind = 'expense', extra = {}) => tx.push({ id: uid(), date, amount, kind, category, note, source: 'manual', recurringId: null, dueDate: null, createdAt: new Date().toISOString(), ...extra });
+  const r = (name, amount, category, freq, startDate, extra = {}) => rec.push({ id: uid(), name, amount, kind: 'expense', category, freq, startDate, nextDue: startDate, n: 0, endDate: null, contractEnd: null, noticeMonths: null, active: true, policyId: null, note: '', ...extra });
+  const polId = uid();
+  // Fixkosten seit vier Monaten (werden beim Start automatisch gebucht)
+  const s = addMonths(m0, -4);
+  r('Gehalt', 265000, 'ei-gehalt', 'monthly', addDays(addMonths(s, 1), -3), { kind: 'income' });
+  r('Miete warm', 98000, 'wo-miete', 'monthly', s);
+  r('Strom', 6500, 'wo-strom', 'monthly', addDays(s, 14));
+  r('Internet', 3999, 'wo-internet', 'monthly', addDays(s, 4));
+  r('Handyvertrag', 1499, 'ab-handy', 'monthly', addDays(s, 9));
+  r('Streaming', 1399, 'ab-streaming', 'monthly', addDays(s, 19));
+  r('Deutschlandticket', 5800, 'mo-oepnv', 'monthly', s);
+  r('Fitnessstudio', 2990, 'ge-fitness', 'monthly', addDays(s, 1), { contractEnd: addMonths(m0, 3), noticeMonths: 1 });
+  r('Privathaftpflicht', 6890, 'vers-haftpflicht', 'yearly', addMonths(m0, 2), { contractEnd: addMonths(m0, 2), noticeMonths: 1 });
+  r('Autoversicherung Golf', 48600, 'vers-kfz', 'yearly', `${+t.slice(0, 4) + 1}-01-01`, { contractEnd: `${+t.slice(0, 4) + 1}-01-01`, noticeMonths: 1, policyId: polId });
+  r('Rundfunkbeitrag', 5508, 'wo-rundfunk', 'quarterly', addDays(s, 14));
+  // Alltagsausgaben der letzten Monate
+  const daily = [['lm-supermarkt', 'Rewe', 3400, 7], ['lm-supermarkt', 'Lidl', 2800, 5], ['lm-baecker', 'Bäckerei', 650, 3], ['mo-sprit', 'Aral', 6200, 9],
+    ['es-restaurant', 'Pizzeria', 3800, 11], ['li-date', 'Kino und Essen', 5400, 14], ['hh-drogerie', 'dm', 2100, 10], ['es-cafe', 'Café', 900, 6], ['li-geschenk', 'Geburtstagsgeschenk', 3500, 30]];
+  for (let back = 4; back >= 0; back--) {
+    const ms = addMonths(m0, -back);
+    for (const [cat, note, amt, every] of daily) {
+      for (let d = (note.length * 3) % every; d < 28; d += every) {
+        const date = addDays(ms, d); if (date > t) continue;
+        add(date, Math.round(amt * (0.7 + ((d * 7 + back * 13 + note.length) % 10) / 16)), cat, note);
+      }
+    }
+  }
+  const pol = [{ id: polId, name: 'Autoversicherung Golf', category: 'vers-kfz', insurer: 'Muster Versicherung AG', policyNo: 'KF-123456', contractEnd: `${+t.slice(0, 4) + 1}-01-01`,
+    noticeMonths: 1, notes: 'Vollkasko 300 € SB, Teilkasko 150 € SB', filePath: null, fileName: 'Beispielpolice (Demo).pdf', pages: DEMO_POLICY, pageCount: DEMO_POLICY.length, textSource: 'manual' }];
+  const config = { limits: { lebensmittel: 45000, essen: 12000, liebe: 15000, mobilitaet: 20000, haushalt: 5000 }, custom: [] };
+  return { tx, rec, pol, config, files: {} };
+}
+
+export function createDemoStore() {
+  let db = null;
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx) { db = demoSeed(); save(); } return db; };
+  const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
+  const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
+  const delay = v => new Promise(r => setTimeout(() => r(v), 20));
+  return {
+    mode: 'demo',
+    async init() { load(); return { ready: true }; },
+    me: () => 'demo',
+    household: () => ({ name: 'Demo-Haushalt', join_code: 'DEMO00' }),
+    async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
+    reset() { localStorage.removeItem(DEMO_KEY); db = null; },
+    async listTx(since) { return delay(load().tx.filter(t => t.date >= since).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },
+    async saveTx(t) { const d = load(); const row = { createdAt: new Date().toISOString(), source: 'manual', recurringId: null, dueDate: null, ...t, id: t.id ?? uid() };
+      const i = d.tx.findIndex(x => x.id === row.id); if (i >= 0) d.tx[i] = { ...d.tx[i], ...row }; else d.tx.push(row); save(); return delay({ ...row }); },
+    async deleteTx(id) { const d = load(); d.tx = d.tx.filter(t => t.id !== id); save(); },
+    async listRecurring() { return delay(load().rec.map(r => ({ ...r })).sort((a, b) => a.name.localeCompare(b.name))); },
+    async saveRecurring(r) { const d = load(); const row = { n: 0, active: true, ...r, id: r.id ?? uid() }; const i = d.rec.findIndex(x => x.id === row.id);
+      if (i >= 0) d.rec[i] = row; else d.rec.push(row); save(); return delay({ ...row }); },
+    async deleteRecurring(id) { const d = load(); d.rec = d.rec.filter(r => r.id !== id); d.tx.forEach(t => { if (t.recurringId === id) t.recurringId = null; }); save(); },
+    async bookDue() {
+      const d = load(), keys = new Set(d.tx.filter(t => t.recurringId).map(t => t.recurringId + '|' + t.dueDate));
+      const add = bookDueLocal(d.rec, todayIso(), keys);
+      for (const t of add) d.tx.push({ id: uid(), createdAt: new Date().toISOString(), ...t });
+      save(); return add.length;
+    },
+    async listPolicies() { return delay(load().pol.map(p => ({ ...p, pages: null, pageCount: p.pages?.length ?? 0 }))); },
+    async policyPages(id) { return load().pol.find(p => p.id === id)?.pages ?? []; },
+    async savePolicy(input) { const { pages: _p, pageCount: _c, ...p } = input; const d = load(); const i = d.pol.findIndex(x => x.id === p.id); const row = { ...(i >= 0 ? d.pol[i] : {}), ...p, id: p.id ?? uid() };
+      delete row.pageCount; if (i >= 0) d.pol[i] = row; else d.pol.push(row); save(); return { ...row, pages: null, pageCount: row.pages?.length ?? 0 }; },
+    async savePolicyPages(id, pages, source) { const p = load().pol.find(x => x.id === id); if (p) { p.pages = pages; p.textSource = source; save(); } },
+    async uploadPolicyFile(id, file) { const p = load().pol.find(x => x.id === id); const path = 'demo/' + id + '/' + file.name; files.set(path, file); if (p) { p.filePath = path; p.fileName = file.name; save(); } return path; },
+    async policyFileUrl(path) { const f = files.get(path); if (!f) throw new Error('In der Demo bleiben hochgeladene Dateien nur bis zum Neuladen erhalten. Der ausgelesene Text ist aber gespeichert.'); return URL.createObjectURL(f); },
+    async deletePolicy(p) { const d = load(); d.pol = d.pol.filter(x => x.id !== p.id); d.rec.forEach(r => { if (r.policyId === p.id) r.policyId = null; }); save(); },
+    async getConfig() { return structuredClone(load().config ?? {}); },
+    async setConfig(v) { load().config = structuredClone(v); save(); },
+    async askAi() { throw Object.assign(new Error('In der Demo ist keine KI verbunden.'), { demo: true }); },
+    onChange() {},
+  };
+}
+
+// Für Tests und das Formular: nächste Fälligkeit aus Startdatum
+export { nextFrom, nthDue };

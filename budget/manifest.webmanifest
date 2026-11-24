@@ -1,0 +1,11 @@
+{
+  "name": "Haushaltskasse",
+  "short_name": "Kasse",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#edf1f0",
+  "theme_color": "#0b5c63",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -190,3 +190,12 @@ Plan-Tab hat jetzt zwei Ansichten: „Diese Woche" (heute bis Sonntag) und „�
 
 ## v69: „Ohne Auftauen" (Luca 24.11.)
 Die Plan-Karte zeigt „❄️ … am Vorabend in den Kühlschrank legen" nur noch für Tiefkühlware, die aufgetaut werden muss. Haushalts-Einstellung `noThaw` (Teilwörter im Artikelnamen, vorbelegt: Fischstäbchen, Pommes, Pizza, Nuggets, Kroketten, Backfisch, TK-Gemüse, Spinat). Am Hinweis steht der Knopf „Ohne Auftauen" (merkt sich den Artikel); Liste ändern unter Einstellungen → Essensplan → „Ohne Auftauen zubereitet". Gilt auch für `getPlannedMeal().thawFrom`. Die Push-Function (reminders) erinnert nicht ans Auftauen; kein Supabase-Schritt nötig.
+
+## Haushaltskasse (Budget-App unter `/budget`, 24.11.2026)
+Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeldung. Einrichtung: `anleitung/budget-setup.md` (SQL `supabase/budget.sql` ausführen, Function `ai` neu deployen). Ausprobieren ohne Konto: `budget/?demo=1`.
+- **Übersicht:** „Noch frei im Monat“ (Einnahmen − Ausgaben − noch offene Fixkosten), Betrag pro Tag, Kündigungsfristen, Budgets je Kategorie mit Ampel, was in 14 Tagen abgeht.
+- **Schnellerfassung:** Betrag, Kategorie antippen (16 Bereiche von Lebensmittel bis Dates & Geschenke, mit Unterkategorien), fertig. Bon-Foto füllt Betrag, Datum, Laden und Kategorie (KI). Gleiche Notiz wie früher („Aral“) schlägt die Kategorie vor. Ohne Netz landen Buchungen in einer Warteschlange.
+- **Fixkosten:** Miete, Abos, Versicherungen, Gehalt; werden beim Öffnen automatisch gebucht (`budget_book_due`, ohne Doppelbuchungen). Monatsanteil jährlicher Kosten, Vertragsende und Kündigungsfrist.
+- **Versicherungen:** Police als PDF (Text wird im Browser mit pdf.js gelesen) oder Foto/Scan (KI schreibt ab). „Police fragen“: die App sucht die passenden Stellen selbst heraus, die KI antwortet nur daraus und nennt die Seite.
+- **Auswertung:** Ausgaben je Monat, Plus/Minus je Monat, Kategorien im Vergleich zum Vormonat, Tabellenansicht, CSV-Export.
+- Tests: `tests/budget` (Logik, Oberfläche, SQL).
