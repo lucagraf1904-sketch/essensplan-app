@@ -212,7 +212,8 @@ end $$;
 create policy budget_tx_read on budget_tx for select using (household_id = my_household() and budget_can_see(owner, case when pot_id is null then 'tx' else 'pots' end));
 create policy budget_recurring_read on budget_recurring for select using (household_id = my_household() and budget_can_see(owner, case when pot_id is null then 'fixed' else 'pots' end));
 create policy budget_pots_read on budget_pots for select using (household_id = my_household() and budget_can_see(owner, 'pots'));
-create policy budget_policies_read on budget_policies for select using (household_id = my_household() and budget_can_see(owner, 'policies'));
+-- Version 6: Versicherungen (Kategorie vers-*) und andere Verträge (Arbeit, Miete …) haben getrennte Freigaben
+create policy budget_policies_read on budget_policies for select using (household_id = my_household() and budget_can_see(owner, case when category like 'vers-%' then 'policies' else 'contracts' end));
 -- Bargeld-Umschläge: Sichtbarkeit wie Fixkosten (geplantes Monatsgeld)
 alter table budget_cash enable row level security;
 drop policy if exists budget_cash_read on budget_cash;

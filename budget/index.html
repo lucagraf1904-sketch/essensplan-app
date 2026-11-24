@@ -70,7 +70,7 @@
       <section id="view-home" class="view" aria-label="Übersicht"></section>
       <section id="view-tx" class="view hidden" aria-label="Buchungen"></section>
       <section id="view-fixed" class="view hidden" aria-label="Fixkosten"></section>
-      <section id="view-ins" class="view hidden" aria-label="Versicherungen"></section>
+      <section id="view-ins" class="view hidden" aria-label="Verträge"></section>
       <section id="view-stats" class="view hidden" aria-label="Auswertung"></section>
     </main>
 
@@ -80,7 +80,7 @@
       <button data-view="home" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>Übersicht</button>
       <button data-view="tx"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>Buchungen</button>
       <button data-view="fixed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 9M20 4v5h-5M20 12a8 8 0 0 1-13.7 5.6L4 15M4 20v-5h5"/></svg>Fixkosten</button>
-      <button data-view="ins"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z"/></svg>Versicherung</button>
+      <button data-view="ins"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7z M14 3v4h4 M10 12h5 M10 16h5"/></svg>Verträge</button>
       <button data-view="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-7"/></svg>Auswertung</button>
     </nav>
   </div>
@@ -167,29 +167,29 @@
   <!-- Versicherung bearbeiten -->
   <dialog id="dlg-pol" class="sheet" aria-labelledby="pol-title">
     <form id="form-pol" method="dialog" novalidate>
-      <header class="sheet-head"><h2 id="pol-title">Versicherung</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
-      <label class="field">Bezeichnung<input id="pol-name" required maxlength="80" placeholder="z. B. Autoversicherung Golf"></label>
+      <header class="sheet-head"><h2 id="pol-title">Vertrag</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <label class="field">Bezeichnung<input id="pol-name" required maxlength="80" placeholder="z. B. Autoversicherung Golf, Arbeitsvertrag"></label>
       <div class="grid2">
         <label class="field">Art<select id="pol-cat"></select></label>
-        <label class="field">Versicherer<input id="pol-insurer" maxlength="80"></label>
+        <label class="field"><span id="pol-insurer-label">Versicherer</span><input id="pol-insurer" maxlength="80"></label>
       </div>
       <div class="grid2">
-        <label class="field">Beitrag (€)<input id="pol-amount" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field"><span id="pol-amount-label">Beitrag (€)</span><input id="pol-amount" inputmode="decimal" placeholder="0,00"></label>
         <label class="field">Zahlweise<select id="pol-freq"></select></label>
       </div>
-      <label class="field">Nächste Abbuchung<input type="date" id="pol-next"></label>
-      <p class="tiny muted">Mit Beitrag und Abbuchung wird die Versicherung automatisch als Fixkosten gebucht.</p>
+      <label class="field"><span id="pol-next-label">Nächste Abbuchung</span><input type="date" id="pol-next"></label>
+      <p class="tiny muted" id="pol-amount-hint">Mit Beitrag und Abbuchung wird die Versicherung automatisch als Fixkosten gebucht.</p>
       <details class="more">
         <summary>Vertragsdaten</summary>
         <div class="grid2">
-          <label class="field">Versicherungsnummer<input id="pol-no" maxlength="40" autocomplete="off"></label>
+          <label class="field"><span id="pol-no-label">Versicherungsnummer</span><input id="pol-no" maxlength="40" autocomplete="off"></label>
           <label class="field">Vertrag läuft bis<input type="date" id="pol-cend"></label>
         </div>
         <label class="field">Kündigungsfrist<select id="pol-notice"></select></label>
         <label class="field">Notizen <span class="muted">(z. B. Selbstbeteiligung, Ansprechpartner)</span><textarea id="pol-notes" rows="2" maxlength="600"></textarea></label>
       </details>
       <fieldset class="upload">
-        <legend>Police</legend>
+        <legend id="pol-doc-label">Police</legend>
         <p class="tiny muted" id="pol-file-state">Noch keine Police hinterlegt.</p>
         <label class="btn"><input type="file" id="pol-file" accept="application/pdf,image/*" class="sr-only">PDF oder Foto wählen</label>
         <details class="more">
@@ -263,7 +263,7 @@
   <dialog id="dlg-chat" class="sheet tall" aria-labelledby="chat-title">
     <div class="chat">
       <header class="sheet-head">
-        <h2 id="chat-title">Police fragen</h2>
+        <h2 id="chat-title">Verträge fragen</h2>
         <button type="button" class="btn link" id="chat-new">Neu</button>
         <button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button>
       </header>
@@ -274,7 +274,7 @@
         <input id="chat-input" placeholder="z. B. Ist Marderbiss abgedeckt?" autocomplete="off" maxlength="500" aria-label="Frage">
         <button class="btn primary" type="submit">Fragen</button>
       </form>
-      <p class="tiny muted chat-note">Die passenden Stellen aus der Police werden an einen KI-Dienst (Cloudflare) geschickt. Antworten ohne Gewähr und keine Rechtsberatung: Im Schadensfall gelten die vollständigen Bedingungen.</p>
+      <p class="tiny muted chat-note">Die passenden Stellen aus dem Dokument werden an einen KI-Dienst (Cloudflare) geschickt. Antworten ohne Gewähr und keine Rechtsberatung: Maßgeblich ist der vollständige Vertrag.</p>
     </div>
   </dialog>
 

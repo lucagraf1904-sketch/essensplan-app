@@ -2,7 +2,7 @@
 // und der Chat „Police fragen“. Die Suche nach passenden Stellen läuft auf dem Gerät (retrieval.js);
 // an die KI gehen nur die gefundenen Auszüge, nie die ganze Datei.
 import { selectExcerpts } from './retrieval.js';
-import { POLICY_QUESTIONS, cat } from './categories.js';
+import { POLICY_QUESTIONS, cat, contractType } from './categories.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let pdfjs = null;
@@ -114,7 +114,7 @@ export function initChat(ctx) {
   function sourcesHtml(excerpts, open = false) {
     if (!excerpts?.length) return '';
     return `<details ${open ? 'open' : ''}><summary>Gefundene Stellen (${excerpts.length})</summary>${excerpts.map(x =>
-      `<blockquote><cite>${esc(x.policy)}, S. ${x.page}${x.cover ? ' (Versicherungsschein)' : ''}</cite>${esc(x.text.length > 700 ? x.text.slice(0, 700) + ' …' : x.text)}</blockquote>`).join('')}</details>`;
+      `<blockquote><cite>${esc(x.policy)}, S. ${x.page}${x.cover ? ' (erste Seite)' : ''}</cite>${esc(x.text.length > 700 ? x.text.slice(0, 700) + ' …' : x.text)}</blockquote>`).join('')}</details>`;
   }
 
   function draw() {
@@ -122,23 +122,28 @@ export function initChat(ctx) {
     const pol = ctx.state.policies.find(p => p.id === scopeId);
     const withText = policiesWithText();
     let intro = '';
-    if (!withText.length) intro = '<p class="muted">Noch keine Police mit Text hinterlegt. Unter „Versicherung“ eine Versicherung öffnen und die Police als PDF oder Foto hinzufügen.</p>';
+    if (!withText.length) intro = '<p class="muted">Noch kein Vertrag mit Text hinterlegt. Unter „Verträge“ einen Vertrag öffnen und das Dokument als PDF oder Foto hinzufügen.</p>';
     else if (!history.length) intro = `<p class="muted">Frag in eigenen Worten, z. B. ob etwas versichert ist, wie hoch die Selbstbeteiligung ist oder wie du kündigen kannst. Die Antwort nennt die Seite, auf der es steht.</p>`;
     $('#chat-msgs').innerHTML = intro + history.map(m => m.role === 'user'
       ? `<div class="msg-u">${esc(m.content)}</div>`
       : `<div class="msg-a">${m.error ? `<p>${esc(m.content)}</p>` : fmt(m.content)}${sourcesHtml(m.excerpts, m.error)}</div>`).join('')
-      + (busy ? '<div class="msg-a typing">Ich lese in der Police nach</div>' : '');
+      + (busy ? '<div class="msg-a typing">Ich lese im Dokument nach</div>' : '');
     $('#chat-msgs').scrollTop = $('#chat-msgs').scrollHeight;
-    const qs = POLICY_QUESTIONS[pol?.category] ?? POLICY_QUESTIONS.default;
+    const qFor = c => POLICY_QUESTIONS[c] ?? (contractType(c).id !== 'ins' ? POLICY_QUESTIONS.defaultContract : POLICY_QUESTIONS.default);
+    // Ein Vertrag gewählt: dessen Fragen. Alle: je vorhandener Art zwei Fragen
+    const kinds = [...new Map(withText.map(p => [contractType(p.category).id, p.category])).values()];
+    const qs = pol ? qFor(pol.category) : kinds.length === 1 ? qFor(kinds[0]) : [...new Set(kinds.flatMap(c => qFor(c).slice(0, 2)))].slice(0, 6);
     $('#chat-chips').innerHTML = !history.length && withText.length ? qs.map(q => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('') : '';
     $('#chat-input').disabled = !withText.length;
+    const ty = pol ? contractType(pol.category).id : null;
+    $('#chat-input').placeholder = ty === 'work' ? 'z. B. Wie viele Urlaubstage habe ich?' : ty && ty !== 'ins' ? 'z. B. Wie kann ich kündigen?' : 'z. B. Ist Marderbiss abgedeckt?';
   }
 
   async function send(q) {
     q = q.trim(); if (!q || busy) return;
     const scopeId = $('#chat-scope').value;
     const scope = (scopeId ? ctx.state.policies.filter(p => p.id === scopeId) : policiesWithText()).filter(p => p.pageCount > 0);
-    if (!scope.length) { ctx.toast('Für diese Versicherung ist noch kein Text hinterlegt.'); return; }
+    if (!scope.length) { ctx.toast('Für diesen Vertrag ist noch kein Text hinterlegt.'); return; }
     history.push({ role: 'user', content: q }); busy = true; $('#chat-input').value = ''; draw();
     let excerpts = [];
     try {
@@ -150,14 +155,14 @@ export function initChat(ctx) {
       history.push({ role: 'assistant', content: r.text, excerpts });
     } catch (e) {
       const why = e.demo ? 'In der Demo ist keine KI verbunden.' : `Die KI hat nicht geantwortet: ${e.message}`;
-      history.push({ role: 'assistant', error: true, content: `${why} ${excerpts.length ? 'Hier sind die passendsten Stellen aus der Police, damit du selbst nachlesen kannst:' : 'Es wurden auch keine passenden Stellen gefunden.'}`, excerpts });
+      history.push({ role: 'assistant', error: true, content: `${why} ${excerpts.length ? 'Hier sind die passendsten Stellen aus dem Dokument, damit du selbst nachlesen kannst:' : 'Es wurden auch keine passenden Stellen gefunden.'}`, excerpts });
     }
     busy = false; draw();
   }
 
   async function openSource(id, page) {
     const p = ctx.state.policies.find(x => x.id === id);
-    if (!p?.filePath) { ctx.toast('Für diese Police ist keine Datei gespeichert, nur der Text.'); return; }
+    if (!p?.filePath) { ctx.toast('Für diesen Vertrag ist keine Datei gespeichert, nur der Text.'); return; }
     try { const url = await ctx.store.policyFileUrl(p.filePath); window.open(url + (p.fileName?.toLowerCase().endsWith('.pdf') ? `#page=${page}` : ''), '_blank', 'noopener'); }
     catch (e) { ctx.toast(e.message); }
   }
@@ -171,8 +176,8 @@ export function initChat(ctx) {
   return {
     open(policyId = '') {
       const list = ctx.state.policies;
-      $('#chat-scope').innerHTML = `<option value="">Alle Versicherungen (${policiesWithText().length} mit Police)</option>`
-        + list.map(p => `<option value="${esc(p.id)}" ${p.pageCount ? '' : 'disabled'}>${esc(cat(p.category).icon)} ${esc(p.name)}${p.pageCount ? '' : ' (keine Police)'}</option>`).join('');
+      $('#chat-scope').innerHTML = `<option value="">Alle Verträge (${policiesWithText().length} mit Dokument)</option>`
+        + list.map(p => `<option value="${esc(p.id)}" ${p.pageCount ? '' : 'disabled'}>${esc(cat(p.category).icon)} ${esc(p.name)}${p.pageCount ? '' : ' (kein Dokument)'}</option>`).join('');
       if ($('#chat-scope').value !== policyId) { history = []; $('#chat-scope').value = policyId; }
       draw(); dlg.showModal();
       if (matchMedia('(min-width: 700px)').matches) $('#chat-input').focus();

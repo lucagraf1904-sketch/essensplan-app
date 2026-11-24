@@ -22,7 +22,7 @@ const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.go
 const fromPot = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, icon: p.icon || '🐷', goal: p.goal ? fromCents(p.goal) : null, target_date: p.targetDate || null,
   start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived, owner: p.owner || null,
   kind: p.kind || 'pot', isin: p.isin || null, market_value: p.marketValue == null ? null : fromCents(p.marketValue), market_value_at: p.marketValueAt || null });
-const DEFAULT_SHARE = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none' };
+const DEFAULT_SHARE = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', contracts: 'none' };
 const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', share: { ...DEFAULT_SHARE, ...(r.share ?? {}) }, defaultPrivate: !!r.default_private });
 const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
 // Summen-Zeilen (Freigabe „nur Summen“) in Cent

@@ -38,6 +38,13 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - Der Sparplan zählt wie Sparen: mindert „Noch frei“, ist aber keine Ausgabe (Kategorie Geldanlage). Privat/gemeinsam und Freigabe wie bei Spartöpfen (Bereich Spartöpfe).
 - Keine Anlageberatung.
 
+## Update: Verträge statt nur Versicherungen (Version 6)
+`supabase/budget.sql` noch einmal ausführen (für die getrennte Freigabe). Der Tab heißt jetzt „Verträge“: Versicherungen, Arbeitsvertrag, Nebenjob, Mietvertrag, Strom, Gas, Internet, Handy, Abos, Kredit und sonstige Verträge, jeweils mit Dokument (PDF/Foto), Fragen-Chat und Kündigungsfrist.
+- **Arbeitsvertrag:** Felder Arbeitgeber, Nettogehalt und nächster Zahltag. Daraus entsteht die regelmäßige Einnahme; gibt es schon ein „Gehalt“, fragt die App, ob sie es verknüpfen soll (kein doppeltes Gehalt). Standardmäßig privat.
+- **Freigabe:** Versicherungen und andere Verträge (Arbeit, Miete, Handy …) werden getrennt freigegeben. Eine bestehende Freigabe für Versicherungen gilt also nicht automatisch für den Arbeitsvertrag.
+- **Fragen:** z. B. „Wie viele Urlaubstage habe ich?“, „Wie lang ist die Kündigungsfrist?“, „Darf ich Haustiere halten?“.
+- **Empfohlen:** Edge Function `ai` noch einmal mit dem aktuellen `supabase/functions/ai/index.ts` deployen. Der Prompt ist jetzt auf Verträge allgemein ausgelegt und weist auf gesetzliche Mindestregeln hin (z. B. Mindesturlaub). Ohne Update funktioniert es auch, die KI denkt dann aber „Versicherung“.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

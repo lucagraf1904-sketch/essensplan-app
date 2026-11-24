@@ -306,6 +306,41 @@ await page.keyboard.press('Escape');
 await page.waitForTimeout(200);
 await shot(page, '21-etf');
 
+// ---------- Verträge: Arbeitsvertrag mit Gehalt ----------
+await page.click('.tabs [data-view=ins]');
+await page.click('#view-ins [data-ctype=ei-gehalt]');
+assert.match(await page.textContent('#pol-insurer-label'), /Arbeitgeber/);
+assert.match(await page.textContent('#pol-amount-label'), /Nettogehalt/);
+assert.ok(await page.isChecked('#pol-who [value=me]'), 'Arbeitsvertrag standardmäßig privat');
+await page.fill('#pol-name', 'Arbeitsvertrag Muster GmbH');
+await page.fill('#pol-insurer', 'Muster GmbH');
+await page.fill('#pol-amount', '2700');
+await page.fill('#pol-next', '2026-12-28');
+await page.setInputFiles('#pol-file', { name: 'arbeitsvertrag.pdf', mimeType: 'application/pdf', buffer: makePdf([
+  'Arbeitsvertrag zwischen der Muster GmbH und Max Muster\nParagraf 1 Beginn des Arbeitsverhaeltnisses am 01.03.2025\nDie ersten sechs Monate gelten als Probezeit.',
+  'Paragraf 7 Urlaub\nDer Arbeitnehmer hat Anspruch auf 30 Arbeitstage Erholungsurlaub im Kalenderjahr.\nParagraf 9 Kuendigung nach der Probezeit mit gesetzlicher Frist.',
+]) });
+await page.waitForFunction(() => /Seiten gelesen/.test(document.querySelector('#pol-file-msg').textContent), null, { timeout: 15000 });
+await page.click('#form-pol [type=submit]');
+// Demo hat schon „Gehalt“: verknüpfen statt doppelt anlegen
+await page.waitForSelector('#dlg-ask[open]');
+assert.match(await page.textContent('#ask-body'), /Gehalt/);
+await page.click('#ask-btns button[value=link]');
+await page.waitForFunction(() => window.__budget.state.policies.some(p => p.category === 'ei-gehalt' && p.pageCount === 2));
+const sal = await page.evaluate(() => { const s = window.__budget.state, pol = s.policies.find(p => p.category === 'ei-gehalt'); return s.recurring.filter(r => r.kind === 'income' && r.category === 'ei-gehalt' && r.active).map(r => ({ amount: r.amount, linked: r.policyId === pol.id })); });
+assert.equal(sal.length, 1, 'kein zweites Gehalt'); assert.equal(sal[0].amount, 270000); assert.ok(sal[0].linked);
+await page.waitForFunction(() => /💼 Arbeit/.test(document.querySelector('#view-ins').textContent));
+// Fragen mit passenden Beispielen
+await page.click('#view-ins [data-ask=""]');
+await page.selectOption('#chat-scope', { label: '💶 Arbeitsvertrag Muster GmbH 🔒'.replace(' 🔒', '') }).catch(async () => {
+  const v = await page.evaluate(() => [...document.querySelectorAll('#chat-scope option')].find(o => o.textContent.includes('Arbeitsvertrag')).value); await page.selectOption('#chat-scope', v); });
+await page.waitForFunction(() => /Urlaubstage/.test(document.querySelector('#chat-chips').textContent));
+await page.click('#chat-chips .chip >> nth=0');
+await page.waitForSelector('#chat-msgs .msg-a blockquote', { state: 'attached' });
+assert.match(await page.$$eval('#chat-msgs blockquote', e => e.map(x => x.textContent).join(' ')), /30 Arbeitstage/);
+await shot(page, '24-arbeitsvertrag', false);
+await page.keyboard.press('Escape');
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');

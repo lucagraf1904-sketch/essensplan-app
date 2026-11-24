@@ -1,7 +1,7 @@
 // Haushaltskasse: Hauptmodul. Ansichten, Schnellerfassung, Fixkosten, Versicherungen, Auswertung, Einstellungen.
 import { SUPABASE_URL } from '../config.js';
 import { createSupabaseStore, createDemoStore } from './store.js';
-import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, groupsFor, setCustomCategories } from './categories.js';
+import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, groupsFor, setCustomCategories, CONTRACT_TYPES, contractType, contractLabel } from './categories.js';
 import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
@@ -11,7 +11,7 @@ import {
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -403,29 +403,37 @@ function renderFixed() {
 function renderIns() {
   const ps = V.policies;
   const withText = ps.filter(p => p.pageCount > 0).length;
-  const cards = ps.map(p => {
+  const card = p => {
+    const t = contractType(p.category);
     const r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
     const n = noticeInfo(p.contractEnd, p.noticeMonths, state.today);
     return `<div class="card pol">
-      <div class="pol-top"><span class="ic" aria-hidden="true">${cat(p.category).icon}</span>
-        <span><b>${esc(p.name)}</b><span class="tiny muted" style="display:block">${esc([cat(p.category).label, p.insurer].filter(Boolean).join(' · '))}${ownerTag(p.owner)}</span></span>
-        <span style="text-align:right">${r ? `<b>${eur(r.amount)}</b><span class="tiny muted" style="display:block">${FREQS[r.freq].label}</span>` : '<span class="tiny muted">kein Beitrag</span>'}</span></div>
+      <div class="pol-top"><span class="ic" aria-hidden="true">${t.id === 'work' ? '💼' : cat(p.category).icon}</span>
+        <span><b>${esc(p.name)}</b><span class="tiny muted" style="display:block">${esc([contractLabel(p.category), p.insurer].filter(Boolean).join(' · '))}${ownerTag(p.owner)}</span></span>
+        <span style="text-align:right">${r ? `<b class="${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : ''}${eur(r.amount)}</b><span class="tiny muted" style="display:block">${t.income ? 'netto, ' : ''}${FREQS[r.freq].label}</span>` : ''}</span></div>
       <div class="row wrap">
-        ${p.pageCount ? `<span class="badge good">✓ Police hinterlegt · ${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}</span>` : '<span class="badge warn">Police fehlt</span>'}
+        ${p.pageCount ? `<span class="badge good">✓ ${t.doc} hinterlegt · ${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}</span>` : `<span class="badge warn">${t.doc} fehlt</span>`}
         ${n ? `<span class="badge ${n.daysLeft <= 14 ? 'bad' : n.daysLeft <= 60 ? 'warn' : ''}">kündbar bis ${dateShort(n.deadline)}</span>` : ''}
         ${p.notes ? `<span class="tiny muted">${esc(p.notes)}</span>` : ''}
       </div>
       <div class="pol-actions">
         <button class="btn small ${p.pageCount ? 'primary' : ''}" data-ask="${esc(p.id)}" ${p.pageCount ? '' : 'disabled'}>Fragen</button>
-        ${p.filePath ? `<button class="btn small" data-file="${esc(p.id)}">Police öffnen</button>` : ''}
-        <button class="btn small" data-pol="${esc(p.id)}">${p.pageCount ? 'Bearbeiten' : 'Police hinzufügen'}</button>
+        ${p.filePath ? `<button class="btn small" data-file="${esc(p.id)}">${t.doc} öffnen</button>` : ''}
+        <button class="btn small" data-pol="${esc(p.id)}">${p.pageCount ? 'Bearbeiten' : `${t.doc} hinzufügen`}</button>
       </div></div>`;
-  }).join('');
+  };
+  const sections = CONTRACT_TYPES.map(t => ({ t, list: ps.filter(p => contractType(p.category).id === t.id) })).filter(x => x.list.length);
   $('#view-ins').innerHTML = `
     <button class="ask-all" style="margin-top:6px" data-ask="" ${withText ? '' : 'disabled'}><span style="font-size:1.8rem" aria-hidden="true">💬</span>
-      <span><b>Frag deine Versicherungen</b><span class="tiny">${withText ? `„Ist Marderbiss abgedeckt?“ · „Zahlt die Haftpflicht, wenn mir ein geliehenes Handy runterfällt?“ Die Antwort nennt die Seite in der Police.` : 'Hinterlege zuerst eine Police als PDF oder Foto.'}</span></span></button>
-    <div class="section-head"><h2>Deine Versicherungen</h2><button class="btn link" data-act="add-pol">Hinzufügen</button></div>
-    ${ps.length ? cards : `<div class="card empty"><p>Lege deine Versicherungen an, z. B. Kfz, Haftpflicht und Hausrat. Mit hinterlegter Police kannst du danach fragen, was abgedeckt ist.</p><button class="btn primary" data-act="add-pol">Versicherung anlegen</button></div>`}`;
+      <span><b>Frag deine Verträge</b><span class="tiny">${withText ? `„Ist Marderbiss abgedeckt?“ · „Wie viele Urlaubstage habe ich?“ · „Wie lang ist die Kündigungsfrist?“ Die Antwort nennt die Seite im Dokument.` : 'Hinterlege zuerst einen Vertrag als PDF oder Foto.'}</span></span></button>
+    <div class="row wrap" style="margin-top:14px">
+      <button class="btn small" data-act="add-pol" data-ctype="vers-kfz">🛡️ Versicherung</button>
+      <button class="btn small" data-act="add-pol" data-ctype="ei-gehalt">💼 Arbeitsvertrag</button>
+      <button class="btn small" data-act="add-pol" data-ctype="wo-miete">🏠 Mietvertrag</button>
+      <button class="btn small" data-act="add-pol" data-ctype="ab-handy">📱 Weiterer Vertrag</button>
+    </div>
+    ${sections.length ? sections.map(({ t, list }) => `<div class="section-head"><h2>${t.icon} ${esc(t.label)}</h2></div>${list.map(card).join('')}`).join('')
+      : `<div class="card empty" style="margin-top:14px"><p>Lege deine Verträge an: Versicherungen, Arbeitsvertrag, Miete, Strom oder Handy. Mit hinterlegtem Dokument kannst du danach Fragen stellen, z. B. nach Urlaubstagen oder Kündigungsfristen.</p></div>`}`;
 }
 
 // ---------- Auswertung ----------
@@ -625,26 +633,38 @@ async function saveRecForm() {
 
 // ---------- Versicherung bearbeiten ----------
 let polEditing = null, polFile = null, polRead = null, polReadOnly = false, recReadOnly = false;
-function openPolicy(p = null) {
+// Beschriftungen je Vertragsart (Arbeitsvertrag: Arbeitgeber, Nettogehalt, Zahltag …)
+function contractLabels(category, fresh = false) {
+  const t = contractType(category);
+  $('#pol-insurer-label').textContent = t.provider; $('#pol-amount-label').textContent = t.amount; $('#pol-next-label').textContent = t.next;
+  $('#pol-no-label').textContent = t.number; $('#pol-doc-label').textContent = t.doc;
+  $('#pol-amount-hint').textContent = t.income ? 'Mit Nettogehalt und Zahltag entsteht automatisch die regelmäßige Einnahme. Gibt es schon eine, kannst du sie verknüpfen.'
+    : `Mit ${t.id === 'ins' ? 'Beitrag' : 'Kosten'} und Abbuchung wird der Vertrag automatisch als Fixkosten gebucht.`;
+  if (fresh) { $('#pol-freq').value = t.freq; $('#pol-notice').value = t.notice == null ? '' : String(t.notice); }
+  return t;
+}
+function openPolicy(p = null, presetCat = null) {
   polEditing = p; polFile = null; polRead = null;
-  const roPol = whoWidget($('#pol-who'), { account: undefined, owner: p ? p.owner : (myMember().defaultPrivate ? me() : null), editing: !!p, accounts: false, hint: 'Eine private Police (auch die Datei) sieht dein Partner nur, wenn du Versicherungen freigibst.' });
+  const startCat = p?.category ?? presetCat ?? 'vers-kfz';
+  const roPol = whoWidget($('#pol-who'), { account: undefined, owner: p ? p.owner : (myMember().defaultPrivate || contractType(startCat).private ? me() : null), editing: !!p, accounts: false, hint: 'Einen privaten Vertrag (auch die Datei) sieht dein Partner nur, wenn du Verträge freigibst.' });
   $('#form-pol [type=submit]').classList.toggle('hidden', roPol);
   polReadOnly = roPol;
   const r = p && (state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id));
-  $('#pol-title').textContent = p ? p.name : 'Neue Versicherung';
+  $('#pol-title').textContent = p ? p.name : `Neu: ${contractLabel(startCat)}`;
   $('#pol-name').value = p?.name ?? '';
-  $('#pol-cat').innerHTML = (group('versicherung').subs).map(([id, l]) => `<option value="${id}" ${id === (p?.category ?? 'vers-kfz') ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  $('#pol-cat').innerHTML = CONTRACT_TYPES.map(t => `<optgroup label="${esc(t.label)}">${t.cats.map(([id, l]) => `<option value="${id}" ${id === startCat ? 'selected' : ''}>${esc(l)}</option>`).join('')}</optgroup>`).join('');
   $('#pol-insurer').value = p?.insurer ?? '';
   $('#pol-amount').value = r ? amountInput(r.amount) : '';
-  $('#pol-freq').innerHTML = freqOptions(r?.freq ?? 'yearly');
+  $('#pol-freq').innerHTML = freqOptions(r?.freq ?? contractType(startCat).freq);
   $('#pol-next').value = r?.active ? r.nextDue : '';
   $('#pol-no').value = p?.policyNo ?? '';
   $('#pol-cend').value = p?.contractEnd ?? '';
-  $('#pol-notice').innerHTML = noticeOptions(p?.noticeMonths ?? (p ? null : 1));
+  $('#pol-notice').innerHTML = noticeOptions(p?.noticeMonths ?? (p ? null : contractType(startCat).notice));
+  contractLabels(startCat);
   $('#pol-notes').value = p?.notes ?? '';
   $('#pol-text').value = '';
   $('#pol-file').value = '';
-  $('#pol-file-state').textContent = p?.pageCount ? `Hinterlegt: ${p.fileName ?? 'Text'} (${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}${p.textSource === 'photo' ? ', per KI abgeschrieben' : p.textSource === 'manual' ? ', Text eingefügt' : ''}). Neue Datei ersetzt sie.` : p?.filePath ? `Datei hinterlegt (${p.fileName}), aber kein lesbarer Text.` : 'Noch keine Police hinterlegt. Am besten das PDF aus dem Kundenportal oder der E-Mail des Versicherers.';
+  $('#pol-file-state').textContent = p?.pageCount ? `Hinterlegt: ${p.fileName ?? 'Text'} (${p.pageCount} ${p.pageCount === 1 ? 'Seite' : 'Seiten'}${p.textSource === 'photo' ? ', per KI abgeschrieben' : p.textSource === 'manual' ? ', Text eingefügt' : ''}). Neue Datei ersetzt sie.` : p?.filePath ? `Datei hinterlegt (${p.fileName}), aber kein lesbarer Text.` : `Noch kein Dokument hinterlegt. Am besten das PDF aus dem Kundenportal oder der E-Mail${contractType(startCat).id === 'ins' ? ' des Versicherers' : ''}.`;
   $('#pol-file-msg').textContent = ''; $('#pol-progress').classList.add('hidden');
   $('#pol-delete').classList.toggle('hidden', !p || polReadOnly);
   $('#pol-file').closest('fieldset').querySelectorAll('input,textarea,button').forEach(x => { x.disabled = polReadOnly; });
@@ -673,8 +693,9 @@ async function savePolicyForm() {
   const name = $('#pol-name').value.trim(), err = m => { $('#pol-err').textContent = m; };
   if (!name) return err('Bitte eine Bezeichnung eingeben.');
   const amountRaw = $('#pol-amount').value.trim(), amount = amountRaw ? parseAmount(amountRaw) : null, next = $('#pol-next').value;
-  if (amountRaw && !amount) return err('Der Beitrag ist keine gültige Zahl.');
-  if (amount && !isIso(next)) return err('Bitte das Datum der nächsten Abbuchung angeben, damit der Beitrag als Fixkosten gebucht wird.');
+  const ctype = contractType($('#pol-cat').value);
+  if (amountRaw && !amount) return err(`${ctype.amount.replace(' (€)', '')}: keine gültige Zahl.`);
+  if (amount && !isIso(next)) return err(ctype.income ? 'Bitte den nächsten Zahltag angeben, damit das Gehalt als Einnahme gebucht wird.' : 'Bitte das Datum der nächsten Abbuchung angeben, damit der Betrag als Fixkosten gebucht wird.');
   const old = polEditing;
   const who = whoValue($('#pol-who'));
   if (who.readOnly) return;
@@ -690,19 +711,30 @@ async function savePolicyForm() {
     let fileErr = null;
     if (polFile) { try { await store.uploadPolicyFile(p.id, polFile); } catch (e) { fileErr = e; } }
     // Beitrag als Fixkosten
-    const r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
-    const freq = $('#pol-freq').value;
+    let r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
+    const freq = $('#pol-freq').value, kind = ctype.income ? 'income' : 'expense';
+    // Art gewechselt (Ausgabe ↔ Einnahme): alte Buchung beenden statt umzudrehen, sonst passen bisherige Monate nicht mehr dazu
+    if (r && r.kind !== kind) { if (r.active) await store.saveRecurring({ ...r, active: false, endDate: state.today < r.startDate ? r.startDate : state.today }); r = null; }
+    let linked = false;
+    // Arbeitsvertrag: vorhandenes Gehalt verknüpfen statt ein zweites anzulegen (gleiche Kategorie zuerst, sonst jede Einnahme ohne Vertrag)
+    if (amount && !r && ctype.income) {
+      const free = state.recurring.filter(x => x.active && x.kind === 'income' && !x.policyId && canWrite(x.owner));
+      const cand = free.find(x => x.category === p.category) ?? free.find(x => groupOf(x.category) === 'einkommen');
+      if (cand && (await ask('Vorhandenes Gehalt verknüpfen?', `<p>Es gibt schon die Einnahme „${esc(cand.name)}“ über ${eur(cand.amount)}. Mit diesem Vertrag verknüpfen (und auf ${eur(amount)} setzen), statt eine zweite anzulegen?</p>`,
+        [{ value: 'new', label: 'Zweite anlegen' }, { value: 'link', label: 'Verknüpfen', cls: 'primary' }])) === 'link') { r = cand; linked = true; }
+    }
     if (amount) {
       const changed = !r || r.freq !== freq || r.nextDue !== next || !r.active;
-      await store.saveRecurring({ ...(r ?? {}), owner: p.owner, accountId: r?.accountId ?? lastAccount(), name, amount, kind: 'expense', category: p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
+      // Verknüpftes Gehalt behält, wer es sieht (sonst würde ein gemeinsames Gehalt durch einen privaten Vertrag unbemerkt privat)
+      await store.saveRecurring({ ...(r ?? {}), owner: linked ? r.owner : p.owner, accountId: r?.accountId ?? lastAccount(), name: r?.policyId || !r ? name : r.name, amount, kind, category: linked ? r.category : p.category, freq, policyId: p.id, active: true, endDate: r?.endDate ?? null,
         contractEnd: null, noticeMonths: null, ...(changed ? { startDate: next, nextDue: next, n: 0 } : {}) });
-    } else if (r && (await ask('Beitrag entfernen?', `<p>Die Fixkosten „${esc(r.name)}“ gehören zu dieser Versicherung. Sollen sie gelöscht werden? Bisherige Buchungen bleiben.</p>`, [{ value: '', label: 'Behalten' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes') {
+    } else if (r && (await ask(ctype.income ? 'Gehalt entfernen?' : 'Betrag entfernen?', `<p>„${esc(r.name)}“ gehört zu diesem Vertrag. ${ctype.income ? 'Die regelmäßige Einnahme' : 'Die Fixkosten'} löschen? Bisherige Buchungen bleiben.</p>`, [{ value: '', label: 'Behalten' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes') {
       await store.deleteRecurring(r.id);
     }
     $('#dlg-pol').close();
     await loadAll(); render();
-    if (fileErr) ask('Datei nicht hochgeladen', `<p>Die Versicherung und der ausgelesene Text sind gespeichert, die Datei selbst aber nicht: ${esc(fileErr.message)}</p>`);
-    else toast('Versicherung gespeichert');
+    if (fileErr) ask('Datei nicht hochgeladen', `<p>Der Vertrag und der ausgelesene Text sind gespeichert, die Datei selbst aber nicht: ${esc(fileErr.message)}</p>`);
+    else toast('Vertrag gespeichert');
   } catch (e) { err(e.message); }
   finally { btn.disabled = false; btn.textContent = 'Speichern'; }
 }
@@ -1076,7 +1108,7 @@ let cfgTimer = null, cfgDirty = false;
 function saveConfigSoon(delay = 600) { cfgDirty = true; clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); cfgDirty = false; } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, delay); }
 function openSettings(focus) {
   const hh = store.household(), limits = state.config.limits ?? {};
-  const mm = myMember(), share = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', ...mm.share };
+  const mm = myMember(), share = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', contracts: 'none', ...mm.share };
   const partner = others().map(m => m.displayName || 'Partner').join(' und ') || 'Dein Partner';
   const shareRow = (area, label, levels) => `<div class="share-row"><span>${label}</span><div class="seg small" role="radiogroup" aria-label="${label}">${levels.map(([v, l]) =>
     `<label><input type="radio" name="share-${area}" value="${v}" ${share[area] === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>`;
@@ -1091,6 +1123,7 @@ function openSettings(focus) {
       ${shareRow('fixed', 'Fixkosten', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
       ${shareRow('pots', 'Spartöpfe', [['none', 'Nichts'], ['sums', 'Nur Summe'], ['all', 'Alles']])}
       ${shareRow('policies', 'Versicherungen', [['none', 'Nichts'], ['all', 'Alles']])}
+      ${shareRow('contracts', 'Andere Verträge (Arbeit, Miete, Handy …)', [['none', 'Nichts'], ['all', 'Alles']])}
       <p class="tiny muted">„Nur Summen“: Monatssummen je Kategorie bzw. Gesamtstand, keine einzelnen Buchungen, Notizen oder Namen. Gemeinsame Einträge sehen immer alle. Ansehen heißt nicht ändern: Private Einträge kann nur ihr Besitzer bearbeiten.</p>
     </section>
     <section class="set-group"><h3>Konten</h3>
@@ -1130,7 +1163,7 @@ function openSettings(focus) {
   };
   $('#me-name').oninput = e => saveMe({ displayName: e.target.value.trim() }, 700);
   $$('[name=me-default]').forEach(r => r.onchange = () => saveMe({ defaultPrivate: r.value === 'private' }));
-  for (const area of ['tx', 'fixed', 'pots', 'policies']) $$(`[name=share-${area}]`).forEach(r => r.onchange = () => { saveMe({ share: { [area]: r.value } }); toast('Freigabe gespeichert'); });
+  for (const area of ['tx', 'fixed', 'pots', 'policies', 'contracts']) $$(`[name=share-${area}]`).forEach(r => r.onchange = () => { saveMe({ share: { [area]: r.value } }); toast('Freigabe gespeichert'); });
   $('#form-acc').onsubmit = async e => {
     e.preventDefault(); const name = $('#acc-name').value.trim(); if (!name) return;
     try { await store.saveAccount({ name, owner: $('#acc-owner').value === 'me' ? me() : null, icon: $('#acc-owner').value === 'me' ? '💳' : '🏦' }); state.accounts = await store.listAccounts(); openSettings(); }
@@ -1198,7 +1231,7 @@ function bindEvents() {
     if (act === 'add') openTx();
     else if (act === 'add-rec') openRec();
     else if (act === 'add-income') openRec(null, { kind: 'income', name: 'Gehalt', category: 'ei-gehalt' });
-    else if (act === 'add-pol') openPolicy();
+    else if (act === 'add-pol') openPolicy(null, el.dataset.ctype || null);
     else if (act === 'add-pot') openPot();
     else if (act === 'add-etf') openPot(null, 'etf');
     else if (act === 'add-cash') openCash();
@@ -1260,13 +1293,20 @@ function bindEvents() {
 
   // Versicherung
   $('#form-pol').onsubmit = e => { e.preventDefault(); savePolicyForm(); };
+  $('#pol-cat').onchange = e => {
+    contractLabels(e.target.value, !polEditing);
+    if (polEditing) return;
+    $('#pol-title').textContent = `Neu: ${contractLabel(e.target.value)}`;
+    if ($('#pol-who').dataset.touched !== '1') whoWidget($('#pol-who'), { account: undefined, owner: myMember().defaultPrivate || contractType(e.target.value).private ? me() : null, editing: false, accounts: false, hint: 'Einen privaten Vertrag (auch die Datei) sieht dein Partner nur, wenn du Verträge freigibst.' });
+  };
   $('#pol-file').onchange = e => polFileChosen(e.target.files?.[0]);
   $('#pol-delete').onclick = async () => {
-    const p = polEditing, r = state.recurring.find(x => x.policyId === p.id);
-    const v = await ask(`„${p.name}“ löschen?`, `<p>Die Police und der ausgelesene Text werden gelöscht.${r ? ' Die zugehörigen Fixkosten auch löschen? Bisherige Buchungen bleiben in jedem Fall.' : ''}</p>`,
-      [{ value: '', label: 'Abbrechen' }, ...(r ? [{ value: 'keep', label: 'Nur Versicherung' }] : []), { value: 'all', label: r ? 'Beides löschen' : 'Löschen', cls: 'danger' }]);
+    const p = polEditing, r = state.recurring.find(x => x.policyId === p.id && x.active) ?? state.recurring.find(x => x.policyId === p.id);
+    const what = r?.kind === 'income' ? 'die zugehörige regelmäßige Einnahme' : 'die zugehörigen Fixkosten', doc = contractType(p.category).id === 'ins' ? 'Versicherung' : 'Vertrag';
+    const v = await ask(`„${p.name}“ löschen?`, `<p>Das Dokument und der ausgelesene Text werden gelöscht.${r ? ` Auch ${what} „${esc(r.name)}“ löschen? Bisherige Buchungen bleiben in jedem Fall.` : ''}</p>`,
+      [{ value: '', label: 'Abbrechen' }, ...(r ? [{ value: 'keep', label: `Nur ${doc}` }] : []), { value: 'all', label: r ? 'Beides löschen' : 'Löschen', cls: 'danger' }]);
     if (!v) return;
-    try { if (r && v === 'all') await store.deleteRecurring(r.id); await store.deletePolicy(p); $('#dlg-pol').close(); await loadAll({ book: false }); render(); toast('Versicherung gelöscht'); }
+    try { if (r && v === 'all') await store.deleteRecurring(r.id); await store.deletePolicy(p); $('#dlg-pol').close(); await loadAll({ book: false }); render(); toast('Vertrag gelöscht'); }
     catch (e) { $('#pol-err').textContent = e.message; }
   };
 

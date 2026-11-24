@@ -14,10 +14,10 @@ const SYN = {
   marder: ['marderbiss', 'tierbiss', 'kurzschluss'], tier: ['tierbiss', 'wild', 'haarwild'], wild: ['wildschaden', 'haarwild', 'zusammenstoss'],
   scheibe: ['glas', 'glasbruch', 'verglasung'], glas: ['glasbruch', 'scheibe', 'verglasung'], steinschlag: ['glas', 'glasbruch'],
   selbstbeteiligung: ['selbstbehalt', 'sb'], selbstbehalt: ['selbstbeteiligung'], eigenanteil: ['selbstbeteiligung', 'selbstbehalt'],
-  ausland: ['geltungsbereich', 'europa', 'weltweit'], urlaub: ['ausland', 'reise', 'geltungsbereich'],
+  ausland: ['geltungsbereich', 'europa', 'weltweit'], urlaub: ['ausland', 'reise', 'geltungsbereich', 'erholungsurlaub', 'urlaubsanspruch'],
   diebstahl: ['entwendung', 'einbruchdiebstahl', 'raub'], geklaut: ['diebstahl', 'entwendung'], gestohlen: ['diebstahl', 'entwendung'],
   fahrrad: ['fahrraddiebstahl', 'fahrrader'], rad: ['fahrrad'], einbruch: ['einbruchdiebstahl'],
-  kundigen: ['kundigung', 'kundigungsfrist', 'vertragsdauer', 'laufzeit'], kundigung: ['kundigungsfrist', 'vertragsdauer'],
+  kundigen: ['kundigung', 'kundigungsfrist', 'vertragsdauer', 'laufzeit', 'beendigung'], kundigung: ['kundigungsfrist', 'vertragsdauer'],
   kosten: ['beitrag', 'pramie'], beitrag: ['pramie', 'zahlungsweise'], preis: ['beitrag', 'pramie'],
   unfall: ['unfallschaden', 'kollision', 'vollkasko'], kasko: ['teilkasko', 'vollkasko'], schutzbrief: ['pannenhilfe', 'abschleppen'],
   panne: ['pannenhilfe', 'schutzbrief', 'abschleppen'], abschleppen: ['schutzbrief', 'pannenhilfe'],
@@ -25,7 +25,14 @@ const SYN = {
   blitz: ['uberspannung', 'blitzschlag'], schlussel: ['schlusselverlust'], geliehen: ['geliehene', 'gemietete', 'fremde'],
   mietwohnung: ['mietsachschaden', 'mietsachen'], wohnung: ['mietsachschaden', 'wohnung'], handy: ['smartphone', 'elektronik'],
   summe: ['deckungssumme', 'versicherungssumme'], deckung: ['deckungssumme', 'leistung', 'umfang'], ausgeschlossen: ['ausschluss', 'ausschlusse', 'nicht versichert'],
-  wartezeit: ['wartezeit', 'karenz'], zahn: ['zahnersatz', 'zahnbehandlung'], brille: ['sehhilfe'], rucktransport: ['rucktransport', 'krankentransport'],
+  wartezeit: ['wartezeit', 'karenz'],
+  urlaubstage: ['urlaub', 'erholungsurlaub', 'urlaubsanspruch', 'arbeitstage'], urlaubsgeld: ['sonderzahlung', 'gratifikation', 'urlaubsgeld'],
+  weihnachtsgeld: ['sonderzahlung', 'gratifikation', 'weihnachtsgeld'], gehalt: ['vergutung', 'entgelt', 'bruttomonatsgehalt', 'gehalt'], lohn: ['vergutung', 'entgelt'],
+  stunden: ['arbeitszeit', 'wochenarbeitszeit', 'stunden'], arbeitszeit: ['wochenarbeitszeit', 'stunden'], uberstunden: ['mehrarbeit', 'uberstunden', 'abgegolten'],
+  probezeit: ['probezeit', 'erprobung'], homeoffice: ['mobiles', 'arbeiten', 'homeoffice', 'telearbeit'], krank: ['arbeitsunfahigkeit', 'entgeltfortzahlung', 'krankheit'],
+  kaution: ['mietsicherheit', 'kaution'], haustier: ['tierhaltung', 'haustiere', 'tiere'], haustiere: ['tierhaltung', 'tiere'], renovieren: ['schonheitsreparaturen', 'renovierung'],
+  schonheitsreparaturen: ['schonheitsreparaturen', 'renovierung'], untervermieten: ['untervermietung', 'gebrauchsuberlassung', 'dritte'], nebenkosten: ['betriebskosten', 'nebenkosten'],
+  roaming: ['ausland', 'eu', 'roaming'], datenvolumen: ['datenvolumen', 'gb', 'daten'], preisgarantie: ['preisgarantie', 'preisanpassung'], zahn: ['zahnersatz', 'zahnbehandlung'], brille: ['sehhilfe'], rucktransport: ['rucktransport', 'krankentransport'],
 };
 
 // Sehr einfache Stammformbildung für deutsche Wörter (Endungen abschneiden), damit „Fahrräder“ auch „Fahrrad“ findet
