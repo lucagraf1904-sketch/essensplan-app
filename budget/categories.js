@@ -79,5 +79,27 @@ export const POLICY_QUESTIONS = {
   'vers-rechtsschutz': ['Welche Bereiche sind versichert?', 'Gibt es eine Wartezeit?', 'Wie hoch ist die Selbstbeteiligung?'],
   'vers-reise': ['Ist ein Rücktransport versichert?', 'Wie lange darf eine Reise dauern?', 'Gilt der Schutz weltweit?'],
   'vers-bu': ['Ab wann gelte ich als berufsunfähig?', 'Wie hoch ist die Rente?', 'Verzichtet der Versicherer auf abstrakte Verweisung?'],
+  'ei-gehalt': ['Wie viele Urlaubstage habe ich?', 'Wie lang ist meine Kündigungsfrist?', 'Wie viele Stunden muss ich pro Woche arbeiten?', 'Gibt es Weihnachts- oder Urlaubsgeld?', 'Sind Überstunden mit dem Gehalt abgegolten?', 'Wie lange ist die Probezeit?'],
+  'ei-nebenjob': ['Wie viele Stunden darf ich arbeiten?', 'Wie lang ist die Kündigungsfrist?', 'Bekomme ich bezahlten Urlaub?'],
+  'wo-miete': ['Wie lang ist meine Kündigungsfrist?', 'Darf ich Haustiere halten?', 'Wer zahlt Schönheitsreparaturen?', 'Wie hoch ist die Kaution?', 'Darf ich untervermieten?'],
+  'ab-handy': ['Wann kann ich kündigen?', 'Wie viel Datenvolumen habe ich?', 'Was kostet Roaming im Ausland?'],
+  'wo-strom': ['Wann kann ich kündigen?', 'Gibt es eine Preisgarantie?', 'Wie hoch ist der Arbeitspreis pro kWh?'],
   default: ['Was ist versichert?', 'Was ist ausgeschlossen?', 'Wie hoch ist die Selbstbeteiligung?', 'Wie kann ich kündigen?'],
+  defaultContract: ['Wie kann ich kündigen?', 'Wie lange läuft der Vertrag?', 'Was kostet der Vertrag?'],
 };
+
+// Vertragsarten im Bereich „Verträge“ (gespeichert wird nur die Kategorie, daraus ergibt sich die Art)
+export const CONTRACT_TYPES = [
+  { id: 'ins', label: 'Versicherungen', icon: '🛡️', cats: EXPENSE_GROUPS.find(g => g.id === 'versicherung').subs,
+    provider: 'Versicherer', amount: 'Beitrag (€)', next: 'Nächste Abbuchung', number: 'Versicherungsnummer', doc: 'Police', freq: 'yearly', notice: 1 },
+  { id: 'work', label: 'Arbeit', icon: '💼', income: true, cats: [['ei-gehalt', 'Arbeitsvertrag'], ['ei-nebenjob', 'Nebenjob / Minijob']],
+    provider: 'Arbeitgeber', amount: 'Nettogehalt (€)', next: 'Nächster Zahltag', number: 'Personalnummer', doc: 'Vertrag', freq: 'monthly', notice: null, private: true },
+  { id: 'home', label: 'Wohnen & Energie', icon: '🏠', cats: [['wo-miete', 'Mietvertrag'], ['wo-strom', 'Stromvertrag'], ['wo-heizung', 'Gas & Heizung'], ['wo-internet', 'Internet & Festnetz']],
+    provider: 'Vermieter / Anbieter', amount: 'Kosten (€)', next: 'Nächste Abbuchung', number: 'Vertrags- oder Kundennummer', doc: 'Vertrag', freq: 'monthly', notice: null },
+  { id: 'subs', label: 'Handy & Abos', icon: '📱', cats: [['ab-handy', 'Handyvertrag'], ['ab-streaming', 'Streaming'], ['ab-software', 'Software & Cloud'], ['ge-fitness', 'Fitnessstudio'], ['ab-presse', 'Zeitung & Zeitschriften']],
+    provider: 'Anbieter', amount: 'Kosten (€)', next: 'Nächste Abbuchung', number: 'Kundennummer', doc: 'Vertrag', freq: 'monthly', notice: 1 },
+  { id: 'other', label: 'Sonstige Verträge', icon: '📄', cats: [['fi-kredit', 'Kredit & Raten'], ['sonstiges', 'Sonstiger Vertrag']],
+    provider: 'Vertragspartner', amount: 'Kosten (€)', next: 'Nächste Abbuchung', number: 'Vertragsnummer', doc: 'Vertrag', freq: 'monthly', notice: null },
+];
+export const contractType = category => CONTRACT_TYPES.find(t => t.cats.some(([id]) => id === category)) ?? (groupOf(category) === 'versicherung' ? CONTRACT_TYPES[0] : CONTRACT_TYPES[4]);
+export const contractLabel = category => contractType(category).cats.find(([id]) => id === category)?.[1] ?? cat(category).label;

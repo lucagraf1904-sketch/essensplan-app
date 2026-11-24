@@ -203,6 +203,7 @@ Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeld
 - **Personen und Freigaben** (v3): privat/gemeinsam je Eintrag, Freigabe je Bereich, Konten mit „Bezahlt von“, Ansicht je Person.
 - **Bargeld-Umschläge** (v4): Monatsbeträge, Abhebesumme, „Abgehoben“ bucht je Kategorie.
 - **ETFs** (v5): Sparplan, eingezahlte Summe, selbst eingetragener Depotwert mit Gewinn/Verlust, ISIN-Prüfung.
+- **Verträge** (v6): Arbeitsvertrag (mit Gehalt verknüpft), Miete, Energie, Handy, Abos neben Versicherungen; Fragen-Chat für alle.
 - Tests: `tests/budget` (Logik, Oberfläche, SQL).
 
 ## v70: Rubrik „Badezimmer"; Süßigkeiten erweitert (Luca 24.11.)

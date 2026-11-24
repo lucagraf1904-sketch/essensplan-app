@@ -207,3 +207,17 @@ test('ETF: Wert wird mit Bewegungen nach dem letzten Eintrag fortgeschrieben', (
   assert.deepEqual(etfValue(p, []), { value: 410000, estimated: false });
   assert.deepEqual(etfValue({ id: 'e', marketValue: null }, moves), { value: null, estimated: false });
 });
+
+const WORK = [
+  'Arbeitsvertrag zwischen Muster GmbH und Max Muster. § 1 Beginn: 01.03.2025. Die ersten sechs Monate gelten als Probezeit.',
+  '§ 4 Vergütung: Das Bruttomonatsgehalt beträgt 3.800 EUR. Mit der Vergütung sind bis zu 10 Überstunden im Monat abgegolten. § 5 Arbeitszeit: Die regelmäßige Wochenarbeitszeit beträgt 40 Stunden.',
+  '§ 7 Urlaub: Der Arbeitnehmer hat Anspruch auf 30 Arbeitstage Erholungsurlaub im Kalenderjahr. § 9 Kündigung: Nach der Probezeit gilt die gesetzliche Kündigungsfrist. § 10 Sonderzahlung: Eine Weihnachtsgratifikation wird freiwillig gezahlt.',
+];
+test('Arbeitsvertrag: Suche findet Urlaub, Überstunden, Sonderzahlung', () => {
+  const chunks = chunkPages(WORK, { policyId: 'w', policy: 'Arbeitsvertrag' });
+  assert.equal(rank(chunks, 'Wie viele Urlaubstage habe ich?')[0].page, 3);
+  assert.equal(rank(chunks, 'Sind Überstunden mit dem Gehalt abgegolten?')[0].page, 2);
+  assert.equal(rank(chunks, 'Gibt es Weihnachtsgeld?')[0].page, 3);
+  assert.equal(rank(chunks, 'Wie lange ist die Probezeit?')[0].page, 1);
+  assert.equal(rank(chunks, 'Wie viele Stunden muss ich arbeiten?')[0].page, 2);
+});
