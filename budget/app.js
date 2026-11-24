@@ -75,7 +75,9 @@ async function loadAll({ book = true } = {}) {
   const since = addMonths(state.today.slice(0, 7) + '-01', -24);
   const [tx, recurring, policies, config, pots, potTx, members, accounts, memberIds, sums] = await Promise.all([store.listTx(since), store.listRecurring(), store.listPolicies(), store.getConfig(), store.listPots(), store.listPotTx(),
     store.listMembers(), store.listAccounts(), store.memberIds(), store.sharedSums(since).catch(() => [])]);
-  state.cash = await store.listCash().catch(e => { console.warn('Bargeld', e); return []; });
+  // Fehler beim Laden der Umschläge: bisherigen Stand behalten (sonst fehlten sie in „Noch frei“ und im Offline-Stand)
+  const cash = await store.listCash().catch(e => { console.warn('Bargeld', e); return null; });
+  if (cash) state.cash = cash;
   // Noch nicht gesendete Buchungen sichtbar lassen
   const pending = outbox.get().filter(o => !o.user || o.user === store.me());
   const del = new Set(pending.filter(o => o.op === 'delete').map(o => o.id));
@@ -191,6 +193,8 @@ const lastAccount = () => { const id = localStorage.getItem('haushaltskasse.acco
 const summary = (key = state.month) => {
   const s = monthSummary({ tx: V.tx, recurring: V.recurring, key, today: state.today, groupOf });
   const c = cashPending(V.cash, state.tx, key, state.today, groupOf);
+  // „Nur Summen“-Freigabe: noch nicht abgehobenes Bargeld anderer (nur laufender Monat)
+  for (const x of state.sums) if (x.area === 'cash' && x.month === key && sc(x.owner) && key === state.today.slice(0, 7)) { c.total += x.total; const g = groupOf(x.category); c.byGroup[g] = (c.byGroup[g] ?? 0) + x.total; }
   if (c.total) {
     s.pendingExpense += c.total; s.free -= c.total; s.pendingCash = c.total;
     for (const [g, v] of Object.entries(c.byGroup)) s.pendingByGroup[g] = (s.pendingByGroup[g] ?? 0) + v;
@@ -758,19 +762,29 @@ async function withdrawCash() {
   const open = cashPending(V.cash, state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
   if (!open.length) return;
   const total = open.reduce((a, e) => a + e.amount, 0);
-  const accs = state.accounts.filter(a => !a.archived && canWrite(a.owner) || a.id === lastAccount());
-  const v = await ask(`${eur(total)} abgehoben?`, `<p>${open.map(e => `${esc(e.icon)} ${esc(e.name)} ${eur(e.amount)}`).join('<br>')}</p>
-    ${accs.length ? `<label class="field">Von welchem Konto?<select id="cash-acc">${accs.map(a => `<option value="${esc(a.id)}" ${a.id === lastAccount() ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}</select></label>` : ''}
+  // Gemeinsames Bargeld nur von gemeinsamen Konten, eigenes nur von eigenen (und keine fremden privaten Konten)
+  const groups = [
+    { id: 'shared', label: 'Gemeinsames Bargeld von', envs: open.filter(e => e.owner == null), accs: state.accounts.filter(a => !a.archived && a.owner == null) },
+    { id: 'mine', label: 'Eigenes Bargeld von', envs: open.filter(e => e.owner != null), accs: state.accounts.filter(a => !a.archived && a.owner === me()) },
+  ].filter(g => g.envs.length);
+  const pick = g => { const last = lastAccount(); return g.accs.some(a => a.id === last) ? last : g.accs[0]?.id; };
+  const v = await ask(`${eur(total)} abgehoben?`, `<p>${open.map(e => `${esc(e.icon)} ${esc(e.name)} ${eur(e.amount)}${e.owner ? ' 🔒' : ''}`).join('<br>')}</p>
+    ${groups.filter(g => g.accs.length).map(g => `<label class="field">${groups.length > 1 ? g.label : 'Von welchem Konto?'}<select id="cash-acc-${g.id}">${g.accs.map(a => `<option value="${esc(a.id)}" ${a.id === pick(g) ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}<option value="">ohne Konto</option></select></label>`).join('')}
     <p class="tiny muted">Wird heute je Umschlag als Ausgabe gebucht.</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Ja, abgehoben', cls: 'primary' }]);
   if (v !== 'ok') return;
-  const accountId = $('#cash-acc')?.value || null;
-  let n = 0;
+  const accFor = e => $(`#cash-acc-${e.owner == null ? 'shared' : 'mine'}`)?.value || null;
+  let n = 0, queued = 0;
   for (const e of open) {
-    try { await store.saveTx({ id: uid(), date: state.today, amount: e.amount, kind: 'expense', category: e.category, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: e.owner ?? null, accountId, createdAt: new Date().toISOString() }); n++; }
-    catch (err) { if (!err.duplicate) { ask('Nicht gebucht', `<p>${esc(err.message)}</p>`); break; } }
+    const t = { id: uid(), date: state.today, amount: e.amount, kind: 'expense', category: e.category, note: `Bargeld: ${e.name}`, source: 'cash', extRef: cashRef(key, e.id), owner: e.owner ?? null, accountId: accFor(e), createdAt: new Date().toISOString() };
+    try { await store.saveTx(t); n++; }
+    catch (err) {
+      if (err.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); state.tx = [t, ...state.tx].sort(byDateDesc); queued++; continue; }
+      if (!err.duplicate) { ask('Nicht gebucht', `<p>${esc(err.message)}</p>`); break; }
+    }
   }
-  await loadAll({ book: false }); render();
-  if (n) toast(`Bargeld ${eur(total)} gebucht`);
+  if (!queued) { try { await loadAll({ book: false }); } catch (e) { console.warn(e); } }
+  render();
+  if (n || queued) toast(queued ? `Bargeld ${eur(total)} gemerkt, wird gesendet, sobald Netz da ist` : `Bargeld ${eur(total)} gebucht`);
 }
 
 // ---------- Spartöpfe ----------

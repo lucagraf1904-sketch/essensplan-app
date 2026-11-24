@@ -175,6 +175,7 @@ create table if not exists budget_cash (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists budget_cash_household on budget_cash(household_id);
 
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
@@ -207,7 +208,8 @@ create policy budget_policies_read on budget_policies for select using (househol
 -- Bargeld-Umschläge: Sichtbarkeit wie Fixkosten (geplantes Monatsgeld)
 alter table budget_cash enable row level security;
 drop policy if exists budget_cash_read on budget_cash;
-create policy budget_cash_read on budget_cash for select using (household_id = my_household() and budget_can_see(owner, 'fixed'));
+-- Gleicher Bereich wie die Buchungen beim Abheben ('tx'): wer den Umschlag sieht, sieht auch, ob er abgehoben ist
+create policy budget_cash_read on budget_cash for select using (household_id = my_household() and budget_can_see(owner, 'tx'));
 drop policy if exists budget_cash_write on budget_cash;
 create policy budget_cash_write on budget_cash for all using (household_id = my_household() and budget_can_write(owner)) with check (household_id = my_household() and budget_can_write(owner));
 drop policy if exists budget_members_read on budget_members;
@@ -267,6 +269,11 @@ begin
 end $$;
 drop trigger if exists budget_pots_owner_lock on budget_pots;
 create trigger budget_pots_owner_lock before update on budget_pots for each row execute function budget_pot_owner_lock();
+
+drop trigger if exists budget_cash_touch on budget_cash;
+create or replace function budget_touch() returns trigger language plpgsql set search_path = public as $$
+begin new.updated_at := now(); return new; end $$;
+create trigger budget_cash_touch before insert or update on budget_cash for each row execute function budget_touch();
 
 -- ---------- Fixkosten automatisch buchen ----------
 -- Monatsende wird abgefangen: Start 31.01. → 28./29.02. → 31.03. (Postgres rechnet date + interval so).
@@ -359,6 +366,13 @@ language sql stable security definer set search_path = public as $$
     from budget_recurring r join m on m.user_id = r.owner
    where r.household_id = my_household() and r.active and r.pot_id is null and m.share->>'fixed' = 'sums'
    group by r.owner, r.kind
+  union all
+  select c.owner, 'cash', to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM'), 'expense', c.category, sum(c.amount)
+    from budget_cash c join m on m.user_id = c.owner
+   where c.household_id = my_household() and c.active and m.share->>'tx' = 'sums'
+     and not exists (select 1 from budget_tx t where t.household_id = c.household_id
+                     and t.ext_ref = 'cash:' || to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM') || ':' || c.id::text)
+   group by c.owner, c.category
 $$;
 
 -- ---------- Rechte und Live-Abgleich ----------

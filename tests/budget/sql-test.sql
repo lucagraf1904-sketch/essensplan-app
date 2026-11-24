@@ -161,4 +161,10 @@ insert into budget_cash(household_id, name, amount, category) values (my_househo
 insert into budget_cash(household_id, name, amount, category, owner) values (my_household(), 'Friseur', 25, 'kl-friseur', auth.uid());
 insert into budget_tx(household_id, date, amount, category, source, ext_ref) values (my_household(), current_date, 60, 'lm-markt', 'cash', 'cash:2026-11:x');
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
-select count(*) = 1 as c_sees_only_shared_cash from budget_cash;
+select count(*) = 2 as c_sees_cash_with_tx_all from budget_cash; -- A hat Buchungen hier noch ganz freigegeben
+-- Umschläge folgen der Freigabe für Buchungen; „nur Summen“ liefert offenes Bargeld als Summe
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_members set share = share || '{"tx":"sums","fixed":"all"}' where user_id = auth.uid();
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 1 as cash_follows_tx_share from budget_cash;
+select (select sum(total) from budget_shared_sums(current_date - 40) where area = 'cash') = 25 as cash_sum_shared;
