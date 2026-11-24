@@ -90,22 +90,32 @@ export async function createSupabaseStore() {
       const row = fromTx({ ...t, id: t.id ?? uid() }, hh());
       const r = await sb.from('budget_tx').upsert(row).select().single();
       // Monatsrest oder Speisekammer-Einkauf schon übernommen (z. B. vom anderen Handy): kein Fehler, nur Hinweis
-      if (r.error && /budget_tx_ext_ref|duplicate key/i.test(r.error.message)) throw Object.assign(new Error('Wurde schon übernommen.'), { duplicate: true });
+      if (r.error && /budget_tx_ext_ref/i.test(r.error.message)) throw Object.assign(new Error('Wurde schon übernommen.'), { duplicate: true });
       return toTx(must(r));
     },
     // Alle Buchungen mit Spartopf (für den Stand, unabhängig vom Zeitraum)
     async listPotTx() { return must(await sb.from('budget_tx').select('id,date,amount,kind,category,note,source,pot_id,ext_ref,recurring_id,created_at').not('pot_id', 'is', null).order('date', { ascending: false }).limit(10000)).map(toTx); },
     async listPots() { return must(await sb.from('budget_pots').select('*').order('created_at')).map(toPot); },
     async savePot(p) {
-      // Nur ein Topf bekommt den Monatsrest automatisch: beim Setzen die anderen zuerst abschalten
-      if (p.autoRest) must(await sb.from('budget_pots').update({ auto_rest: false }).eq('auto_rest', true).neq('id', p.id ?? '00000000-0000-0000-0000-000000000000'));
-      return toPot(must(await sb.from('budget_pots').upsert(fromPot({ ...p, id: p.id ?? uid() }, hh())).select().single()));
+      // Erst den Topf speichern (ohne Monatsrest), dann die anderen abschalten, dann hier einschalten.
+      // So bleibt bei einem Fehler der bisherige Topf mit Monatsrest erhalten (nur einer darf ihn haben).
+      const id = p.id ?? uid();
+      let row = must(await sb.from('budget_pots').upsert(fromPot({ ...p, id, autoRest: false }, hh())).select().single());
+      if (p.autoRest) {
+        must(await sb.from('budget_pots').update({ auto_rest: false }).eq('auto_rest', true).neq('id', id));
+        row = must(await sb.from('budget_pots').update({ auto_rest: true }).eq('id', id).select().single());
+      }
+      return toPot(row);
     },
-    async deletePot(id) { must(await sb.from('budget_pots').delete().eq('id', id)); },
+    async deletePot(id) {
+      const r = await sb.from('budget_pots').delete().eq('id', id);
+      if (r.error && /foreign key|budget_tx_pot_id_fkey/i.test(r.error.message)) throw new Error('Der Topf hat inzwischen Buchungen (vielleicht vom anderen Handy) und kann nur aufgelöst werden. Bitte neu öffnen.');
+      must(r);
+    },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
     async listPantryPurchases(sinceIso) {
-      const rows = must(await sb.from('log').select('id,item_name,price,at,by_user').eq('type', 'bought').not('price', 'is', null).gte('at', sinceIso).order('at').limit(2000));
-      return rows.map(r => ({ id: r.id, name: r.item_name, price: toCents(r.price), at: r.at, by: r.by_user }));
+      const rows = must(await sb.from('log').select('id,item_name,category,price,at,by_user').eq('type', 'bought').not('price', 'is', null).gte('at', sinceIso).order('at').limit(2000));
+      return rows.map(r => ({ id: r.id, name: r.item_name, category: r.category, price: toCents(r.price), at: r.at, by: r.by_user }));
     },
     async deleteTx(id) { must(await sb.from('budget_tx').delete().eq('id', id)); },
 
@@ -209,8 +219,8 @@ function demoSeed() {
   r('Sparrate Urlaub', 10000, 'fi-sparen', 'monthly', addDays(s, 2), { kind: 'save', potId: urlaub });
   // Einkäufe, die in der Speisekammer per Bon erfasst wurden (zum Übernehmen)
   const at = (daysBack, h) => { const d = new Date(); d.setDate(d.getDate() - daysBack); d.setHours(h, 12, 0, 0); return d.toISOString(); };
-  const pantry = [['Milch', 119, 1], ['Haferflocken', 89, 1], ['Hähnchenbrust', 699, 1], ['Paprika', 249, 1], ['Joghurt', 179, 1], ['Nudeln', 99, 3], ['Tomaten', 229, 3], ['Parmesan', 349, 3]]
-    .map(([name, price, back], i) => ({ id: uid(), name, price, at: at(back, 17), by: 'demo', i }));
+  const pantry = [['Milch', 119, 1], ['Haferflocken', 89, 1], ['Hähnchenbrust', 699, 1], ['Paprika', 249, 1], ['Joghurt', 179, 1], ['Spülmittel', 195, 1, 'Haushalt'], ['Nudeln', 99, 3], ['Tomaten', 229, 3], ['Parmesan', 349, 3]]
+    .map(([name, price, back, category], i) => ({ id: uid(), name, price, category: category ?? 'Sonstiges', at: at(back, 17), by: 'demo', i }));
   const config = { limits: { lebensmittel: 45000, essen: 12000, liebe: 15000, mobilitaet: 20000, haushalt: 5000 }, custom: [], pantrySince: addDays(t, -14) };
   return { tx, rec, pol, config, pots, pantry, files: {} };
 }
@@ -228,12 +238,12 @@ export function createDemoStore() {
     household: () => ({ name: 'Demo-Haushalt', join_code: 'DEMO00' }),
     async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
     reset() { localStorage.removeItem(DEMO_KEY); db = null; },
-    async listPotTx() { return delay(load().tx.filter(t => t.potId).map(t => ({ ...t }))); },
+    async listPotTx() { return delay(load().tx.filter(t => t.potId).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },
     async listPots() { return delay((load().pots ?? []).map(p => ({ ...p }))); },
     async savePot(p) { const d = load(); d.pots ??= []; const row = { startBalance: 0, archived: false, ...p, id: p.id ?? uid() };
       if (row.autoRest) d.pots.forEach(x => { if (x.id !== row.id) x.autoRest = false; });
       const i = d.pots.findIndex(x => x.id === row.id); if (i >= 0) d.pots[i] = row; else d.pots.push(row); save(); return { ...row }; },
-    async deletePot(id) { const d = load(); d.pots = d.pots.filter(p => p.id !== id); d.tx = d.tx.filter(t => t.potId !== id); d.rec = d.rec.filter(r => r.potId !== id); save(); },
+    async deletePot(id) { const d = load(); if (d.tx.some(t => t.potId === id)) throw new Error('Der Topf hat Buchungen und kann nur aufgelöst werden.'); d.pots = d.pots.filter(p => p.id !== id); d.rec = d.rec.filter(r => r.potId !== id); save(); },
     async listPantryPurchases(since) { return delay((load().pantry ?? []).filter(r => r.at >= since).map(r => ({ ...r }))); },
     async listTx(since) { return delay(load().tx.filter(t => t.date >= since).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(t => ({ ...t }))); },
     async saveTx(t) { const d = load();

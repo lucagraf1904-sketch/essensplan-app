@@ -110,6 +110,13 @@ alter table budget_recurring add constraint budget_recurring_kind_check check (k
 alter table budget_recurring drop constraint if exists budget_recurring_pot_check;
 alter table budget_recurring add constraint budget_recurring_pot_check check ((kind = 'save') = (pot_id is not null));
 create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is not null;
+-- Ein Topf mit Buchungen lässt sich nicht löschen (nur auflösen), damit keine Spar-Historie verloren geht
+do $$ begin
+  if exists (select 1 from pg_constraint where conname = 'budget_tx_pot_id_fkey' and confdeltype <> 'r') then
+    alter table budget_tx drop constraint budget_tx_pot_id_fkey;
+    alter table budget_tx add constraint budget_tx_pot_id_fkey foreign key (pot_id) references budget_pots(id) on delete restrict;
+  end if;
+end $$;
 
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;

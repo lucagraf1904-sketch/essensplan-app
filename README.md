@@ -198,4 +198,6 @@ Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeld
 - **Fixkosten:** Miete, Abos, Versicherungen, Gehalt; werden beim Öffnen automatisch gebucht (`budget_book_due`, ohne Doppelbuchungen). Monatsanteil jährlicher Kosten, Vertragsende und Kündigungsfrist.
 - **Versicherungen:** Police als PDF (Text wird im Browser mit pdf.js gelesen) oder Foto/Scan (KI schreibt ab). „Police fragen“: die App sucht die passenden Stellen selbst heraus, die KI antwortet nur daraus und nennt die Seite.
 - **Auswertung:** Ausgaben je Monat, Plus/Minus je Monat, Kategorien im Vergleich zum Vormonat, Tabellenansicht, CSV-Export.
+- **Spartöpfe** (v2): Ziel und Datum optional, Sparrate automatisch, Monatsrest per Abfrage oder automatisch, Sparen mindert „Noch frei“.
+- **Einkäufe aus der Speisekammer** werden als Vorschlag angezeigt (Tabelle `log`, nur lesend). Update: `supabase/budget.sql` erneut ausführen.
 - Tests: `tests/budget` (Logik, Oberfläche, SQL).

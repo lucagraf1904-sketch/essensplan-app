@@ -32,6 +32,10 @@ do $$ begin
   begin insert into budget_tx(household_id, date, amount, kind, category, pot_id, ext_ref, source) select my_household(), current_date, 10, 'save', 'fi-sparen', id, 'rest:2026-10', 'rest' from budget_pots; raise exception 'FEHLER: Monatsrest doppelt';
   exception when unique_violation then raise notice 'ok: Monatsrest nur einmal'; end;
 end $$;
+do $$ begin
+  begin delete from budget_pots; raise exception 'FEHLER: Topf mit Buchungen löschbar';
+  exception when foreign_key_violation then raise notice 'ok: Topf mit Buchungen nicht löschbar'; end;
+end $$;
 -- Police mit Seitenzahl
 insert into budget_policies(household_id, name, pages) values (my_household(), 'Kfz', '["a","b","c"]');
 select page_count = 3 as page_count_ok from budget_policies;

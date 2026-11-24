@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -146,10 +146,18 @@ test('Speisekammer-Einkäufe: Artikel zu Einkäufen bündeln, Doppelbuchung erke
     { id: 'd', name: 'Äpfel', price: 299, at: '2026-11-20T10:02:10Z', by: 'u2' },
     { id: 'e', name: 'Wein', price: 599, at: '2026-11-20T18:00:00Z', by: 'u1' },
     { id: 'f', name: 'Ohne Preis', price: null, at: '2026-11-20T18:00:01Z', by: 'u1' },
+    { id: 'g', name: 'Spülmittel', price: 199, at: '2026-11-20T18:00:20Z', by: 'u1', category: 'Haushalt' },
   ];
   const g = groupPantry(rows);
-  assert.deepEqual(g.map(x => [x.key, x.amount, x.items.length]), [['sk:a', 767, 3], ['sk:d', 299, 1], ['sk:e', 599, 1]]);
+  assert.deepEqual(g.map(x => [x.key, x.amount, x.items.length]), [['sk:a', 767, 3], ['sk:d', 299, 1], ['sk:e', 798, 2]]);
+  assert.deepEqual(g[2].parts, { 'lm-supermarkt': 599, 'hh-waren': 199 });
+  // Bon wird gerade noch gespeichert: Einkauf erst nach 3 Minuten Ruhe vorschlagen
+  assert.equal(groupPantry(rows, 3, { now: new Date('2026-11-20T18:02:00Z') }).length, 2);
+  assert.equal(groupPantry(rows, 3, { now: new Date('2026-11-20T18:04:00Z') }).length, 3);
+  // Einkauf, der vor dem Stichtag beginnt, taucht nicht mit neuem Schlüssel wieder auf
+  assert.deepEqual(groupPantry(rows, 3, { since: '2026-11-20T10:01:00Z' }).map(x => x.key), ['sk:d', 'sk:e']);
+  assert.ok(pantryDone('sk:a', ['sk:a:lm-supermarkt'])); assert.ok(!pantryDone('sk:a', ['sk:ab:x']));
   const tx = [{ kind: 'expense', date: g[0].date, category: 'lm-supermarkt', amount: 780 }];
   assert.ok(similarTx(tx, g[0], () => 'lebensmittel'));
-  assert.equal(similarTx(tx, g[2], () => 'lebensmittel'), null);
+  assert.equal(similarTx(tx, g[1], () => 'lebensmittel'), null); // 2,99 € ist nicht ähnlich zu 7,80 €
 });

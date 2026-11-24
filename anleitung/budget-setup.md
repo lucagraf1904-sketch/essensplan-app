@@ -18,6 +18,11 @@ Die Funktion `ai` der Speisekammer wurde erweitert (neue Aktion `policy`, neue F
 Seite in Safari öffnen → Teilen → „Zum Home-Bildschirm“. Die App heißt dort „Kasse“.
 Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleiche Anmeldung).
 
+## Update: Spartöpfe und Speisekammer-Einkäufe (24.11.2026)
+`supabase/budget.sql` **noch einmal** im SQL Editor ausführen (wiederholbar, bestehende Buchungen bleiben). Die KI-Funktion muss dafür nicht neu deployt werden.
+- **Spartöpfe:** Stand = Startbetrag + Einzahlungen − Entnahmen. Geld kommt über eine monatliche Sparrate (wird wie Fixkosten automatisch gebucht) und den Monatsrest: Nach Monatsende fragt die App, in welchen Topf der Rest soll, oder legt ihn automatisch in den Topf mit „Monatsrest automatisch“. Gefragt wird nur für Monate mit mindestens 5 eigenen Buchungen und Einnahmen. Sparen mindert „Noch frei“, ist aber keine Ausgabe. Ein Topf mit Buchungen lässt sich nur auflösen, nicht löschen.
+- **Einkäufe aus der Speisekammer:** Bons, die in der Speisekammer erfasst werden, erscheinen in der Übersicht als Vorschlag (ab Einführung, höchstens 45 Tage zurück). Putzmittel („Haushalt“) wird als Drogerie & Haushalt gebucht, Getränke und Pfand als Getränke, alles andere als Supermarkt. Gibt es am selben Tag schon eine ähnliche Lebensmittel-Buchung, fragt die App nach, ob es derselbe Einkauf ist. Die Speisekammer selbst merkt davon nichts.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

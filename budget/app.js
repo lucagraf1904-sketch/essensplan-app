@@ -5,12 +5,12 @@ import { EXPENSE_GROUPS, INCOME_GROUPS, cat, group, groupOf, subsOf, catPath, gr
 import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
-  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, groupPantry, similarTx,
+  noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, groupPantry, similarTx, pantryDone,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -79,7 +79,7 @@ async function loadAll({ book = true } = {}) {
   const saves = new Map(pending.filter(o => o.op === 'save').map(o => [o.tx.id, o.tx]));
   state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id))].sort(byDateDesc);
   state.recurring = recurring; state.policies = policies; state.pots = pots; state.potTx = potTx;
-  state.config = { limits: {}, custom: [], ...config };
+  if (!cfgDirty) state.config = { limits: {}, custom: [], ...config };
   setCustomCategories(state.config.custom);
   chat?.clearCache();
   await loadPantry();
@@ -615,7 +615,7 @@ function potsSection() {
 function restCandidate() {
   const m = shiftMonth(state.today.slice(0, 7), -1);
   const pots = state.pots.filter(p => !p.archived);
-  if (!pots.length || state.config.closed?.[m] || state.tx.some(t => t.extRef === 'rest:' + m)) return null;
+  if (!pots.length || state.config.closed?.[m] || state.tx.some(t => t.extRef === 'rest:' + m)) return null; // closed: schon einmal erledigt (gebucht, behalten oder automatisch)
   const used = state.tx.filter(t => monthKey(t.date) === m && t.source !== 'recurring' && !t.potId).length;
   const s = summary(m);
   if (used < 5 || !s.income || s.free <= 0) return null;
@@ -633,6 +633,7 @@ function restCard() {
 }
 async function bookRest(month, pot, amount, auto = false) {
   const t = { id: uid(), date: lastDayOfMonth(month), amount, kind: 'save', category: 'fi-sparen', potId: pot.id, note: `Rest aus ${monthName(month)}`, source: 'rest', extRef: 'rest:' + month, createdAt: new Date().toISOString() };
+  state.config.closed = { ...(state.config.closed ?? {}), [month]: auto ? 'auto' : 'pot' }; saveConfigSoon(0);
   try { await store.saveTx(t); toast(`${eur(amount)} aus dem ${monthName(month).split(' ')[0]} ${auto ? 'automatisch ' : ''}in „${pot.name}“ gelegt`); }
   catch (e) { if (!e.duplicate) { ask('Nicht gebucht', `<p>${esc(e.message)}</p>`); return; } }
   await loadAll({ book: false }); render();
@@ -657,19 +658,19 @@ function openPot(p = null) {
   $('#pot-start').value = p ? amountInput(p.startBalance) : '';
   $('#pot-start-wrap').firstChild.textContent = p ? 'Startbetrag beim Anlegen (€)' : 'Schon drauf (€)';
   $('#pot-auto').checked = !!p?.autoRest;
-  $('#pot-delete').classList.toggle('hidden', !p);
-  $('#pot-err').textContent = ''; $('#pot-hint').textContent = '';
+  $('#pot-delete').classList.toggle('hidden', !p || p.archived);
+  $('#form-pot [type=submit]').classList.toggle('hidden', !!p?.archived);
+  $('#pot-err').textContent = ''; $('#pot-hint').textContent = p?.archived ? 'Dieser Topf ist aufgelöst. Die Bewegungen bleiben zur Übersicht erhalten.' : '';
   const moves = p ? state.potTx.filter(t => t.potId === p.id).slice(0, 30) : [];
   $('#pot-summary').innerHTML = p ? `<div class="pot-head">
       <span class="tiny muted">Stand</span><span class="big">${eur(bal)}</span>
       ${p.goal ? `<span class="meter"><i style="width:${Math.min(100, 100 * bal / p.goal).toFixed(1)}%;background:var(--good)"></i></span><span class="tiny">${Math.round(Math.min(1, bal / p.goal) * 100)} % von ${eur(p.goal)}</span>` : ''}
-      <div class="row wrap"><button type="button" class="btn small primary" id="pot-in">Einzahlen</button><button type="button" class="btn small" id="pot-out">Entnehmen</button></div></div>
+      ${p.archived ? '' : '<div class="row wrap"><button type="button" class="btn small primary" id="pot-in">Einzahlen</button><button type="button" class="btn small" id="pot-out">Entnehmen</button></div>'}</div>
     ${moves.length ? `<details class="more"><summary>Bewegungen (${moves.length})</summary><ul class="list">${moves.map(t => `<li class="item" style="cursor:default"><span class="ic" aria-hidden="true">${t.kind === 'save' ? '↘' : '↗'}</span>
       <span><span class="t">${t.kind === 'save' ? 'Eingezahlt' : 'Entnommen'}</span><span class="s">${dateShort(t.date)}${t.note ? ' · ' + esc(t.note) : ''}</span></span>
       <span class="a">${t.kind === 'save' ? '+' : '−'}${eur(t.amount)} <button type="button" class="btn small danger" data-del-move="${esc(t.id)}" aria-label="Bewegung löschen">✕</button></span></li>`).join('')}</ul></details>` : ''}` : '';
   if (p) {
-    $('#pot-in').onclick = () => potMove(p, 'save');
-    $('#pot-out').onclick = () => potMove(p, 'unsave');
+    if ($('#pot-in')) { $('#pot-in').onclick = () => potMove(p, 'save'); $('#pot-out').onclick = () => potMove(p, 'unsave'); }
     $$('[data-del-move]').forEach(b => b.onclick = async () => {
       if (!(await confirmDelete('Bewegung'))) return;
       try { await store.deleteTx(b.dataset.delMove); await loadAll({ book: false }); render(); openPot(potOf(p.id)); } catch (e) { $('#pot-err').textContent = e.message; }
@@ -708,6 +709,7 @@ async function savePotForm() {
   if (rate.c && !isIso(next)) return err('Bitte angeben, wann die nächste Sparrate abgeht.');
   if (rate.c && next < state.today && (await ask('Sparrate nachbuchen?', `<p>Die erste Sparrate am ${dateShort(next)} liegt in der Vergangenheit. Alle Raten seit dann werden gebucht.</p>`, [{ value: '', label: 'Datum ändern' }, { value: 'ok', label: 'Nachbuchen', cls: 'primary' }])) !== 'ok') return;
   const old = potEditing;
+  if (old?.archived) return err('Dieser Topf ist aufgelöst.');
   const p = { ...(old ?? {}), id: old?.id ?? uid(), name, icon: $$('[name=pot-icon]').find(x => x.checked)?.value ?? '🐷', goal: goal.c || null, targetDate: date || null,
     startBalance: start.c ?? 0, autoRest: $('#pot-auto').checked, archived: false };
   try {
@@ -743,6 +745,7 @@ async function dissolvePot() {
 }
 
 // ---------- Einkäufe aus der Speisekammer ----------
+let pantryTimer = null;
 async function loadPantry() {
   if (!store.listPantryPurchases) return;
   if (!state.config.pantrySince) { // ab Einführung: nur Einkäufe der letzten 14 Tage vorschlagen, keine ganze Historie
@@ -750,10 +753,14 @@ async function loadPantry() {
     try { await store.setConfig(state.config); } catch { /* nächstes Mal */ }
   }
   try {
-    const since = [state.config.pantrySince, addDays(state.today, -45)].sort().pop();
-    const rows = await store.listPantryPurchases(since + 'T00:00:00');
-    const done = new Set([...state.tx.map(t => t.extRef).filter(Boolean), ...(state.config.pantryDismissed ?? [])]);
-    state.pantry = groupPantry(rows).filter(p => !done.has(p.key)).map(p => ({ ...p, similar: similarTx(state.tx, p, groupOf) }));
+    const since = new Date([state.config.pantrySince, addDays(state.today, -45)].sort().pop() + 'T00:00:00');
+    const rows = await store.listPantryPurchases(new Date(since - 86400000).toISOString()); // einen Tag mehr holen, damit Einkäufe am Rand vollständig sind
+    const refs = [...state.tx.map(t => t.extRef).filter(Boolean), ...(state.config.pantryDismissed ?? [])];
+    const all = groupPantry(rows, 3, { since: since.toISOString() });
+    state.pantry = all.filter(p => Date.now() - new Date(p.lastAt) > 3 * 60000 && !pantryDone(p.key, refs)).map(p => ({ ...p, similar: similarTx(state.tx, p, groupOf) }));
+    // Bon wird gerade noch gespeichert: in ein paar Minuten erneut schauen
+    clearTimeout(pantryTimer);
+    if (all.some(p => Date.now() - new Date(p.lastAt) <= 3 * 60000)) pantryTimer = setTimeout(() => scheduleReload(), 3.5 * 60000);
   } catch (e) { console.warn('Speisekammer-Einkäufe', e); state.pantry = []; }
 }
 function pantryCard() {
@@ -762,7 +769,7 @@ function pantryCard() {
   const plain = state.pantry.filter(p => !p.similar).length;
   return `<div class="section-head"><h2>Aus der Speisekammer</h2>${plain > 1 ? `<button class="btn link" data-act="pantry-all">Alle ${plain} übernehmen</button>` : ''}</div>
     <div class="card" style="padding:0">${list.map(p => `<div class="suggest">
-      <div class="top"><span><b>🛒 Einkauf ${esc(dayLabel(p.date, state.today))}</b><span class="tiny muted" style="display:block">${p.items.length} ${p.items.length === 1 ? 'Artikel' : 'Artikel'}: ${esc(p.items.slice(0, 3).join(', '))}${p.items.length > 3 ? ' …' : ''}</span></span><b>${eur(p.amount)}</b></div>
+      <div class="top"><span><b>🛒 Einkauf ${esc(dayLabel(p.date, state.today))}</b><span class="tiny muted" style="display:block">${p.items.length} Artikel: ${esc(p.items.slice(0, 3).join(', '))}${p.items.length > 3 ? ' …' : ''}</span>${Object.keys(p.parts).length > 1 ? `<span class="tiny muted" style="display:block">Wird aufgeteilt: ${Object.entries(p.parts).map(([c, a]) => `${esc(cat(c).label)} ${eur(a)}`).join(', ')}</span>` : ''}</span><b>${eur(p.amount)}</b></div>
       ${p.similar ? `<p class="warnline">⚠️ Am selben Tag hast du schon ${eur(p.similar.amount)}${p.similar.note ? ` „${esc(p.similar.note)}“` : ''} erfasst. Derselbe Einkauf?</p>` : ''}
       <div class="row wrap">${p.similar
         ? `<button class="btn small" data-act="pantry-skip" data-key="${esc(p.key)}">Ja, schon erfasst</button><button class="btn small" data-act="pantry-take" data-key="${esc(p.key)}">Nein, übernehmen</button>`
@@ -771,21 +778,28 @@ function pantryCard() {
 async function takePantry(list) {
   let n = 0, sum = 0;
   for (const p of list) {
-    try { await store.saveTx({ id: uid(), date: p.date, amount: p.amount, kind: 'expense', category: 'lm-supermarkt', note: 'Einkauf (Speisekammer)', source: 'pantry', extRef: p.key, createdAt: new Date().toISOString() }); n++; sum += p.amount; }
-    catch (e) { if (!e.duplicate) { ask('Nicht übernommen', `<p>${esc(e.message)}</p>`); break; } }
+    // Je Kategorie eine Buchung (z. B. Lebensmittel und Putzmittel vom selben Bon)
+    try {
+      for (const [category, amount] of Object.entries(p.parts)) {
+        try { await store.saveTx({ id: uid(), date: p.date, amount, kind: 'expense', category, note: 'Einkauf (Speisekammer)', source: 'pantry', extRef: `${p.key}:${category}`, createdAt: new Date().toISOString() }); sum += amount; }
+        catch (e) { if (!e.duplicate) throw e; }
+      }
+      n++;
+    } catch (e) { ask('Nicht übernommen', `<p>${esc(e.message)}</p>`); break; }
   }
   await loadAll({ book: false }); render();
-  if (n) toast(`${n === 1 ? 'Einkauf' : n + ' Einkäufe'} übernommen: ${eur(sum)} Lebensmittel`);
+  if (n) toast(`${n === 1 ? 'Einkauf' : n + ' Einkäufe'} übernommen: ${eur(sum)}`);
 }
 function dismissPantry(keys) {
   state.config.pantryDismissed = [...(state.config.pantryDismissed ?? []), ...keys].slice(-300);
   state.pantry = state.pantry.filter(p => !keys.includes(p.key));
-  saveConfigSoon(); render();
+  saveConfigSoon(0); render();
 }
 
 // ---------- Einstellungen ----------
-let cfgTimer = null;
-function saveConfigSoon() { clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); setSync(''); } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, 600); }
+let cfgTimer = null, cfgDirty = false;
+// Lokale Änderung bleibt maßgeblich, bis sie gespeichert ist (ein Neuladen dazwischen überschreibt sie nicht)
+function saveConfigSoon(delay = 600) { cfgDirty = true; clearTimeout(cfgTimer); cfgTimer = setTimeout(async () => { try { await store.setConfig(state.config); cfgDirty = false; } catch (e) { toast('Einstellungen nicht gespeichert: ' + e.message); } }, delay); }
 function openSettings(focus) {
   const hh = store.household(), limits = state.config.limits ?? {};
   $('#settings-body').innerHTML = `
@@ -865,7 +879,7 @@ function bindEvents() {
     else if (act === 'add-pol') openPolicy();
     else if (act === 'add-pot') openPot();
     else if (act === 'rest-book') { const pot = potOf($('#rest-pot').value); if (pot) bookRest(el.dataset.month, pot, +el.dataset.amount); }
-    else if (act === 'rest-keep') { state.config.closed = { ...(state.config.closed ?? {}), [el.dataset.month]: 'keep' }; saveConfigSoon(); render(); }
+    else if (act === 'rest-keep') { state.config.closed = { ...(state.config.closed ?? {}), [el.dataset.month]: 'keep' }; saveConfigSoon(0); render(); }
     else if (act === 'pantry-take') takePantry(state.pantry.filter(p => p.key === el.dataset.key));
     else if (act === 'pantry-all') takePantry(state.pantry.filter(p => !p.similar));
     else if (act === 'pantry-skip') { dismissPantry([el.dataset.key]); }

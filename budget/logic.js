@@ -215,22 +215,30 @@ export const lastDayOfMonth = key => monthRange(key).to;
 // ---------- Einkäufe aus der Speisekammer ----------
 // Bons der Speisekammer stehen dort als einzelne Artikelzeilen (log, type 'bought'). Zeilen derselben Person, die kurz hintereinander
 // gespeichert wurden (höchstens 3 Minuten Abstand), sind ein Einkauf. Schlüssel 'sk:<erste Zeilen-ID>' verhindert doppeltes Übernehmen.
-export function groupPantry(rows, gapMin = 3) {
+// Kategorien der Speisekammer → Haushaltskasse (Putzmittel & Co. sind keine Lebensmittel)
+export const PANTRY_CATEGORY = { Haushalt: 'hh-waren', 'Getränke': 'lm-getraenke', Pfand: 'lm-getraenke' };
+export const pantryCategory = c => PANTRY_CATEGORY[c] ?? 'lm-supermarkt';
+// now: nur Einkäufe, deren letzte Zeile älter als gapMin ist (sonst wird der Bon evtl. noch gespeichert).
+// since: Einkäufe, die vor diesem Zeitpunkt beginnen, fallen weg (die Abfrage holt etwas mehr, damit Gruppen am Rand vollständig sind).
+export function groupPantry(rows, gapMin = 3, { now = null, since = null } = {}) {
   const sorted = [...rows].filter(r => r.price > 0).sort((a, b) => a.at.localeCompare(b.at));
   const out = [];
   let cur = null;
   for (const r of sorted) {
     if (!cur || r.by !== cur.by || (new Date(r.at) - new Date(cur.lastAt)) > gapMin * 60000) {
-      cur = { key: 'sk:' + r.id, at: r.at, date: iso(new Date(r.at)), lastAt: r.at, by: r.by, amount: 0, items: [] };
+      cur = { key: 'sk:' + r.id, at: r.at, date: iso(new Date(r.at)), lastAt: r.at, by: r.by, amount: 0, items: [], parts: {} };
       out.push(cur);
     }
-    cur.amount += r.price; cur.items.push(r.name); cur.lastAt = r.at;
+    const c = pantryCategory(r.category);
+    cur.amount += r.price; cur.items.push(r.name); cur.lastAt = r.at; cur.parts[c] = (cur.parts[c] ?? 0) + r.price;
   }
-  return out;
+  return out.filter(g => (!now || now - new Date(g.lastAt) > gapMin * 60000) && (!since || new Date(g.at) >= new Date(since)));
 }
+// Ist ein Einkauf schon übernommen? (Buchungen heißen 'sk:<id>:<kategorie>')
+export const pantryDone = (key, refs) => refs.some(r => r === key || r.startsWith(key + ':'));
 // Mögliche Doppelbuchung: Lebensmittel am selben Tag mit ähnlichem Betrag (±1 € bzw. ±3 %)
 export function similarTx(tx, purchase, groupOf) {
-  return tx.find(t => t.kind === 'expense' && t.date === purchase.date && groupOf(t.category) === 'lebensmittel' && t.extRef !== purchase.key
+  return tx.find(t => t.kind === 'expense' && t.date === purchase.date && groupOf(t.category) === 'lebensmittel' && !String(t.extRef ?? '').startsWith(purchase.key)
     && Math.abs(t.amount - purchase.amount) <= Math.max(100, purchase.amount * 0.03)) ?? null;
 }
 
