@@ -295,7 +295,7 @@ function demoSeed() {
 export function createDemoStore() {
   let db = null;
   const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf') || !db.pots.some(p => p.kind === 'reserve')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push({ ...fresh.rec.find(r => r.potId === etf.id), accountId: db.accounts.find(a => a.owner === 'demo')?.id ?? null }); }
-      if (!db.pots.some(p => p.kind === 'reserve')) { const rp = fresh.pots.find(p => p.kind === 'reserve'), re = fresh.cash.find(e => e.potId === rp.id); db.pots.push(rp); db.cash.push(re);
+      if (!db.pots.some(p => p.kind === 'reserve')) { const rp = fresh.pots.find(p => p.kind === 'reserve'), re = fresh.cash.find(e => e.potId === rp.id); db.pots.push(rp); if (!db.cash.some(e => e.id === re.id)) db.cash.push(re);
         for (const x of db.rec) if (x.name === 'Autoversicherung Golf' || x.name === 'Privathaftpflicht') x.cashId = re.id; }
       save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };

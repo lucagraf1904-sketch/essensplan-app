@@ -192,7 +192,7 @@ const lastAccount = () => { const id = localStorage.getItem('haushaltskasse.acco
 
 const summary = (key = state.month) => {
   const s = monthSummary({ tx: V.tx, recurring: V.recurring, key, today: state.today, groupOf });
-  const c = cashPending(V.cash, state.tx, key, state.today, groupOf);
+  const c = cashPending(cashList(), state.tx, key, state.today, groupOf);
   // „Nur Summen“-Freigabe: noch nicht abgehobenes Bargeld anderer (nur laufender Monat)
   for (const x of state.sums) if (x.area === 'cash' && x.month === key && sc(x.owner) && key === state.today.slice(0, 7)) { c.total += x.total; const g = groupOf(x.category); c.byGroup[g] = (c.byGroup[g] ?? 0) + x.total; }
   if (c.total) {
@@ -200,7 +200,7 @@ const summary = (key = state.month) => {
     for (const [g, v] of Object.entries(c.byGroup)) s.pendingByGroup[g] = (s.pendingByGroup[g] ?? 0) + v;
   }
   if (c.reserve) { s.pendingSave += c.reserve; s.free -= c.reserve; }
-  s.pendingCash = c.total + c.reserve; s.pendingCashExpense = c.total;
+  s.pendingCash = c.total + c.reserve; s.pendingCashExpense = c.total; s.pendingReserve = c.reserve;
   // Fixkosten, die in diesem Monat noch aus einem Rücklage-Umschlag bezahlt werden: Ausgabe ja, aber das Geld ist schon zurückgelegt
   const { from, to } = monthRange(key);
   s.pendingCover = V.recurring.filter(r => r.cashId && r.kind === 'expense' && reservePot(r.cashId)).reduce((a, r) => a + occurrences(r, from, to).length * r.amount, 0);
@@ -208,11 +208,13 @@ const summary = (key = state.month) => {
   if (s.daysLeft) s.perDay = Math.floor(Math.max(0, s.free) / s.daysLeft);
   return s;
 };
+// Umschläge der Ansicht; ein Umschlag mit archiviertem Topf gilt als normaler Umschlag
+const cashList = () => V.cash.map(e => e.potId && !state.pots.some(p => p.id === e.potId && !p.archived) ? { ...e, potId: null } : e);
 // Topf eines Rücklage-Umschlags (null, wenn der Umschlag keiner ist)
 const reservePot = cashId => { const e = state.cash.find(x => x.id === cashId); return e?.potId ? state.pots.find(p => p.id === e.potId && !p.archived) ?? null : null; };
 // Stand, zugeordnete Fixkosten und Prognose eines Rücklage-Umschlags
 function reserveInfo(e) {
-  const pot = e.potId && state.pots.find(p => p.id === e.potId);
+  const pot = e.potId && state.pots.find(p => p.id === e.potId && !p.archived);
   if (!pot) return null;
   const balance = potBalances(state.pots, state.potTx).get(pot.id) ?? 0;
   const linked = state.recurring.filter(r => r.cashId === e.id && r.active && r.kind === 'expense');
@@ -282,7 +284,7 @@ function renderHome() {
         ${s.pendingExpense - (s.pendingCashExpense ?? 0) ? `<dt>Fixkosten noch offen</dt><dd>−${eur(s.pendingExpense - (s.pendingCashExpense ?? 0))}</dd>` : ''}
         ${s.pendingCash ? `<dt>Bargeld noch abzuheben</dt><dd>−${eur(s.pendingCash)}</dd>` : ''}
         ${s.pendingCover ? `<dt>Davon aus Umschlägen bezahlt (schon zurückgelegt)</dt><dd>+${eur(s.pendingCover)}</dd>` : ''}
-        ${s.saved + s.pendingSave ? `<dt>In Spartöpfe${s.pendingSave ? ' (inkl. Sparrate, die noch kommt)' : ''}</dt><dd>−${eur(s.saved + s.pendingSave)}</dd>` : ''}
+        ${s.saved + s.pendingSave - (s.pendingReserve ?? 0) ? `<dt>In Spartöpfe${s.pendingSave - (s.pendingReserve ?? 0) ? ' (inkl. Sparrate, die noch kommt)' : ''}</dt><dd>−${eur(s.saved + s.pendingSave - (s.pendingReserve ?? 0))}</dd>` : ''}
         ${s.unsaved ? `<dt>Aus Spartöpfen genommen</dt><dd>+${eur(s.unsaved)}</dd>` : ''}
         <dt class="sum">Frei</dt><dd class="sum">${s.free < 0 ? '−' : ''}${eur(Math.abs(s.free))}</dd>
       </dl></details></div>`;
@@ -611,6 +613,7 @@ function cashOptions(selected) {
 async function ensureReserve(value, owner, suggest) {
   if (!value) return null;
   let e = value === '__new' ? null : state.cash.find(x => x.id === value);
+  if (e && (e.owner ?? null) !== (owner ?? null)) throw new Error(`„${e.name}“ ist ${e.owner ? 'privat' : 'gemeinsam'}, die Fixkosten sind ${owner ? 'privat' : 'gemeinsam'}. Bitte einen passenden Umschlag wählen oder „+ Neuer Umschlag“.`);
   if (!e) e = await store.saveCash({ name: 'Rücklagen', icon: '🛡️', amount: Math.max(100, suggest), category: 'versicherung', owner: owner ?? null, active: true });
   if (!e.potId) {
     const pot = await store.savePot({ name: `Umschlag ${e.name}`, icon: e.icon, kind: 'reserve', goal: null, targetDate: null, startBalance: 0, autoRest: false, archived: false, owner: e.owner ?? null });
@@ -817,7 +820,7 @@ const CASH_ICONS = ['💶', '🛡️', '🥕', '💇', '🪙', '☕', '🍺', '�
 function cashSection() {
   const key = state.month, cur = key === state.today.slice(0, 7), future = key > state.today.slice(0, 7);
   const list = V.cash.filter(e => e.active);
-  const p = cashPending(V.cash, state.tx, key, state.today, groupOf);
+  const p = cashPending(cashList(), state.tx, key, state.today, groupOf);
   const booked = real(V.tx).filter(t => t.source === 'cash' && monthKey(t.date) === key);
   const bookedSum = booked.reduce((a, t) => a + t.amount, 0);
   const writableOpen = p.open.filter(e => canWrite(e.owner));
@@ -871,6 +874,7 @@ async function saveCashForm() {
   if (!amount) return err('Bitte den Betrag pro Monat eingeben.');
   const who = whoValue($('#cash-who')); if (who.readOnly) return;
   const old = cashEditing;
+  if (old?.potId && (keepOwner(old, who.owner) ?? null) !== (old.owner ?? null)) return err('Eine Rücklage kann nicht zwischen privat und gemeinsam wechseln. Lege dafür einen neuen Umschlag an.');
   try {
     await store.saveCash({ ...(old ?? {}), name, amount, icon: $$('[name=cash-icon]').find(x => x.checked)?.value ?? '💶', category: $('#cash-cat').value, owner: keepOwner(old, who.owner), active: true });
     $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast(old ? 'Umschlag gespeichert' : `Umschlag „${name}“ angelegt`);
@@ -878,7 +882,7 @@ async function saveCashForm() {
 }
 async function withdrawCash() {
   const key = state.today.slice(0, 7);
-  const open = cashPending(V.cash, state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
+  const open = cashPending(cashList(), state.tx, key, state.today, groupOf).open.filter(e => canWrite(e.owner));
   if (!open.length) return;
   const total = open.reduce((a, e) => a + e.amount, 0);
   // Gemeinsames Bargeld nur von gemeinsamen Konten, eigenes nur von eigenen (und keine fremden privaten Konten)
@@ -1354,6 +1358,19 @@ function bindEvents() {
       $('#dlg-cash').close(); await loadAll({ book: false }); render(); toast('Umschlag gelöscht. Bisherige Buchungen bleiben.');
     } catch (err) { $('#cash-err').textContent = err.message; }
   };
+
+  // Umschlag gewählt: „Wer sieht das?“ an den Umschlag angleichen (Fixkosten und Umschlag müssen gleich sichtbar sein)
+  const matchOwner = (sel, whoEl) => {
+    const e = state.cash.find(x => x.id === $(sel).value), w = $(whoEl);
+    if (!e || w.dataset.ro === '1') return;
+    const want = e.owner ?? null;
+    if ((w.dataset.owner || null) === want) return;
+    w.dataset.owner = want ?? ''; w.dataset.touched = '1';
+    const radio = w.querySelector(`[value=${want ? 'me' : 'shared'}]`); if (radio) radio.checked = true;
+    toast(`An den Umschlag angepasst: ${want ? 'nur ich' : 'gemeinsam'}`);
+  };
+  $('#rec-cash').onchange = () => matchOwner('#rec-cash', '#rec-who');
+  $('#pol-cash').onchange = () => matchOwner('#pol-cash', '#pol-who');
 
   // Spartopf
   $('#form-pot').onsubmit = e => { e.preventDefault(); savePotForm(); };

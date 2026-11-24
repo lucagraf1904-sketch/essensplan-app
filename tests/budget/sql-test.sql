@@ -207,3 +207,18 @@ select budget_book_due() >= 1 as reserve_due_booked;
 select count(*) = 1 as cover_unsave_booked from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich' and amount = 40 and owner = auth.uid();
 select budget_book_due() = 0 as cover_not_twice;
 select count(*) = 1 as cover_once from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich';
+-- Umschlag darf nicht auf den Topf einer anderen Person zeigen; Deaktivieren löst Zuordnungen
+reset role;
+select set_config('test.respot', (select id::text from budget_pots where name = 'Umschlag Rücklagen'), false);
+set role authenticated;
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+do $$ begin
+  begin insert into budget_cash(household_id, name, amount, pot_id) values (my_household(), 'Fremd', 10, current_setting('test.respot')::uuid);
+    raise exception 'FEHLER: fremder Topf verknüpfbar';
+  exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: fremder Topf gesperrt'; end;
+end $$;
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_cash set active = false where name = 'Rücklagen';
+reset role;
+select count(*) = 0 as unlinked_on_deactivate from budget_recurring where cash_id is not null and name = 'Kfz jährlich';
+set role authenticated;

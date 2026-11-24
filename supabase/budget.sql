@@ -292,6 +292,25 @@ drop trigger if exists budget_cash_touch on budget_cash;
 create or replace function budget_touch() returns trigger language plpgsql set search_path = public as $$
 begin new.updated_at := now(); return new; end $$;
 create trigger budget_cash_touch before insert or update on budget_cash for each row execute function budget_touch();
+create or replace function budget_cash_links() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.pot_id is not null and not exists (select 1 from budget_pots where id = new.pot_id and household_id = new.household_id and owner is not distinct from new.owner) then
+    raise exception 'Umschlag und Rücklage müssen zum selben Haushalt und Besitzer gehören';
+  end if;
+  return new;
+end $$;
+drop trigger if exists budget_cash_links on budget_cash;
+create trigger budget_cash_links before insert or update on budget_cash for each row execute function budget_cash_links();
+-- Umschlag deaktiviert: alle Fixkosten lösen (auch private anderer Personen, die man selbst nicht ändern darf)
+create or replace function budget_cash_unlink() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if not new.active and old.active then update budget_recurring set cash_id = null where cash_id = new.id and household_id = new.household_id; end if;
+  return new;
+end $$;
+drop trigger if exists budget_cash_unlink on budget_cash;
+create trigger budget_cash_unlink after update on budget_cash for each row execute function budget_cash_unlink();
 
 -- ---------- Fixkosten automatisch buchen ----------
 -- Monatsende wird abgefangen: Start 31.01. → 28./29.02. → 31.03. (Postgres rechnet date + interval so).
@@ -332,7 +351,7 @@ begin
           if r.cash_id is not null and r.kind = 'expense' then
             cp := null; co := null;
             select c.pot_id, p.owner into cp, co from budget_cash c join budget_pots p on p.id = c.pot_id
-             where c.id = r.cash_id and c.household_id = hh and not p.archived;
+             where c.id = r.cash_id and c.household_id = hh and c.active and p.household_id = hh and not p.archived;
             if cp is not null then
               insert into budget_tx(household_id, date, amount, kind, category, note, source, pot_id, owner, ext_ref)
                 values (hh, d, r.amount, 'unsave', 'fi-sparen', 'Aus Umschlag: ' || r.name, 'recurring', cp, co, 'cover:' || r.id::text || ':' || d::text)
@@ -389,7 +408,7 @@ language sql stable security definer set search_path = public as $$
   select p.owner, case when p.kind = 'etf' then 'etfbal' else 'potbal' end, null, null, null,
          sum(p.start_balance + coalesce((select sum(case when t.kind = 'save' then t.amount else -t.amount end) from budget_tx t where t.pot_id = p.id), 0))
     from budget_pots p join m on m.user_id = p.owner
-   where p.household_id = my_household() and not p.archived and m.share->>'pots' = 'sums'
+   where p.household_id = my_household() and not p.archived and p.kind in ('pot', 'etf') and m.share->>'pots' = 'sums'
    group by p.owner, p.kind
   union all
   select r.owner, 'fixed', null, r.kind, null,
