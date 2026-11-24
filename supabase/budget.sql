@@ -104,7 +104,7 @@ alter table budget_tx add constraint budget_tx_kind_check check (kind in ('expen
 alter table budget_tx drop constraint if exists budget_tx_pot_check;
 alter table budget_tx add constraint budget_tx_pot_check check ((kind in ('save', 'unsave')) = (pot_id is not null));
 alter table budget_tx drop constraint if exists budget_tx_source_check;
-alter table budget_tx add constraint budget_tx_source_check check (source in ('manual', 'receipt', 'recurring', 'import', 'rest', 'pantry'));
+alter table budget_tx add constraint budget_tx_source_check check (source in ('manual', 'receipt', 'recurring', 'import', 'rest', 'pantry', 'cash'));
 alter table budget_recurring drop constraint if exists budget_recurring_kind_check;
 alter table budget_recurring add constraint budget_recurring_kind_check check (kind in ('expense', 'income', 'save'));
 alter table budget_recurring drop constraint if exists budget_recurring_pot_check;
@@ -160,6 +160,22 @@ $$;
 create or replace function budget_can_write(p_owner uuid) returns boolean
 language sql stable set search_path = public as $$ select p_owner is null or p_owner = auth.uid() $$;
 
+-- ---------- Bargeld-Umschläge (Version 4) ----------
+-- Jeder Umschlag bekommt monatlich seinen Betrag. Die Summe zeigt, wie viel Bargeld abzuheben ist.
+-- „Abgehoben“ bucht je Umschlag eine Ausgabe (source 'cash', ext_ref 'cash:<Monat>:<Umschlag>'). Restgeld wird nicht mitgeführt.
+create table if not exists budget_cash (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references households(id) on delete cascade,
+  name text not null,
+  icon text not null default '💶',
+  amount numeric(12,2) not null check (amount > 0),
+  category text not null default 'sonstiges',
+  owner uuid references auth.users(id) on delete cascade,   -- null = gemeinsam
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
 alter table budget_recurring enable row level security;
@@ -188,6 +204,12 @@ create policy budget_tx_read on budget_tx for select using (household_id = my_ho
 create policy budget_recurring_read on budget_recurring for select using (household_id = my_household() and budget_can_see(owner, case when pot_id is null then 'fixed' else 'pots' end));
 create policy budget_pots_read on budget_pots for select using (household_id = my_household() and budget_can_see(owner, 'pots'));
 create policy budget_policies_read on budget_policies for select using (household_id = my_household() and budget_can_see(owner, 'policies'));
+-- Bargeld-Umschläge: Sichtbarkeit wie Fixkosten (geplantes Monatsgeld)
+alter table budget_cash enable row level security;
+drop policy if exists budget_cash_read on budget_cash;
+create policy budget_cash_read on budget_cash for select using (household_id = my_household() and budget_can_see(owner, 'fixed'));
+drop policy if exists budget_cash_write on budget_cash;
+create policy budget_cash_write on budget_cash for all using (household_id = my_household() and budget_can_write(owner)) with check (household_id = my_household() and budget_can_write(owner));
 drop policy if exists budget_members_read on budget_members;
 create policy budget_members_read on budget_members for select using (household_id = my_household());
 drop policy if exists budget_members_write on budget_members;
@@ -340,8 +362,8 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- ---------- Rechte und Live-Abgleich ----------
-grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to authenticated;
-grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to service_role;
+grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts, budget_cash to authenticated;
+grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts, budget_cash to service_role;
 grant execute on function budget_can_see(uuid, text), budget_can_write(uuid), budget_shared_sums(date) to authenticated;
 grant execute on function budget_nth_due(date, text, int), budget_book_due() to authenticated;
 do $$ begin
@@ -359,5 +381,7 @@ do $$ begin
     alter publication supabase_realtime add table budget_members; end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_accounts') then
     alter publication supabase_realtime add table budget_accounts; end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_cash') then
+    alter publication supabase_realtime add table budget_cash; end if;
 end $$;
 notify pgrst, 'reload schema';

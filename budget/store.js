@@ -25,6 +25,7 @@ const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', s
 const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
 // Summen-Zeilen (Freigabe „nur Summen“) in Cent
 const toSum = r => ({ owner: r.owner, area: r.area, month: r.month, kind: r.kind, category: r.category, total: toCents(r.total) });
+const toCash = r => ({ id: r.id, name: r.name, icon: r.icon || '💶', amount: toCents(r.amount), category: r.category, owner: r.owner ?? null, active: r.active !== false });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
   noticeMonths: r.notice_months ?? null, notes: r.notes ?? '', filePath: r.file_path ?? null, fileName: r.file_name ?? null,
   pageCount: r.page_count ?? (Array.isArray(r.pages) ? r.pages.length : 0), pages: Array.isArray(r.pages) ? r.pages : null, textSource: r.text_source ?? null, owner: r.owner ?? null });
@@ -138,6 +139,9 @@ export async function createSupabaseStore() {
       if (r.error && /budget_accounts_name|duplicate key/i.test(r.error.message)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
       return toAcc(must(r));
     },
+    async listCash() { return must(await sb.from('budget_cash').select('*').order('created_at')).map(toCash); },
+    async saveCash(e) { return toCash(must(await sb.from('budget_cash').upsert({ id: e.id ?? uid(), household_id: hh(), name: e.name, icon: e.icon || '💶', amount: fromCents(e.amount), category: e.category, owner: e.owner || null, active: e.active !== false, updated_at: new Date().toISOString() }).select().single())); },
+    async deleteCash(id) { must(await sb.from('budget_cash').delete().eq('id', id)); },
     async sharedSums(sinceIso) { return must(await sb.rpc('budget_shared_sums', { p_since: sinceIso })).map(toSum); },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
     async listPantryPurchases(sinceIso) {
@@ -194,6 +198,7 @@ export async function createSupabaseStore() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_pots', filter: f }, () => cb('pots'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_members', filter: f }, () => cb('members'))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_accounts', filter: f }, () => cb('accounts'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'budget_cash', filter: f }, () => cb('cash'))
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'log', filter: f }, () => cb('pantry'))
         .subscribe();
     },
@@ -269,12 +274,15 @@ function demoSeed() {
       { owner: LEA, area: 'tx', month: mk, kind: 'income', category: 'ei-gehalt', total: 210000 });
   }
   sums.push({ owner: LEA, area: 'potbal', total: 240000 }, { owner: LEA, area: 'fixed', kind: 'expense', total: 8900 });
-  return { tx, rec, pol, config, pots, pantry, accounts, members, sums, files: {} };
+  const cash = [{ id: uid(), name: 'Wochenmarkt', icon: '🥕', amount: 6000, category: 'lm-markt', owner: null, active: true },
+    { id: uid(), name: 'Friseur', icon: '💇', amount: 2500, category: 'kl-friseur', owner: ME, active: true },
+    { id: uid(), name: 'Kleinkram', icon: '🪙', amount: 4000, category: 'sonstiges', owner: ME, active: true }];
+  return { tx, rec, pol, config, pots, pantry, accounts, members, sums, cash, files: {} };
 }
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts || !db.cash) { db = demoSeed(); save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));
@@ -290,6 +298,9 @@ export function createDemoStore() {
     async listAccounts() { return delay(load().accounts.map(a => ({ ...a }))); },
     async saveAccount(a) { const d = load(); if (d.accounts.some(x => x.name === a.name && x.owner === (a.owner ?? null) && x.id !== a.id)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
       const row = { icon: '💳', archived: false, ...a, id: a.id ?? uid(), owner: a.owner ?? null }; const i = d.accounts.findIndex(x => x.id === row.id); if (i >= 0) d.accounts[i] = row; else d.accounts.push(row); save(); return { ...row }; },
+    async listCash() { return delay(load().cash.map(e => ({ ...e }))); },
+    async saveCash(e) { const d = load(); const row = { icon: '💶', active: true, ...e, id: e.id ?? uid(), owner: e.owner ?? null }; const i = d.cash.findIndex(x => x.id === row.id); if (i >= 0) d.cash[i] = row; else d.cash.push(row); save(); return { ...row }; },
+    async deleteCash(id) { const d = load(); d.cash = d.cash.filter(e => e.id !== id); save(); },
     async sharedSums(since) { return delay(load().sums.filter(x => !x.month || x.month >= since.slice(0, 7)).map(x => ({ ...x }))); },
     async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
     reset() { localStorage.removeItem(DEMO_KEY); db = null; },

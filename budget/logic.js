@@ -273,6 +273,23 @@ export function byAccount(tx, from, to) {
   return m;
 }
 
+// ---------- Bargeld-Umschläge ----------
+export const cashRef = (month, id) => `cash:${month}:${id}`;
+// Was im Monat noch abzuheben ist: aktive Umschläge ohne „Abgehoben“-Buchung in diesem Monat.
+// Nur für den laufenden und künftige Monate (was in einem vergangenen Monat nicht abgehoben wurde, wurde nicht ausgegeben).
+export function cashPending(envelopes, tx, key, today, groupOf) {
+  const out = { total: 0, byGroup: {}, open: [], done: [] };
+  if (key < today.slice(0, 7)) return out;
+  const refs = new Set(tx.map(t => t.extRef).filter(Boolean));
+  for (const e of envelopes) {
+    if (!e.active) continue;
+    if (refs.has(cashRef(key, e.id))) { out.done.push(e); continue; }
+    out.total += e.amount; out.open.push(e);
+    const g = groupOf(e.category); out.byGroup[g] = (out.byGroup[g] ?? 0) + e.amount;
+  }
+  return out;
+}
+
 // ---------- Suche ----------
 export const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 export function matches(text, query) {
@@ -293,7 +310,7 @@ export function toCsv(tx, catPath) {
   const rows = [...tx].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
     dateShort(t.date), { income: 'Einnahme', expense: 'Ausgabe', save: 'In Spartopf', unsave: 'Aus Spartopf' }[t.kind] ?? t.kind, catPath(t.category),
     (t.kind === 'income' || t.kind === 'unsave' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
-    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import', rest: 'Monatsrest', pantry: 'Speisekammer' }[t.source] ?? t.source,
+    { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import', rest: 'Monatsrest', pantry: 'Speisekammer', cash: 'Bargeld' }[t.source] ?? t.source,
   ]);
   return '﻿' + [head, ...rows].map(r => r.map((v, i) => csvCell(v, i !== 3)).join(';')).join('\r\n');
 }

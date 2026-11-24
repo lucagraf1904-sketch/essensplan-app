@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -176,4 +176,16 @@ test('Personen: Ansicht, Vorgabe privat/gemeinsam, Summen, Konten', () => {
   const acc = byAccount([{ date: '2026-11-02', amount: 100, kind: 'expense', accountId: 'a' }, { date: '2026-11-03', amount: 50, kind: 'save', accountId: 'a' },
     { date: '2026-11-03', amount: 70, kind: 'expense' }, { date: '2026-11-03', amount: 999, kind: 'income', accountId: 'a' }, ...tx], '2026-11-01', '2026-11-30');
   assert.equal(acc.get('a'), 150); assert.equal(acc.get(''), 70); assert.equal(acc.size, 2);
+});
+
+test('Bargeld: Abhebesumme, erledigte Umschläge, vergangene Monate', () => {
+  const env = [{ id: 'a', name: 'Markt', amount: 6000, category: 'lm-markt', active: true }, { id: 'b', name: 'Friseur', amount: 2500, category: 'kl-friseur', active: true },
+    { id: 'c', name: 'Alt', amount: 999, category: 'x', active: false }];
+  const g = id => ({ 'lm-markt': 'lebensmittel', 'kl-friseur': 'kleidung' })[id];
+  let p = cashPending(env, [], '2026-11', '2026-11-24', g);
+  assert.equal(p.total, 8500); assert.deepEqual(p.byGroup, { lebensmittel: 6000, kleidung: 2500 });
+  p = cashPending(env, [{ extRef: cashRef('2026-11', 'a') }], '2026-11', '2026-11-24', g);
+  assert.equal(p.total, 2500); assert.equal(p.done.length, 1);
+  assert.equal(cashPending(env, [], '2026-10', '2026-11-24', g).total, 0);
+  assert.equal(cashPending(env, [], '2026-12', '2026-11-24', g).total, 8500);
 });

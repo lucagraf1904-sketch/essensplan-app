@@ -200,6 +200,8 @@ Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeld
 - **Auswertung:** Ausgaben je Monat, Plus/Minus je Monat, Kategorien im Vergleich zum Vormonat, Tabellenansicht, CSV-Export.
 - **Spartöpfe** (v2): Ziel und Datum optional, Sparrate automatisch, Monatsrest per Abfrage oder automatisch, Sparen mindert „Noch frei“.
 - **Einkäufe aus der Speisekammer** werden als Vorschlag angezeigt (Tabelle `log`, nur lesend). Update: `supabase/budget.sql` erneut ausführen.
+- **Personen und Freigaben** (v3): privat/gemeinsam je Eintrag, Freigabe je Bereich, Konten mit „Bezahlt von“, Ansicht je Person.
+- **Bargeld-Umschläge** (v4): Monatsbeträge, Abhebesumme, „Abgehoben“ bucht je Kategorie.
 - Tests: `tests/budget` (Logik, Oberfläche, SQL).
 
 ## v70: Rubrik „Badezimmer"; Süßigkeiten erweitert (Luca 24.11.)

@@ -154,3 +154,11 @@ insert into budget_pots(household_id, name, owner, auto_rest) values (my_househo
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 insert into budget_pots(household_id, name, owner, auto_rest) values (my_household(), 'C privat', auth.uid(), true);
 select count(*) = 1 as c_has_own_auto_pot from budget_pots where auto_rest and owner = auth.uid();
+
+-- ---------- Version 4: Bargeld-Umschläge ----------
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+insert into budget_cash(household_id, name, amount, category) values (my_household(), 'Wochenmarkt', 60, 'lm-markt');
+insert into budget_cash(household_id, name, amount, category, owner) values (my_household(), 'Friseur', 25, 'kl-friseur', auth.uid());
+insert into budget_tx(household_id, date, amount, category, source, ext_ref) values (my_household(), current_date, 60, 'lm-markt', 'cash', 'cash:2026-11:x');
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select count(*) = 1 as c_sees_only_shared_cash from budget_cash;

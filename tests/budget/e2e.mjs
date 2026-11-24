@@ -259,6 +259,29 @@ await page.waitForFunction(() => window.__budget.state.accounts.some(a => a.name
 await shot(page, '19-einstellungen-freigabe', false);
 await page.keyboard.press('Escape');
 
+// ---------- Bargeld-Umschläge ----------
+await page.click('.tabs [data-view=home]');
+await page.click('#scope-bar [data-scope=all]');
+const cashSum = () => page.evaluate(() => { const t = [...document.querySelectorAll('#view-home .cash-sum')].map(e => e.textContent).join(' '); const m = t.match(/abheben\s*([\d.,]+)/); return m ? m[1] : null; });
+assert.equal(await cashSum(), '125,00', 'Demo: 60 + 25 + 40 €');
+const freeBefore = await page.textContent('.band-value');
+await page.click('#view-home [data-act=add-cash]');
+await page.fill('#cash-name', 'Taschengeld Kind');
+await page.fill('#cash-amount', '20');
+await page.selectOption('#cash-cat', 'fa-kinder');
+await page.click('#form-cash [type=submit]');
+await page.waitForFunction(() => /abheben\s*145,00/.test(document.querySelector('#view-home').textContent));
+assert.notEqual(await page.textContent('.band-value'), freeBefore, 'Noch frei berücksichtigt das Bargeld');
+await shot(page, '20-bargeld');
+await page.click('#view-home [data-act=cash-withdraw]');
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(() => /Abgehoben im/.test(document.querySelector('#view-home').textContent));
+const cashTx = await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'));
+assert.equal(cashTx.length, 4); assert.ok(cashTx.some(t => t.category === 'lm-markt' && t.amount === 6000 && t.owner == null));
+assert.ok(cashTx.every(t => t.accountId), 'Konto gesetzt');
+await page.reload(); await page.waitForSelector('#view-home .band');
+assert.equal((await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'))).length, 4, 'nach Neuladen keine Doppelbuchung');
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');

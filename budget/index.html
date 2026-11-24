@@ -235,6 +235,26 @@
     </form>
   </dialog>
 
+  <!-- Bargeld-Umschlag -->
+  <dialog id="dlg-cash" class="sheet" aria-labelledby="cash-title">
+    <form id="form-cash" method="dialog" novalidate>
+      <header class="sheet-head"><h2 id="cash-title">Bargeld-Umschlag</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
+      <label class="field">Name<input id="cash-name" required maxlength="40" placeholder="z. B. Wochenmarkt, Friseur, Taschengeld"></label>
+      <div class="icon-pick" id="cash-icons" role="radiogroup" aria-label="Symbol"></div>
+      <div class="grid2">
+        <label class="field">Pro Monat (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Kategorie<select id="cash-cat"></select></label>
+      </div>
+      <div id="cash-who" class="who"></div>
+      <p class="tiny muted">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
+      <p id="cash-err" class="msg" role="alert"></p>
+      <div class="row sheet-actions">
+        <button type="button" class="btn danger hidden" id="cash-delete">Löschen</button>
+        <button type="submit" class="btn primary grow">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Police fragen -->
   <dialog id="dlg-chat" class="sheet tall" aria-labelledby="chat-title">
     <div class="chat">
