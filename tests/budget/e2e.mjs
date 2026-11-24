@@ -362,6 +362,12 @@ await shot(dark, '10-dunkel');
 const wide = await newPage({ viewport: { width: 1280, height: 900 } });
 await wide.goto('http://app.test/budget/?demo=1'); await wide.waitForSelector('#view-home .band'); await wide.waitForTimeout(200);
 await shot(wide, '11-desktop');
+// Normaler Link nach der Demo: keine Demo mehr (früher blieb sie hängen)
+const after = await newPage();
+await after.goto('http://app.test/budget/?demo=1'); await after.waitForSelector('#view-home .band');
+await after.evaluate(() => localStorage.setItem('haushaltskasse.mode', 'demo')); // Zustand aus älterer Version
+await after.goto('http://app.test/budget/'); await after.waitForSelector('#auth:not(.hidden)');
+assert.equal(await after.evaluate(() => localStorage.getItem('haushaltskasse.mode')), null, 'alter Demo-Schalter entfernt');
 // Anmeldeseite (ohne Demo; Supabase ist hier nicht erreichbar)
 const login = await newPage();
 await login.goto('http://app.test/budget/'); await login.waitForSelector('#auth:not(.hidden)'); await shot(login, '12-anmeldung');
