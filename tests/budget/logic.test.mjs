@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -188,4 +188,14 @@ test('Bargeld: Abhebesumme, erledigte Umschläge, vergangene Monate', () => {
   assert.equal(p.total, 2500); assert.equal(p.done.length, 1);
   assert.equal(cashPending(env, [], '2026-10', '2026-11-24', g).total, 0);
   assert.equal(cashPending(env, [], '2026-12', '2026-11-24', g).total, 8500);
+});
+
+test('ETF: Gewinn/Verlust und ISIN-Prüfung', () => {
+  assert.deepEqual(etfGain(320000, 410000), { gain: 90000, pct: 28.125 });
+  assert.equal(etfGain(100000, 90000).gain, -10000);
+  assert.equal(etfGain(0, 5000).pct, null);
+  assert.equal(etfGain(1000, null), null);
+  assert.ok(isValidIsin('IE00B4L5Y983')); assert.ok(isValidIsin('ie00b4l5y983'));
+  assert.ok(isValidIsin('US0378331005'));
+  assert.ok(!isValidIsin('IE00B4L5Y984')); assert.ok(!isValidIsin('DE123')); assert.ok(!isValidIsin(''));
 });

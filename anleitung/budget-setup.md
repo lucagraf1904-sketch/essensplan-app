@@ -31,6 +31,13 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - **Monatsrest:** bei mehreren Personen getrennt: gemeinsamer Rest in einen gemeinsamen Topf, eigener Rest in einen eigenen Topf.
 - **Bargeld-Umschläge:** in der Übersicht unter „Bargeld“. Jeder Umschlag hat einen Monatsbetrag und eine Kategorie. Die Summe ist der Betrag zum Abheben. Bis zum Tipp auf „Abgehoben“ zählt er wie offene Fixkosten, danach wird je Umschlag eine Ausgabe gebucht. Restgeld wird nicht mitgeführt.
 
+## Update: ETFs (Version 5)
+`supabase/budget.sql` noch einmal ausführen. In der Übersicht unter „ETFs“: Name, optional ISIN (wird auf Prüfziffer geprüft), monatlicher Sparplan mit Ausführungstag und Konto, was schon eingezahlt ist, und der aktuelle Depotwert.
+- **Eingezahlt** zählt die App selbst: Startbetrag + jede Sparplan-Ausführung + Einmalzahlungen − Verkäufe.
+- **Wert** trägst du selbst ein (z. B. aus der Banking-App); die App zeigt das Datum und erinnert nach 45 Tagen ans Aktualisieren. Daraus: Gewinn/Verlust in € und %. Es gibt keine Kursabfrage.
+- Der Sparplan zählt wie Sparen: mindert „Noch frei“, ist aber keine Ausgabe (Kategorie Geldanlage). Privat/gemeinsam und Freigabe wie bei Spartöpfen (Bereich Spartöpfe).
+- Keine Anlageberatung.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

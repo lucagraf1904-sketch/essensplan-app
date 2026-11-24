@@ -229,6 +229,13 @@ label { cursor: pointer; }
 .acc-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-2); }
 .share-row { display: grid; gap: 6px; }
 
+/* ETFs */
+.etf-grid { grid-column: 2 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; font-size: .86rem; }
+.etf-grid span { color: var(--muted); }
+.etf-grid b { font-weight: 700; }
+.gain-up { color: var(--good); }
+.gain-down { color: var(--bad); }
+
 /* Bargeld */
 .cash-sum { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 14px; }
 .cash-sum b { font-size: 1.6rem; }

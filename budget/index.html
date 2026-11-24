@@ -215,16 +215,20 @@
       <div id="pot-summary"></div>
       <label class="field">Name<input id="pot-name" required maxlength="40" placeholder="z. B. Urlaub, Notgroschen, neues Auto"></label>
       <div class="icon-pick" id="pot-icons" role="radiogroup" aria-label="Symbol"></div>
-      <div class="grid2">
+      <div id="etf-fields" class="grid2 hidden">
+        <label class="field">ISIN <span class="muted">optional</span><input id="etf-isin" maxlength="14" autocapitalize="characters" autocomplete="off" placeholder="z. B. IE00B4L5Y983"></label>
+        <label class="field">Aktueller Wert (€)<input id="etf-value" inputmode="decimal" placeholder="aus der Banking-App"></label>
+      </div>
+      <div class="grid2" id="pot-goal-wrap">
         <label class="field">Ziel (€) <span class="muted">optional</span><input id="pot-goal" inputmode="decimal" placeholder="z. B. 1.500"></label>
         <label class="field">Bis wann <span class="muted">optional</span><input type="date" id="pot-date"></label>
       </div>
       <div class="grid2">
-        <label class="field">Sparrate pro Monat<input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
-        <label class="field">Nächste Sparrate am<input type="date" id="pot-next"></label>
+        <label class="field"><span id="pot-rate-label">Sparrate pro Monat</span><input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field"><span id="pot-next-label">Nächste Sparrate am</span><input type="date" id="pot-next"></label>
       </div>
       <label class="field" id="pot-start-wrap">Schon drauf (€)<input id="pot-start" inputmode="decimal" placeholder="0,00"></label>
-      <label class="check"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
+      <label class="check" id="pot-auto-wrap"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
       <div id="pot-who" class="who"></div>
       <p id="pot-hint" class="tiny muted"></p>
       <p id="pot-err" class="msg" role="alert"></p>

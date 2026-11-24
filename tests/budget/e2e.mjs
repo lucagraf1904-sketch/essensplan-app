@@ -282,6 +282,30 @@ assert.ok(cashTx.every(t => t.accountId), 'Konto gesetzt');
 await page.reload(); await page.waitForSelector('#view-home .band');
 assert.equal((await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'))).length, 4, 'nach Neuladen keine Doppelbuchung');
 
+// ---------- ETFs ----------
+await page.click('.tabs [data-view=home]');
+await page.waitForFunction(() => /ETFs[\s\S]*MSCI World[\s\S]*Eingezahlt/.test(document.querySelector('#view-home').textContent));
+await page.click('#view-home [data-act=add-etf]');
+await page.fill('#pot-name', 'FTSE All-World');
+await page.fill('#etf-isin', 'IE00BK5BQT80');
+await page.fill('#pot-start', '1000');
+await page.fill('#etf-value', '1.120,50');
+await page.fill('#pot-rate', '50');
+await page.click('#form-pot [type=submit]');
+await page.waitForFunction(() => window.__budget.state.pots.some(p => p.kind === 'etf' && p.name === 'FTSE All-World' && p.marketValue === 112050));
+await page.waitForFunction(() => [...document.querySelectorAll('#view-home .pot')].some(e => /FTSE All-World[\s\S]*\+120,50/.test(e.textContent)));
+assert.ok(await page.evaluate(() => window.__budget.state.recurring.some(r => r.name === 'Sparplan FTSE All-World' && r.category === 'fi-anlage' && r.kind === 'save')));
+assert.ok(!(await page.evaluate(() => [...document.querySelectorAll('#view-home .section-head')].find(h => /Spartöpfe/.test(h.textContent)).nextElementSibling.textContent.includes('FTSE'))), 'ETF nicht bei den Spartöpfen');
+// falsche ISIN wird abgewiesen
+await page.click('#view-home [data-act=add-etf]');
+await page.fill('#pot-name', 'Test');
+await page.fill('#etf-isin', 'IE00BK5BQT81');
+await page.click('#form-pot [type=submit]');
+assert.match(await page.textContent('#pot-err'), /ISIN/);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+await shot(page, '21-etf');
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');

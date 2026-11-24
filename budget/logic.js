@@ -273,6 +273,23 @@ export function byAccount(tx, from, to) {
   return m;
 }
 
+// ---------- ETFs ----------
+// Gewinn/Verlust aus eingezahlter Summe und selbst eingetragenem Depotwert
+export function etfGain(paid, value) {
+  if (value == null) return null;
+  const gain = value - paid;
+  return { gain, pct: paid > 0 ? gain / paid * 100 : null };
+}
+// ISIN prüfen (Format und Prüfziffer nach ISO 6166)
+export function isValidIsin(isin) {
+  const s = String(isin ?? '').toUpperCase().replace(/\s/g, '');
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(s)) return false;
+  const digits = s.slice(0, 11).split('').map(c => /[A-Z]/.test(c) ? String(c.charCodeAt(0) - 55) : c).join('');
+  let sum = 0, dbl = true;
+  for (let i = digits.length - 1; i >= 0; i--) { let d = +digits[i]; if (dbl) { d *= 2; if (d > 9) d -= 9; } sum += d; dbl = !dbl; }
+  return (10 - sum % 10) % 10 === +s[11];
+}
+
 // ---------- Bargeld-Umschläge ----------
 export const cashRef = (month, id) => `cash:${month}:${id}`;
 // Was im Monat noch abzuheben ist: aktive Umschläge ohne „Abgehoben“-Buchung in diesem Monat.

@@ -168,3 +168,11 @@ update budget_members set share = share || '{"tx":"sums","fixed":"all"}' where u
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 select count(*) = 1 as cash_follows_tx_share from budget_cash;
 select (select sum(total) from budget_shared_sums(current_date - 40) where area = 'cash') = 25 as cash_sum_shared;
+-- ---------- Version 5: ETFs ----------
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+insert into budget_pots(household_id, name, kind, isin, market_value, market_value_at) values (my_household(), 'MSCI World', 'etf', 'IE00B4L5Y983', 4100, current_date);
+select count(*) = 1 as etf_saved from budget_pots where kind = 'etf';
+do $$ begin
+  begin insert into budget_pots(household_id, name, kind, isin) values (my_household(), 'Falsch', 'etf', 'keine-isin'); raise exception 'FEHLER: ungültige ISIN gespeichert';
+  exception when check_violation then raise notice 'ok: ISIN wird geprüft'; end;
+end $$;

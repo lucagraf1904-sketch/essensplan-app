@@ -17,9 +17,11 @@ const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: 
   next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
   policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null });
 const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.goal == null ? null : toCents(r.goal), targetDate: r.target_date ?? null,
-  startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived, owner: r.owner ?? null });
+  startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived, owner: r.owner ?? null,
+  kind: r.kind || 'pot', isin: r.isin ?? '', marketValue: r.market_value == null ? null : toCents(r.market_value), marketValueAt: r.market_value_at ?? null });
 const fromPot = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, icon: p.icon || '🐷', goal: p.goal ? fromCents(p.goal) : null, target_date: p.targetDate || null,
-  start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived, owner: p.owner || null });
+  start_balance: fromCents(p.startBalance ?? 0), auto_rest: !!p.autoRest, archived: !!p.archived, owner: p.owner || null,
+  kind: p.kind || 'pot', isin: p.isin || null, market_value: p.marketValue == null ? null : fromCents(p.marketValue), market_value_at: p.marketValueAt || null });
 const DEFAULT_SHARE = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none' };
 const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', share: { ...DEFAULT_SHARE, ...(r.share ?? {}) }, defaultPrivate: !!r.default_private });
 const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
@@ -261,6 +263,11 @@ function demoSeed() {
     { id: notgroschen, name: 'Notgroschen', icon: '🛟', goal: null, targetDate: null, startBalance: 100000, autoRest: true, archived: false, owner: ME },
   ];
   r('Sparrate Urlaub', 10000, 'fi-sparen', 'monthly', addDays(s, 2), { kind: 'save', potId: urlaub, owner: null, accountId: acc.joint });
+  // ETF mit Sparplan: eingezahlt zählt die App, den Depotwert trägt man selbst ein
+  const etf = uid();
+  pots.push({ id: etf, name: 'MSCI World', icon: '🌍', kind: 'etf', isin: 'IE00B4L5Y983', goal: null, targetDate: null, startBalance: 320000, autoRest: false, archived: false, owner: ME,
+    marketValue: 431000, marketValueAt: addDays(t, -6) });
+  r('Sparplan MSCI World', 15000, 'fi-anlage', 'monthly', addDays(s, 1), { kind: 'save', potId: etf, owner: ME, accountId: acc.me });
   // Einkäufe, die in der Speisekammer per Bon erfasst wurden (zum Übernehmen)
   const at = (daysBack, h) => { const d = new Date(); d.setDate(d.getDate() - daysBack); d.setHours(h, 12, 0, 0); return d.toISOString(); };
   const pantry = [['Milch', 119, 1], ['Haferflocken', 89, 1], ['Hähnchenbrust', 699, 1], ['Paprika', 249, 1], ['Joghurt', 179, 1], ['Spülmittel', 195, 1, 'Haushalt'], ['Nudeln', 99, 3], ['Tomaten', 229, 3], ['Parmesan', 349, 3]]
@@ -282,7 +289,7 @@ function demoSeed() {
 
 export function createDemoStore() {
   let db = null;
-  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash) { db.cash = demoSeed().cash; save(); } return db; };
+  const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; } if (!db?.tx || !db.pots || !db.accounts) { db = demoSeed(); save(); } else if (!db.cash || !db.pots.some(p => p.kind === 'etf')) { const fresh = demoSeed(); db.cash ??= fresh.cash; if (!db.pots.some(p => p.kind === 'etf')) { const etf = fresh.pots.find(p => p.kind === 'etf'); db.pots.push(etf); db.rec.push(fresh.rec.find(r => r.potId === etf.id)); } save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));

@@ -110,6 +110,14 @@ alter table budget_recurring add constraint budget_recurring_kind_check check (k
 alter table budget_recurring drop constraint if exists budget_recurring_pot_check;
 alter table budget_recurring add constraint budget_recurring_pot_check check ((kind = 'save') = (pot_id is not null));
 create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is not null;
+-- ETFs (Version 5): eine Art Spartopf. Eingezahlt = Startbetrag + Sparplan + Einmalzahlungen − Verkäufe (wie beim Topf),
+-- den aktuellen Depotwert trägt man selbst ein (market_value, Stand market_value_at). Keine Kursabfrage.
+alter table budget_pots add column if not exists kind text not null default 'pot';
+alter table budget_pots drop constraint if exists budget_pots_kind_check;
+alter table budget_pots add constraint budget_pots_kind_check check (kind in ('pot', 'etf'));
+alter table budget_pots add column if not exists isin text check (isin is null or isin ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$');
+alter table budget_pots add column if not exists market_value numeric(14,2) check (market_value is null or market_value >= 0);
+alter table budget_pots add column if not exists market_value_at date;
 -- Ein Topf mit Buchungen lässt sich nicht löschen (nur auflösen), damit keine Spar-Historie verloren geht
 do $$ begin
   if exists (select 1 from pg_constraint where conname = 'budget_tx_pot_id_fkey' and confdeltype <> 'r') then
