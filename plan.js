@@ -6,7 +6,7 @@
 import { isoLocal } from './categories.js';
 import { activeRecipes, loadRecipes, STARTERS, KINDS, TAGS, addStarters, upsertRecipe, updateRecipe, deleteRecipe, markCooked, recipeFromParts, parseRecipeText, needFromLine } from './recipes.js';
 import { SHIFTS, SHIFT_ORDER, SOURCES as SHIFT_SOURCES, shiftsOn, shiftOf, setShift, mealAdvice, shiftDay, shiftConf, setShiftConf, setShiftDay } from './shifts.js';
-import { getSettings } from './settings.js';
+import { getSettings, setSetting } from './settings.js';
 import { offersFor, chainName } from './offers.js';
 import { loadMeds } from './meds.js';
 import { GRUNDSTOCK, GRUNDSTOCK_SOURCE } from './suggestions.js';
@@ -43,6 +43,9 @@ function savePlan(p) {
   // Für pünktliche Push-Erinnerungen (Edge Function „reminders“ liest meal_plan)
   ctx?.store?.savePlanRows?.(p.days.map(d => { const m = mealOf(d); return { date: d.date, title: m.title, method: m.method, minutes: m.min, status: d.status }; })).catch?.(e => console.warn('Plan-Abgleich', e));
 }
+// Tiefkühlware, die aufgetaut werden muss (nicht: Fischstäbchen, Pommes … laut Einstellung „noThaw“)
+const noThawWord = n => (getSettings().noThaw ?? []).find(w => String(n ?? '').toLowerCase().includes(w));
+const needsThaw = it => !!(it?.frozenAt && !noThawWord(it.name));
 const needOf = (d, r) => d?.need ?? r?.need ?? [];
 const needLabel = n => n[2] ? `${n[1]} (${n[2]})` : n[1];
 const recipe = id => loadRecipes().find(r => r.id === id) ?? STARTERS.find(r => r.id === id);
@@ -187,7 +190,7 @@ export async function getPlannedMeal(date, meal = 'dinner') {
   if (meal !== 'dinner') return null;
   const d = loadPlan()?.days?.find(x => x.date === date); if (!d || (!d.dinner && !d.leftover)) return null;
   const m = mealOf(d), r = recipe(d.dinner);
-  const thaw = r && !d.leftover ? needOf(d, r).map(([w]) => has(items, w)).find(i => i?.frozenAt) : null;
+  const thaw = r && !d.leftover ? needOf(d, r).map(([w]) => has(items, w)).find(needsThaw) : null;
   return { date, meal, title: m.title, totalMinutes: m.min, method: m.method, thawFrom: thaw ? addDays(date, -1) : null, status: d.status };
 }
 
@@ -283,14 +286,14 @@ function renderWeek(body, s, next = false) {
       if (!r) return wrap(d, i, restBox, sumOf(d, 'Kein passendes Gericht'), `${head}<div class="plan-dinner muted">${s.planOnlyPantry ? `Mit dem aktuellen Vorrat geht kein Gericht ganz auf. ${almost()}Vorrat auffüllen oder „Nur Vorrat“ ausschalten. ` : ''}<button class="chip" data-act="swap">🔄 Vorschlag</button> <button class="chip" data-act="pick">✏️ Selbst wählen</button></div>`);
       const missing = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
       const toBuy = missing.filter(n => !listed.has(n.toLowerCase()));
-      const thaw = needOf(d, r).map(([w]) => has(items, w)).find(x => x?.frozenAt);
+      const thaw = needOf(d, r).map(([w]) => has(items, w)).find(needsThaw);
       const tomorrowAway = shiftsOn(addDays(d.date, 1)).filter(x => (x.code === 'S' || x.code === 'N') && shiftDay(x.person, addDays(d.date, 1))?.snack);
       return wrap(d, i, restBox, sumOf(d, m.title, `${r.fav ? ' ★' : ''}${toBuy.length ? ` <span class="ds-buy">🛒 ${toBuy.length}</span>` : missing.length ? ' <span class="ds-buy">🛒 ✓</span>' : ''}`), `${head}
         <div class="plan-dinner">
           <div class="tiny">${esc(KINDS[r.kind] ?? '')}${r.method ? ' · ' + esc(r.method) : ''} · ${fmtMin(r.min)}${r.kcal ? ` · ca. ${r.kcal} kcal` : ''}</div>
           ${d.need ? `<div class="tiny plan-changed">✏️ Zutaten für diesen Tag angepasst</div>` : ''}
           ${d.why?.length ? `<div class="tiny plan-why">${d.why.map(w => `<span>✓ ${esc(w)}</span>`).join('')}</div>` : ''}
-          ${thaw ? `<div class="tiny plan-thaw">❄️ ${esc(thaw.name)} am Vorabend in den Kühlschrank legen</div>` : ''}
+          ${thaw ? `<div class="tiny plan-thaw">❄️ ${esc(thaw.name)} am Vorabend in den Kühlschrank legen <button type="button" class="chip" data-act="nothaw" data-w="${esc(thaw.name.toLowerCase())}">Ohne Auftauen</button></div>` : ''}
           ${tomorrowAway.length ? `<div class="tiny plan-thaw">🍱 Vorkochen: ${tomorrowAway.map(x => `${esc(x.person)} hat morgen ${SHIFTS[x.code].label}schicht`).join(', ')}. ${r.tags?.includes('mitnehmen') ? '1 Portion mehr kochen und in die Dose.' : 'Für die Dose eignet sich das Gericht weniger, lieber etwas Kaltes vorbereiten.'}</div>` : ''}
           ${missing.length ? `<div class="tiny muted">Fehlt: ${missing.map(n => listed.has(n.toLowerCase()) ? `${esc(n)} ✓` : esc(n)).join(', ')}</div>` : ''}
           ${missing.length && !toBuy.length ? '<div class="tiny good-tag">🛒 Alles Fehlende steht auf der Einkaufsliste</div>' : ''}
@@ -842,7 +845,10 @@ async function onClick(e) {
   } else if (act === 'skip') {
     d.status = 'uebersprungen';
   } else if (act === 'undo') d.status = 'geplant';
-  else if (act === 'shop') {
+  else if (act === 'nothaw') {
+    const w = b.dataset.w; if (w && !(getSettings().noThaw ?? []).includes(w)) setSetting('noThaw', [...(getSettings().noThaw ?? []), w]);
+    toast(`Merkt sich: „${w}“ wird ohne Auftauen zubereitet. Änderbar unter Einstellungen → Essensplan.`); render(); return;
+  } else if (act === 'shop') {
     const add = needOf(d, r).filter(([w]) => !has(items, w)).map(([, n]) => n);
     const added = add.filter(n => ctx.addShop(n));
     savePlan(p); render();

@@ -1187,6 +1187,13 @@ function renderExcludes() {
     <li><div class="tip-alts">${ex.map(e => `<button type="button" class="chip accepted" data-excl="${esc(e.w)}">${esc(e.label)} ✕</button>`).join('') || '<span class="tiny muted">Nichts ausgeschlossen.</span>'}
       <button type="button" class="chip" id="excl-add">＋ Lebensmittel ausschließen</button></div></li>`;
 }
+function renderNoThaw() {
+  const l = getSettings().noThaw ?? [];
+  return `<li class="set-sub">Ohne Auftauen zubereitet</li>
+    <li class="tiny muted">Für diese Tiefkühlware kommt kein Hinweis „am Vorabend in den Kühlschrank legen“ (Teilwort im Namen genügt).</li>
+    <li><div class="tip-alts">${l.map(w => `<button type="button" class="chip accepted" data-nothaw="${esc(w)}">${esc(w)} ✕</button>`).join('') || '<span class="tiny muted">Nichts eingetragen.</span>'}
+      <button type="button" class="chip" id="nothaw-add">＋ Hinzufügen</button></div></li>`;
+}
 function renderMeds() {
   const m = loadMeds(), el = $('#settings-meds'); if (!el) return;
   if (!m.ack) {
@@ -1311,7 +1318,7 @@ function renderSettings() {
   $('#settings-me').insertAdjacentHTML('afterbegin', `<li class="switch-row"><span class="main">Dein Name<br><small class="muted">Für den Dienstplan, z. B. „Luca“</small></span>
     <button type="button" class="chip" id="me-name">${s.myName ? esc(s.myName) + ' ✎' : 'Eintragen'}</button></li>`);
   renderWeight($('#weight-box'), s.weightOn);
-  $('#settings-plan').insertAdjacentHTML('beforeend', renderExcludes());
+  $('#settings-plan').insertAdjacentHTML('beforeend', renderExcludes() + renderNoThaw());
   renderMeds();
   const pre = showPreset(s);
   $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
@@ -1325,6 +1332,12 @@ function renderSettings() {
 $('#tab-kitchen').addEventListener('click', async e => {
   const ex = e.target.closest('[data-excl]');
   if (ex) { const cur = excludes().find(x => x.w === ex.dataset.excl); toggleExclude(ex.dataset.excl, ex.dataset.exclLabel || cur?.label || ex.dataset.excl, ex.dataset.exclFrom || cur?.from || ''); renderSettings(); return; }
+  const nt = e.target.closest('[data-nothaw]');
+  if (nt) { setSetting('noThaw', (getSettings().noThaw ?? []).filter(w => w !== nt.dataset.nothaw)); renderSettings(); document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key: 'speisekammer.plan' } })); return; }
+  if (e.target.closest('#nothaw-add')) {
+    const t = await askInput('Ohne Auftauen zubereitet', 'z. B. „Gyoza“ oder „Rösti“', ''); const w = t?.toLowerCase().trim(); if (!w) return;
+    const l = getSettings().noThaw ?? []; if (!l.includes(w)) setSetting('noThaw', [...l, w]); renderSettings(); document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key: 'speisekammer.plan' } })); return;
+  }
   if (e.target.closest('#excl-add')) {
     const t = await askInput('Lebensmittel ausschließen', 'z. B. „Pilze“ oder „Grapefruit“', ''); if (!t) return;
     const w = t.toLowerCase().trim(); if (!isExcluded(w)) toggleExclude(w, t.trim(), 'selbst eingetragen'); renderSettings(); return;
@@ -1447,7 +1460,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v68 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v69 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);
