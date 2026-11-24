@@ -3,7 +3,7 @@ import { SUPABASE_URL, VAPID_PUBLIC_KEY } from './config.js';
 import { CATEGORIES, guessCategory, defaultExpiry, freezeExpiry, isoLocal, PACKS, PACK_SOURCE, packExpiry, OPENED_DAYS } from './categories.js';
 import { parseReceipt, ocrImage } from './receipt.js';
 import { getSettings, setSetting, tipsOn, showPreset, applyShowPreset, hasOwnShow, showToHousehold, showReset } from './settings.js';
-import { initShared, HOUSEHOLD_KEYS, MEMBER_KEYS, MERGE_KEYS, mergePlan } from './shared.js';
+import { initShared, HOUSEHOLD_KEYS, MEMBER_KEYS, MERGE_KEYS, mergePlan, canon, BASEK, DIRTY } from './shared.js';
 import { renderWeight, setWeight, weekStart } from './weight.js';
 import { initPlan } from './plan.js';
 import { CARDS, GROUPS, SOURCES as MED_SOURCES, PURPOSE, NOTICE, EMERGENCY, EXCLUDE_NOTE, loadMeds, saveMeds } from './meds.js';
@@ -1187,6 +1187,13 @@ function renderExcludes() {
     <li><div class="tip-alts">${ex.map(e => `<button type="button" class="chip accepted" data-excl="${esc(e.w)}">${esc(e.label)} ✕</button>`).join('') || '<span class="tiny muted">Nichts ausgeschlossen.</span>'}
       <button type="button" class="chip" id="excl-add">＋ Lebensmittel ausschließen</button></div></li>`;
 }
+function renderNoThaw() {
+  const l = getSettings().noThaw ?? [];
+  return `<li class="set-sub">Ohne Auftauen zubereitet</li>
+    <li class="tiny muted">Für diese Tiefkühlware kommt kein Hinweis „am Vorabend in den Kühlschrank legen“ (Teilwort im Namen genügt).</li>
+    <li><div class="tip-alts">${l.map(w => `<button type="button" class="chip accepted" data-nothaw="${esc(w)}">${esc(w)} ✕</button>`).join('') || '<span class="tiny muted">Nichts eingetragen.</span>'}
+      <button type="button" class="chip" id="nothaw-add">＋ Hinzufügen</button></div></li>`;
+}
 function renderMeds() {
   const m = loadMeds(), el = $('#settings-meds'); if (!el) return;
   if (!m.ack) {
@@ -1311,7 +1318,7 @@ function renderSettings() {
   $('#settings-me').insertAdjacentHTML('afterbegin', `<li class="switch-row"><span class="main">Dein Name<br><small class="muted">Für den Dienstplan, z. B. „Luca“</small></span>
     <button type="button" class="chip" id="me-name">${s.myName ? esc(s.myName) + ' ✎' : 'Eintragen'}</button></li>`);
   renderWeight($('#weight-box'), s.weightOn);
-  $('#settings-plan').insertAdjacentHTML('beforeend', renderExcludes());
+  $('#settings-plan').insertAdjacentHTML('beforeend', renderExcludes() + renderNoThaw());
   renderMeds();
   const pre = showPreset(s);
   $('#show-preset').innerHTML = [['minimal', 'Minimal'], ['normal', 'Normal'], ['alles', 'Alles']].map(([v, t]) =>
@@ -1325,6 +1332,12 @@ function renderSettings() {
 $('#tab-kitchen').addEventListener('click', async e => {
   const ex = e.target.closest('[data-excl]');
   if (ex) { const cur = excludes().find(x => x.w === ex.dataset.excl); toggleExclude(ex.dataset.excl, ex.dataset.exclLabel || cur?.label || ex.dataset.excl, ex.dataset.exclFrom || cur?.from || ''); renderSettings(); return; }
+  const nt = e.target.closest('[data-nothaw]');
+  if (nt) { setSetting('noThaw', (getSettings().noThaw ?? []).filter(w => w !== nt.dataset.nothaw)); renderSettings(); document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key: 'speisekammer.plan' } })); return; }
+  if (e.target.closest('#nothaw-add')) {
+    const t = await askInput('Ohne Auftauen zubereitet', 'z. B. „Gyoza“ oder „Rösti“', ''); const w = t?.toLowerCase().trim(); if (!w) return;
+    const l = getSettings().noThaw ?? []; if (!l.includes(w)) setSetting('noThaw', [...l, w]); renderSettings(); document.dispatchEvent(new CustomEvent('shared:changed', { detail: { key: 'speisekammer.plan' } })); return;
+  }
   if (e.target.closest('#excl-add')) {
     const t = await askInput('Lebensmittel ausschließen', 'z. B. „Pilze“ oder „Grapefruit“', ''); if (!t) return;
     const w = t.toLowerCase().trim(); if (!isExcluded(w)) toggleExclude(w, t.trim(), 'selbst eingetragen'); renderSettings(); return;
@@ -1356,41 +1369,57 @@ $('#tab-kitchen').addEventListener('click', async e => {
   setSetting(b.dataset.choice, /^\d+$/.test(v) ? +v : v);
   renderSettings(); renderPantry();
 });
-// Erzwungenes Speichern: schreibt Haushalts- und persönliche Einstellungen direkt zum Server, liest zurück und zeigt, was dort steht
+// Speichern-Knopf: der Serverstand wird vollständig mit dem jetzigen App-Stand überschrieben (Luca 24.11.).
+// Ist der Server seit meinem letzten Abgleich vom anderen Handy verändert worden, wird vorher gewarnt.
+const KEY_NAMES = { 'speisekammer.hhSettings': 'Einstellungen für alle', 'speisekammer.minStock': 'Mindestbestand', 'speisekammer.minPending': 'Mindestbestand (offen)', 'speisekammer.parts': 'Teilmengen', 'speisekammer.recHidden': 'Ausgeblendete Vorschläge',
+  'speisekammer.utensils': 'Utensilien', warnDays: 'Warntage', 'speisekammer.offers': 'Angebote', 'speisekammer.acceptedOffers': 'Angenommene Angebote', 'speisekammer.shopping': 'Einkaufsliste', 'speisekammer.recipes': 'Gerichte', 'speisekammer.plan': 'Essensplan',
+  'speisekammer.shifts': 'Dienstplan', 'speisekammer.shiftConf': 'Schichtzeiten', 'speisekammer.layout': 'Ladenlayout', 'speisekammer.settings': 'Persönliche Einstellungen', 'speisekammer.weight': 'Gewicht' };
 async function saveAllNow(btn, showBudget = false) {
   if (store.mode !== 'supabase') return toast('Ohne Supabase liegt alles nur auf diesem Gerät, es ist gespeichert ✓');
   const old = btn?.textContent; if (btn) { btn.disabled = true; btn.textContent = 'Speichere …'; }
-  const raw = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+  const rd = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+  const live = (key, v) => MERGE_KEYS.includes(key) && Array.isArray(v) ? v.filter(x => !x.del) : v;
+  const nm = k => KEY_NAMES[k] ?? k.replace('speisekammer.', '');
   const bad = [], okKeys = [];
   try {
-    for (const key of [...HOUSEHOLD_KEYS, ...MEMBER_KEYS]) {
-      const local = raw(key); if (local == null) continue;
-      if (MERGE_KEYS.includes(key)) { // Listen: eintragsweise, der neuere Stand gewinnt (Server entscheidet)
-        try {
-          const merged = await store.mergeList(key, Array.isArray(local) ? local : []);
-          const have = new Set((merged ?? []).filter(x => !x.del).map(x => x.id)), miss = (Array.isArray(local) ? local : []).filter(x => !x.del && !have.has(x.id));
-          if (miss.length) bad.push(`${key.replace('speisekammer.', '')}: ${miss.length} Einträge fehlen beim Server`); else okKeys.push(key);
-        } catch (e) { bad.push(`${key.replace('speisekammer.', '')}: ${String(e?.message ?? e).slice(0, 80)}`); }
-        continue;
-      }
+    const keys = [...HOUSEHOLD_KEYS, ...MEMBER_KEYS].filter(k => rd(k) != null);
+    // 1) Wo hat der Server Änderungen, die ich nicht kenne (z. B. vom anderen Handy)?
+    const server = {}, conflicts = [];
+    for (const key of HOUSEHOLD_KEYS) {
+      if (rd(key) == null) continue;
       try {
-        let send;
-        if (MEMBER_KEYS.includes(key)) { const { health, ...rest } = local; send = rest; await store.setMine(key, send); }
-        else {
-          const theirs = await store.getShared(key);
-          send = key === 'speisekammer.plan' ? mergePlan(null, local, theirs ?? local) : (theirs && typeof theirs === 'object' && !Array.isArray(theirs) && typeof local === 'object' && !Array.isArray(local) ? { ...theirs, ...local } : local);
-          await store.setShared(key, send);
-        }
+        server[key] = await store.getShared(key);
+        const base = rd(BASEK + key), srv = live(key, server[key]);
+        if (srv != null && base != null && canon(srv) !== canon(base) && canon(srv) !== canon(rd(key))) conflicts.push(key);
+      } catch (e) { bad.push(`${nm(key)}: ${String(e?.message ?? e).slice(0, 60)}`); }
+    }
+    let mode = 'over';
+    if (conflicts.length) {
+      mode = await ask('Das andere Handy hat Neueres gespeichert', `Beim Server liegen Änderungen, die dieses Handy noch nicht kennt:<ul class="plan-diff">${conflicts.map(k => `<li>${esc(nm(k))}</li>`).join('')}</ul><p class="tiny muted">„Überschreiben" setzt den Server genau auf den Stand dieses Handys, Änderungen des anderen Handys in diesen Bereichen gehen verloren. „Zusammenführen" behält beides, soweit möglich.</p>`,
+        [{ value: 'over', label: 'Mit meinem Stand überschreiben', cls: 'danger' }, { value: 'merge', label: 'Zusammenführen' }, { value: '', label: 'Abbrechen' }]);
+      if (!mode) return;
+    }
+    // 2) Schreiben: Überschreiben = Server bekommt exakt meinen Stand, Zusammenführen = bisheriges Verfahren
+    for (const key of keys) {
+      const local = rd(key); let sent = local;
+      try {
+        if (MEMBER_KEYS.includes(key)) { if (local && typeof local === 'object' && !Array.isArray(local)) { const { health, ...rest } = local; sent = rest; } await store.setMine(key, sent); }
+        else if (mode === 'over') { sent = live(key, local); await store.setShared(key, sent); }
+        else if (MERGE_KEYS.includes(key)) { await store.mergeList(key, Array.isArray(local) ? local : []); sent = null; }
+        else { const theirs = server[key] ?? await store.getShared(key);
+          sent = key === 'speisekammer.plan' ? mergePlan(null, local, theirs ?? local) : (theirs && typeof theirs === 'object' && !Array.isArray(theirs) && typeof local === 'object' && !Array.isArray(local) ? { ...theirs, ...local } : local);
+          await store.setShared(key, sent); }
+        // 3) Zurücklesen und vergleichen
         const back = MEMBER_KEYS.includes(key) ? (await store.listMine()).find(r => r.key === key)?.value : await store.getShared(key);
-        const want = key === 'speisekammer.hhSettings' ? ['budget', 'budgetWarnPct'] : [];
-        const wrong = want.filter(f => JSON.stringify(back?.[f]) !== JSON.stringify(send?.[f]));
-        if (wrong.length || back == null) bad.push(`${key.replace('speisekammer.', '')}: Server hat ${wrong.length ? wrong.map(f => `${f} = ${JSON.stringify(back?.[f])}`).join(', ') : 'nichts'}`);
-        else okKeys.push(key);
-      } catch (e) { bad.push(`${key.replace('speisekammer.', '')}: ${String(e?.message ?? e).slice(0, 80)}`); }
+        if (sent != null && canon(live(key, back)) !== canon(live(key, sent))) { bad.push(`${nm(key)}: Server hat etwas anderes`); continue; }
+        localStorage.setItem(BASEK + key, JSON.stringify(live(key, back ?? sent)));
+        localStorage.removeItem(DIRTY + key);
+        okKeys.push(key);
+      } catch (e) { bad.push(`${nm(key)}: ${String(e?.message ?? e).slice(0, 60)}`); }
     }
     const hh = await store.getShared('speisekammer.hhSettings');
     if (bad.length) toast(`⚠️ Nicht alles gespeichert: ${bad.join(' | ')}`, 9000);
-    else toast(showBudget ? `✓ Gespeichert. Server: Budget ${hh?.budget > 0 ? hh.budget + ' €' : 'aus'}, Warnen ab ${hh?.budgetWarnPct ?? 80} %` : `✓ Alles gespeichert (${okKeys.length} Bereiche)`, 3500);
+    else toast(showBudget ? `✓ Gespeichert. Server: Budget ${hh?.budget > 0 ? hh.budget + ' €' : 'aus'}, Warnen ab ${hh?.budgetWarnPct ?? 80} %` : `✓ Alles gespeichert (${okKeys.length} Bereiche, Server = dieser Stand${mode === 'merge' ? ', zusammengeführt' : ''}). Vorrat und Bons liegen immer direkt in der Datenbank.`, 5000);
   } finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-save-all]'); if (b) saveAllNow(b, !!b.closest('#settings-budget')); });
@@ -1431,7 +1460,7 @@ function showDebug() {
   const el = $('#app-version'); if (!el) return;
   const g = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return localStorage.getItem(k); } };
   const d = g('speisekammer.dbg'), d2 = g('speisekammer.dbg2'), d3 = g('speisekammer.dbg3'), t = s => s ? String(s).slice(11, 19) : '–';
-  el.textContent = `Version v66 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
+  el.textContent = `Version v69 · Start ${t(d?.at)}: ${d?.diff?.length ? 'Server überschrieb ' + d.diff.join('; ') : 'nichts überschrieben'} · zuletzt gesendet ${t(d2?.at)} (${d2?.key?.replace('speisekammer.', '') ?? '–'}) · beim Server angekommen ${t(d3)}`;
 }
 document.addEventListener('shared:saved', showDebug); document.addEventListener('shared:error', e => { const el = $('#app-version'); if (el) el.textContent = 'Speicherfehler: ' + e.detail.message; });
 setTimeout(showDebug, 3000);

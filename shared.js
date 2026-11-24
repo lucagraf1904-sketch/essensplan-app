@@ -25,11 +25,11 @@ const keepLocal = (key, v, cur) => { const f = LOCAL_ONLY[key]; if (!f || !cur |
 const kind = k => HOUSEHOLD_KEYS.includes(k) ? 'hh' : MEMBER_KEYS.includes(k) ? 'me' : null;
 const parse = v => { try { return JSON.parse(v); } catch { return v; } };
 
-const DIRTY = 'speisekammer.dirty.', BASEK = 'speisekammer.base.'; // BASEK: zuletzt bekannter Serverstand (Grundlage für den Abgleich)
+export const DIRTY = 'speisekammer.dirty.', BASEK = 'speisekammer.base.'; // BASEK: zuletzt bekannter Serverstand (Grundlage für den Abgleich)
 // Dreiwege-Zusammenführung: base = zuletzt bekannter Stand, mine = meine neue Fassung, theirs = Stand auf dem Server.
 // Was ich nicht geändert habe, kommt vom Server; was ich geändert habe, von mir (bei Objekten bis in die Tiefe).
 // Schlüsselreihenfolge ignorieren: jsonb in der Datenbank sortiert die Schlüssel um, sonst wird das eigene Echo nicht erkannt
-const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(y => [y, x[y]])) : x);
+export const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(y => [y, x[y]])) : x);
 const same = (a, b) => canon(a) === canon(b);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
 export function merge3(base, mine, theirs) {
@@ -68,6 +68,7 @@ export async function initShared(store, onChange) {
   for (const { key, value } of [...hh.filter(r => kind(r.key) === 'hh'), ...me.filter(r => kind(r.key) === 'me')]) {
     have.add(key);
     if (rawGet(DIRTY + key) && rawGet(key) != null && !MERGE_KEYS.includes(key)) { push(key, parse(rawGet(key)), parse(rawGet(BASEK + key))).catch(e => console.warn('Abgleich', key, e)); continue; } // lokaler Stand war noch nicht hochgeladen (Grundlage: zuletzt bekannter Serverstand, damit nur echte Änderungen überschreiben)
+    raw(BASEK + key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : value)); // zuletzt bekannter Serverstand
     if (key === 'speisekammer.settings') { // Diagnose: was hat der Server beim Start überschrieben?
       const loc = parse(rawGet(key)) ?? {}, diff = Object.keys({ ...loc, ...value }).filter(k => k !== 'health' && JSON.stringify(loc[k]) !== JSON.stringify(value[k]));
       raw('speisekammer.dbg', JSON.stringify({ at: new Date().toISOString(), diff: diff.map(k => `${k}: lokal ${JSON.stringify(loc[k])} → Server ${JSON.stringify(value[k])}`).slice(0, 6) }));
@@ -150,7 +151,7 @@ export async function initShared(store, onChange) {
     let merged;
     try { merged = await store.mergeList(key, changed); } catch (e) { document.dispatchEvent(new CustomEvent('shared:error', { detail: { key, message: e?.message ?? String(e) } })); throw e; }
     document.dispatchEvent(new CustomEvent('shared:saved', { detail: { key } }));
-    raw(key, JSON.stringify(merged.filter(x => !x.del)));
+    raw(key, JSON.stringify(merged.filter(x => !x.del))); raw(BASEK + key, JSON.stringify(merged.filter(x => !x.del)));
     onChange?.(key);
   }
 
@@ -175,7 +176,7 @@ export async function initShared(store, onChange) {
     const locPlan = key === 'speisekammer.plan' ? parse(rawGet(key)) : null;
     const v = JSON.stringify(locPlan?.days && value?.days ? mergePlan(null, locPlan, value) : MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : keepLocal(key, value, parse(rawGet(key))));
     if (rawGet(key) === v) return;
-    if (kind(key) === 'hh' && !MERGE_KEYS.includes(key)) { bases.set(key, value); raw(BASEK + key, JSON.stringify(value)); } // jetzt bekannter Serverstand
+    if (kind(key) === 'hh') { if (!MERGE_KEYS.includes(key)) bases.set(key, value); raw(BASEK + key, JSON.stringify(MERGE_KEYS.includes(key) ? value.filter(x => !x.del) : value)); } // jetzt bekannter Serverstand
     raw(key, v); onChange?.(key);
   });
 }
