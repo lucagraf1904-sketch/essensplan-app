@@ -25,13 +25,13 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - **Spartöpfe:** Stand = Startbetrag + Einzahlungen − Entnahmen. Geld kommt über eine monatliche Sparrate (wird wie Fixkosten automatisch gebucht) und den Monatsrest: Nach Monatsende fragt die App, in welchen Topf der Rest soll, oder legt ihn automatisch in den Topf mit „Monatsrest automatisch“. Gefragt wird nur für Monate mit mindestens 5 eigenen Buchungen und Einnahmen. Sparen mindert „Noch frei“, ist aber keine Ausgabe. Ein Topf mit Buchungen lässt sich nur auflösen, nicht löschen.
 - **Einkäufe aus der Speisekammer:** Bons, die in der Speisekammer erfasst werden, erscheinen in der Übersicht als Vorschlag (ab Einführung, höchstens 45 Tage zurück). Putzmittel („Haushalt“) wird als Drogerie & Haushalt gebucht, Getränke und Pfand als Getränke, alles andere als Supermarkt. Gibt es am selben Tag schon eine ähnliche Lebensmittel-Buchung, fragt die App nach, ob es derselbe Einkauf ist. Die Speisekammer selbst merkt davon nichts.
 
-## Update: Personen, Konten, Freigaben und Bargeld (Version 3 und 4)
+## Update: Personen, Konten, Freigaben und Bargeld (Version 3 und 4; Bargeld seit Version 9 entfernt)
 `supabase/budget.sql` **noch einmal** ausführen (wiederholbar, bestehende Daten bleiben und gelten als gemeinsam).
 - **Privat oder gemeinsam:** Jeder Eintrag gehört dem Haushalt oder einer Person (🔒). Was eine Person privat anlegt, sieht die andere nur nach Freigabe: Einstellungen → Freigabe, je Bereich „Nichts“, „Nur Summen“ oder „Alles“. Die Datenbank setzt das durch (Row Level Security), auch für Policen-Dateien. Freigegebenes kann angesehen, aber nur vom Besitzer geändert werden.
 - **Konten:** Jede Person bekommt automatisch ein eigenes Konto, bei mehreren Personen entsteht ein Gemeinschaftskonto. Weitere unter Einstellungen → Konten. „Bezahlt von“ steht an jeder Buchung, die Fixkosten zeigen die Abbuchungen je Konto. Es wird kein Ausgleich zwischen Personen gerechnet.
 - **Ansicht:** Oben „Alles · Gemeinsam · Nur ich · Partner“ (nur bei mehreren Personen).
 - **Monatsrest:** bei mehreren Personen getrennt: gemeinsamer Rest in einen gemeinsamen Topf, eigener Rest in einen eigenen Topf.
-- **Bargeld-Umschläge:** in der Übersicht unter „Bargeld“. Jeder Umschlag hat einen Monatsbetrag und eine Kategorie. Die Summe ist der Betrag zum Abheben. Bis zum Tipp auf „Abgehoben“ zählt er wie offene Fixkosten, danach wird je Umschlag eine Ausgabe gebucht. Restgeld wird nicht mitgeführt.
+- *(Seit Version 9 entfernt)* **Bargeld-Umschläge:** in der Übersicht unter „Bargeld“. Jeder Umschlag hat einen Monatsbetrag und eine Kategorie. Die Summe ist der Betrag zum Abheben. Bis zum Tipp auf „Abgehoben“ zählt er wie offene Fixkosten, danach wird je Umschlag eine Ausgabe gebucht. Restgeld wird nicht mitgeführt.
 
 ## Update: ETFs (Version 5)
 `supabase/budget.sql` noch einmal ausführen. In der Übersicht unter „ETFs“: Name, optional ISIN (wird auf Prüfziffer geprüft), monatlicher Sparplan mit Ausführungstag und Konto, was schon eingezahlt ist, und der aktuelle Depotwert.
@@ -47,20 +47,29 @@ Wer in der Speisekammer angemeldet ist, ist es hier auch (gleiche Adresse, gleic
 - **Fragen:** z. B. „Wie viele Urlaubstage habe ich?“, „Wie lang ist die Kündigungsfrist?“, „Darf ich Haustiere halten?“.
 - **Empfohlen:** Edge Function `ai` noch einmal mit dem aktuellen `supabase/functions/ai/index.ts` deployen. Der Prompt ist jetzt auf Verträge allgemein ausgelegt und weist auf gesetzliche Mindestregeln hin (z. B. Mindesturlaub). Ohne Update funktioniert es auch, die KI denkt dann aber „Versicherung“.
 
-## Update: Rücklage-Umschläge für Fixkosten (Version 7)
+## Update: Rücklage-Umschläge für Fixkosten (Version 7, seit Version 9 ersetzt)
 `supabase/budget.sql` noch einmal ausführen. Bei jeder Fixkosten-Position und jedem Vertrag gibt es „Aus Bargeld-Umschlag bezahlen“.
 - Wählst du einen Umschlag (oder „+ Neuer Umschlag „Rücklagen““), wird er zur **Rücklage**: Den Monatsbetrag legst du selbst fest, „Abgehoben“ bucht ihn als zurückgelegt (mindert „Noch frei“, keine Ausgabe), das Geld bleibt im Umschlag.
 - Am Zahltag bucht die App die Fixkosten wie bisher als Ausgabe und nimmt den gleichen Betrag automatisch aus dem Umschlag. „Noch frei“ wird dadurch nicht noch einmal belastet.
 - Der Umschlag zeigt, wie viel drin ist, welche Fixkosten daraus bezahlt werden und ob das Geld bis zur nächsten Fälligkeit reicht (Annahme: Abheben jeweils zu Monatsbeginn).
 - Normale Umschläge (ohne Fixkosten) verfallen weiter jeden Monat.
 
-## Update: Umschläge einstellbar (Version 8)
+## Update: Umschläge einstellbar (Version 8, seit Version 9 ersetzt)
 `supabase/budget.sql` noch einmal ausführen. Im Umschlag (Übersicht → Bargeld → Umschlag antippen):
 - **Betrag je Abhebung** und **Rhythmus** (monatlich, vierteljährlich, halbjährlich, jährlich) ab einem **Startmonat**.
 - **Abhebetag**: ab diesem Tag erscheint in der Übersicht „Bargeld abheben“. Knopf „Erinnerung in den Kalender eintragen“ legt einen wiederkehrenden Termin mit Erinnerung im Handy-Kalender an (.ics-Datei; auf dem iPhone „Zum Kalender hinzufügen“ antippen).
 - **Einzelne Abhebungen anpassen**: für die nächsten Termine einen anderen Betrag eintragen (leer = normaler Betrag).
 - **Fixkosten per Häkchen** wählen, mit Vorschlag für den Betrag je Abhebung. Es sind nur Fixkosten mit gleichem Besitzer wählbar (beide gemeinsam oder beide privat).
 - **Stand anpassen** (Rücklagen): dazulegen, entnehmen oder den aktuellen Inhalt direkt eintragen (die Differenz wird als Korrektur gebucht).
+
+## Update: Fixkosten aus einem Spartopf bezahlen (Version 9, ersetzt die Bargeld-Umschläge)
+Läuft mit der Automatik von selbst (sonst `supabase/budget.sql` noch einmal ausführen).
+- **Bezahlt aus:** Bei jeder Fixkosten-Position und jedem Vertrag „Vom Konto (normal)“ oder einen Spartopf wählen. „+ Neuer Spartopf „Rücklagen““ legt einen Topf mit monatlicher Sparrate an (Vorschlag aus den Fixkosten).
+- **Was vom Konto abgeht:** Für Fixkosten aus einem Topf nichts. Vom Konto geht nur die **Sparrate des Topfs** ab, so oft wie im Topf eingestellt: monatlich, vierteljährlich, halbjährlich oder jährlich. Die Übersicht „Abbuchungen je Konto“ zählt deshalb nur die Sparrate.
+- **Am Zahltag** bucht die App die Fixkosten als Ausgabe ihrer Kategorie (Statistik und Budget zählen sie mit) und nimmt den gleichen Betrag aus dem Topf. „Noch frei“ wird dadurch nicht noch einmal belastet, das hat schon die Sparrate getan.
+- **Im Topf:** Sparrate, Rhythmus und Datum einstellen, Fixkosten per Häkchen zuordnen (nur gleicher Besitzer: beide gemeinsam oder beide privat), Vorschlag für die Sparrate im gewählten Rhythmus, und ob das Geld für die nächsten 12 Monate reicht.
+- **Topf auflösen:** Die zugeordneten Fixkosten gehen danach wieder vom Konto ab.
+- **Umstellung:** Rücklage-Umschläge wurden automatisch zu Spartöpfen mit gleichem Namen und Inhalt. Ihre Fixkosten werden daraus bezahlt. Der Abhebe-Betrag wurde zur Sparrate im gleichen Rhythmus, ab der nächsten noch nicht abgehobenen Abhebung und vom zuletzt genutzten Konto. Einzelne abweichende Beträge wurden nicht übernommen. Normale Umschläge sind entfallen, ihre bisherigen Buchungen bleiben.
 
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
@@ -83,4 +92,5 @@ Antworten des Chats sind ohne Gewähr und keine Rechtsberatung. Die App zeigt zu
 node --test tests/budget/*.test.mjs     # Rechenlogik und Policen-Suche
 node tests/budget/e2e.mjs [ordner]      # Oberfläche im Demo-Modus (Playwright), optional mit Screenshots
 bash tests/budget/sql.sh                # Schema gegen lokalen Postgres (Zugriffsregeln, automatisches Buchen)
+bash tests/budget/sql-migrate.sh        # Umstellung Version 8 → 9 (Umschläge → Spartöpfe)
 ```

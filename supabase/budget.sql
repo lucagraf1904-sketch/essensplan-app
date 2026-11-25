@@ -114,7 +114,8 @@ create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is no
 -- den aktuellen Depotwert trägt man selbst ein (market_value, Stand market_value_at). Keine Kursabfrage.
 alter table budget_pots add column if not exists kind text not null default 'pot';
 alter table budget_pots drop constraint if exists budget_pots_kind_check;
-alter table budget_pots add constraint budget_pots_kind_check check (kind in ('pot', 'etf', 'reserve'));  -- reserve: Geld in einem Bargeld-Umschlag mit Fixkosten (Version 7)
+update budget_pots set kind = 'pot' where kind = 'reserve';  -- Version 9: Rücklagen der früheren Bargeld-Umschläge sind normale Spartöpfe
+alter table budget_pots add constraint budget_pots_kind_check check (kind in ('pot', 'etf'));
 alter table budget_pots add column if not exists isin text check (isin is null or isin ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$');
 alter table budget_pots add column if not exists market_value numeric(14,2) check (market_value is null or market_value >= 0);
 alter table budget_pots add column if not exists market_value_at date;
@@ -168,45 +169,13 @@ $$;
 create or replace function budget_can_write(p_owner uuid) returns boolean
 language sql stable set search_path = public as $$ select p_owner is null or p_owner = auth.uid() $$;
 
--- ---------- Bargeld-Umschläge (Version 4) ----------
--- Jeder Umschlag bekommt monatlich seinen Betrag. Die Summe zeigt, wie viel Bargeld abzuheben ist.
--- „Abgehoben“ bucht je Umschlag eine Ausgabe (source 'cash', ext_ref 'cash:<Monat>:<Umschlag>'). Restgeld wird nicht mitgeführt.
-create table if not exists budget_cash (
-  id uuid primary key default gen_random_uuid(),
-  household_id uuid not null references households(id) on delete cascade,
-  name text not null,
-  icon text not null default '💶',
-  amount numeric(12,2) not null check (amount > 0),
-  category text not null default 'sonstiges',
-  owner uuid references auth.users(id) on delete cascade,   -- null = gemeinsam
-  active boolean not null default true,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-create index if not exists budget_cash_household on budget_cash(household_id);
--- Version 7: Rücklage-Umschläge. Ein Umschlag mit zugeordneten Fixkosten sammelt sein Geld in einem verdeckten Topf (kind 'reserve'):
--- Abheben = Einzahlung in diesen Topf, Fälligkeit der Fixkosten = Ausgabe wie bisher + Entnahme aus dem Topf (bucht budget_book_due).
-alter table budget_cash add column if not exists pot_id uuid references budget_pots(id) on delete set null;
-alter table budget_recurring add column if not exists cash_id uuid references budget_cash(id) on delete set null;
--- Version 8: Umschlag einstellbar. Rhythmus (wie oft abheben), ab welchem Monat, Abhebetag, abweichende Beträge einzelner Abhebungen.
-alter table budget_cash add column if not exists freq text not null default 'monthly';
-alter table budget_cash drop constraint if exists budget_cash_freq_check;
-alter table budget_cash add constraint budget_cash_freq_check check (freq in ('monthly', 'quarterly', 'halfyearly', 'yearly'));
-alter table budget_cash add column if not exists start_month text;
-alter table budget_cash drop constraint if exists budget_cash_start_month_check;
-alter table budget_cash add constraint budget_cash_start_month_check check (start_month is null or start_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
-alter table budget_cash add column if not exists withdraw_day int check (withdraw_day is null or withdraw_day between 1 and 28);
-alter table budget_cash add column if not exists overrides jsonb not null default '{}'::jsonb;  -- {"2026-12": 80.00}
--- Ist ein Umschlag im Monat p_month (YYYY-MM) dran, und mit welchem Betrag?
-create or replace function budget_cash_due(c budget_cash, p_month text) returns numeric
-language sql immutable set search_path = public as $$
-  select case when c.freq = 'monthly' and c.start_month is null then coalesce((c.overrides->>p_month)::numeric, c.amount)
-              when c.start_month is null or p_month < c.start_month then case when c.start_month is null then coalesce((c.overrides->>p_month)::numeric, c.amount) else 0 end
-              when mod((substr(p_month, 1, 4)::int * 12 + substr(p_month, 6, 2)::int) - (substr(c.start_month, 1, 4)::int * 12 + substr(c.start_month, 6, 2)::int),
-                       case c.freq when 'monthly' then 1 when 'quarterly' then 3 when 'halfyearly' then 6 else 12 end) = 0
-                then coalesce((c.overrides->>p_month)::numeric, c.amount)
-              else 0 end
-$$;
+-- ---------- Fixkosten aus einem Spartopf bezahlen (Version 9, ersetzt die Bargeld-Umschläge der Versionen 4, 7 und 8) ----------
+-- pay_pot_id: Die Fixkosten gehen nicht vom Konto ab, sondern werden aus diesem Topf bezahlt. Am Zahltag bucht budget_book_due
+-- die Ausgabe (ohne Konto) und nimmt den gleichen Betrag aus dem Topf. Vom Konto geht nur die Sparrate des Topfs ab, so oft wie dort eingestellt.
+alter table budget_recurring add column if not exists pay_pot_id uuid references budget_pots(id) on delete set null;
+alter table budget_recurring drop constraint if exists budget_recurring_pay_pot_check;
+alter table budget_recurring add constraint budget_recurring_pay_pot_check check (pay_pot_id is null or kind = 'expense');
+create index if not exists budget_recurring_pay_pot on budget_recurring(pay_pot_id) where pay_pot_id is not null;
 
 -- ---------- Zugriff nur im eigenen Haushalt ----------
 alter table budget_policies  enable row level security;
@@ -237,13 +206,6 @@ create policy budget_recurring_read on budget_recurring for select using (househ
 create policy budget_pots_read on budget_pots for select using (household_id = my_household() and budget_can_see(owner, 'pots'));
 -- Version 6: Versicherungen (Kategorie vers-*) und andere Verträge (Arbeit, Miete …) haben getrennte Freigaben
 create policy budget_policies_read on budget_policies for select using (household_id = my_household() and budget_can_see(owner, case when category like 'vers-%' then 'policies' else 'contracts' end));
--- Bargeld-Umschläge: Sichtbarkeit wie Fixkosten (geplantes Monatsgeld)
-alter table budget_cash enable row level security;
-drop policy if exists budget_cash_read on budget_cash;
--- Gleicher Bereich wie die Buchungen beim Abheben ('tx'): wer den Umschlag sieht, sieht auch, ob er abgehoben ist
-create policy budget_cash_read on budget_cash for select using (household_id = my_household() and budget_can_see(owner, 'tx'));
-drop policy if exists budget_cash_write on budget_cash;
-create policy budget_cash_write on budget_cash for all using (household_id = my_household() and budget_can_write(owner)) with check (household_id = my_household() and budget_can_write(owner));
 drop policy if exists budget_members_read on budget_members;
 create policy budget_members_read on budget_members for select using (household_id = my_household());
 drop policy if exists budget_members_write on budget_members;
@@ -265,8 +227,10 @@ begin
     raise exception 'Spartopf gehört nicht zu diesem Haushalt';
   end if;
   if tg_table_name = 'budget_recurring' then
-    if new.cash_id is not null and not exists (select 1 from budget_cash where id = new.cash_id and household_id = new.household_id) then
-      raise exception 'Umschlag gehört nicht zu diesem Haushalt';
+    -- Bezahlt aus Spartopf: gleicher Haushalt, gleicher Besitzer, normaler Topf (kein ETF), nicht aufgelöst
+    if new.pay_pot_id is not null and not exists (select 1 from budget_pots where id = new.pay_pot_id and household_id = new.household_id
+        and kind = 'pot' and not archived and owner is not distinct from new.owner) then
+      raise exception 'Spartopf passt nicht: Fixkosten und Topf müssen beide gemeinsam oder beide privat sein (kein ETF, nicht aufgelöst)';
     end if;
   end if;
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.account_id is not null
@@ -299,7 +263,7 @@ create trigger budget_recurring_links before insert or update on budget_recurrin
 create or replace function budget_pot_owner_lock() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if new.owner is distinct from old.owner and (exists (select 1 from budget_tx where pot_id = old.id) or exists (select 1 from budget_recurring where pot_id = old.id)) then
+  if new.owner is distinct from old.owner and (exists (select 1 from budget_tx where pot_id = old.id) or exists (select 1 from budget_recurring where pot_id = old.id or pay_pot_id = old.id)) then
     raise exception 'Ein Spartopf mit Buchungen kann nicht zwischen privat und gemeinsam wechseln.';
   end if;
   return new;
@@ -307,29 +271,59 @@ end $$;
 drop trigger if exists budget_pots_owner_lock on budget_pots;
 create trigger budget_pots_owner_lock before update on budget_pots for each row execute function budget_pot_owner_lock();
 
-drop trigger if exists budget_cash_touch on budget_cash;
-create or replace function budget_touch() returns trigger language plpgsql set search_path = public as $$
-begin new.updated_at := now(); return new; end $$;
-create trigger budget_cash_touch before insert or update on budget_cash for each row execute function budget_touch();
-create or replace function budget_cash_links() returns trigger
+-- Topf aufgelöst: Fixkosten, die daraus bezahlt wurden, gehen wieder vom Konto ab (auch private anderer Personen, die man selbst nicht ändern darf)
+create or replace function budget_pot_unlink() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if new.pot_id is not null and not exists (select 1 from budget_pots where id = new.pot_id and household_id = new.household_id and owner is not distinct from new.owner) then
-    raise exception 'Umschlag und Rücklage müssen zum selben Haushalt und Besitzer gehören';
-  end if;
+  if new.archived and not old.archived then update budget_recurring set pay_pot_id = null where pay_pot_id = new.id and household_id = new.household_id; end if;
   return new;
 end $$;
-drop trigger if exists budget_cash_links on budget_cash;
-create trigger budget_cash_links before insert or update on budget_cash for each row execute function budget_cash_links();
--- Umschlag deaktiviert: alle Fixkosten lösen (auch private anderer Personen, die man selbst nicht ändern darf)
-create or replace function budget_cash_unlink() returns trigger
-language plpgsql security definer set search_path = public as $$
+drop trigger if exists budget_pots_unlink on budget_pots;
+create trigger budget_pots_unlink after update on budget_pots for each row execute function budget_pot_unlink();
+
+-- ---------- Umstellung Version 8 → 9: Bargeld-Umschläge entfernen ----------
+-- Rücklage-Umschläge (mit Fixkosten) werden zu Spartöpfen mit gleichem Namen und Inhalt: Die Fixkosten werden daraus bezahlt,
+-- der Abhebe-Betrag wird zur Sparrate im gleichen Rhythmus (ab der nächsten noch nicht abgehobenen Abhebung, vom zuletzt genutzten Konto).
+-- Normale Umschläge entfallen, ihre bisherigen Buchungen bleiben. Läuft nur, solange es die Tabelle budget_cash noch gibt.
+do $$
+declare c record; p record; step int; i int; mk text; d date; acc uuid; dd int; diff int;
+  today date := (now() at time zone 'Europe/Berlin')::date;
 begin
-  if not new.active and old.active then update budget_recurring set cash_id = null where cash_id = new.id and household_id = new.household_id; end if;
-  return new;
+  if to_regclass('public.budget_cash') is null then return; end if;
+  for c in execute 'select * from budget_cash where pot_id is not null and active order by created_at' loop
+    select * into p from budget_pots where id = c.pot_id and household_id = c.household_id and not archived;
+    if not found then continue; end if;
+    update budget_pots set kind = 'pot', name = c.name, icon = c.icon where id = p.id;
+    execute 'update budget_recurring set pay_pot_id = $1 where cash_id = $2 and kind = ''expense'' and owner is not distinct from $3' using p.id, c.id, p.owner;
+    execute 'select count(*) from budget_recurring where cash_id = $1 and pay_pot_id is distinct from $2' into i using c.id, p.id;
+    if i > 0 then raise notice 'Umschlag %: % Fixkosten mit anderem Besitzer werden wieder vom Konto bezahlt', c.id, i; end if;
+    if exists (select 1 from budget_recurring where pot_id = p.id and kind = 'save' and active) then continue; end if;
+    step := case c.freq when 'quarterly' then 3 when 'halfyearly' then 6 when 'yearly' then 12 else 1 end;
+    dd := least(coalesce(c.withdraw_day, 1), 28); d := null;
+    for i in 0..24 loop
+      mk := to_char(date_trunc('month', today) + make_interval(months => i), 'YYYY-MM');
+      if c.start_month is not null then
+        if mk < c.start_month then continue; end if;
+        diff := (substr(mk, 1, 4)::int * 12 + substr(mk, 6, 2)::int) - (substr(c.start_month, 1, 4)::int * 12 + substr(c.start_month, 6, 2)::int);
+        if mod(diff, step) <> 0 then continue; end if;
+      end if;
+      -- in diesem Monat schon abgehoben: erst die nächste Abhebung wird Sparrate
+      if i = 0 and exists (select 1 from budget_tx where household_id = c.household_id and ext_ref = 'cash:' || mk || ':' || c.id::text) then continue; end if;
+      d := greatest(to_date(mk || '-' || lpad(dd::text, 2, '0'), 'YYYY-MM-DD'), today);
+      exit;
+    end loop;
+    if d is null then continue; end if;
+    acc := null;
+    select account_id into acc from budget_tx where pot_id = p.id and source = 'cash' and account_id is not null order by date desc, created_at desc limit 1;
+    insert into budget_recurring(household_id, name, amount, kind, category, freq, start_date, next_due, n, pot_id, owner, account_id)
+      values (c.household_id, 'Sparrate ' || c.name, c.amount, 'save', 'fi-sparen', c.freq, d, d, 0, p.id, p.owner, acc);
+  end loop;
 end $$;
-drop trigger if exists budget_cash_unlink on budget_cash;
-create trigger budget_cash_unlink after update on budget_cash for each row execute function budget_cash_unlink();
+alter table budget_recurring drop column if exists cash_id;
+drop table if exists budget_cash cascade;   -- entfernt auch budget_cash_due
+drop function if exists budget_cash_links();
+drop function if exists budget_cash_unlink();
+drop function if exists budget_touch();
 
 -- ---------- Fixkosten automatisch buchen ----------
 -- Monatsende wird abgefangen: Start 31.01. → 28./29.02. → 31.03. (Postgres rechnet date + interval so).
@@ -352,7 +346,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   r budget_recurring;
   today date := (now() at time zone 'Europe/Berlin')::date;
-  d date; k int; guard int; cnt int := 0; hh uuid := my_household(); cp uuid; co uuid;
+  d date; k int; guard int; cnt int := 0; hh uuid := my_household(); pp budget_pots;
 begin
   if hh is null then raise exception 'Kein Haushalt'; end if;
   for r in select * from budget_recurring where household_id = hh and active and next_due <= today for update skip locked loop
@@ -360,20 +354,19 @@ begin
     begin
       d := r.next_due; k := r.n; guard := 0;
       while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
+        -- Aus Spartopf bezahlt: nicht vom Konto (account_id leer)
         insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id)
-          values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, r.account_id)
+          values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, case when r.pay_pot_id is null then r.account_id end)
           on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
         -- nur mitzählen, was die aufrufende Person sehen darf (sonst verrät die Zahl private Buchungen anderer)
         if found then
           if r.owner is null or r.owner = auth.uid() then cnt := cnt + 1; end if;
-          -- Aus Rücklage-Umschlag bezahlt: gleichen Betrag aus dem Umschlag-Topf nehmen (zählt dann nicht noch einmal gegen „Noch frei“)
-          if r.cash_id is not null and r.kind = 'expense' then
-            cp := null; co := null;
-            select c.pot_id, p.owner into cp, co from budget_cash c join budget_pots p on p.id = c.pot_id
-             where c.id = r.cash_id and c.household_id = hh and c.active and p.household_id = hh and not p.archived;
-            if cp is not null then
+          -- Aus Spartopf bezahlt: gleichen Betrag aus dem Topf nehmen (zählt dann nicht noch einmal gegen „Noch frei“)
+          if r.pay_pot_id is not null and r.kind = 'expense' then
+            select * into pp from budget_pots where id = r.pay_pot_id and household_id = hh and not archived;
+            if found then
               insert into budget_tx(household_id, date, amount, kind, category, note, source, pot_id, owner, ext_ref)
-                values (hh, d, r.amount, 'unsave', 'fi-sparen', 'Aus Umschlag: ' || r.name, 'recurring', cp, co, 'cover:' || r.id::text || ':' || d::text)
+                values (hh, d, r.amount, 'unsave', 'fi-sparen', 'Bezahlt: ' || r.name, 'recurring', pp.id, pp.owner, 'cover:' || r.id::text || ':' || d::text)
                 on conflict on constraint budget_tx_ext_ref do nothing;
             end if;
           end if;
@@ -433,20 +426,14 @@ language sql stable security definer set search_path = public as $$
   select r.owner, 'fixed', null, r.kind, null,
          sum(r.amount * case r.freq when 'weekly' then 52.0 / 12 when 'monthly' then 1 when 'quarterly' then 1.0 / 3 when 'halfyearly' then 1.0 / 6 else 1.0 / 12 end)
     from budget_recurring r join m on m.user_id = r.owner
-   where r.household_id = my_household() and r.active and r.pot_id is null and m.share->>'fixed' = 'sums'
+   -- aus einem Spartopf bezahlte Fixkosten nicht mitzählen: dafür geht schon die Sparrate ab
+   where r.household_id = my_household() and r.active and r.pot_id is null and r.pay_pot_id is null and m.share->>'fixed' = 'sums'
    group by r.owner, r.kind
-  union all
-  select c.owner, 'cash', to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM'), 'expense', c.category, sum(budget_cash_due(c, to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM')))
-    from budget_cash c join m on m.user_id = c.owner
-   where c.household_id = my_household() and c.active and c.pot_id is null and m.share->>'tx' = 'sums'
-     and not exists (select 1 from budget_tx t where t.household_id = c.household_id
-                     and t.ext_ref = 'cash:' || to_char((now() at time zone 'Europe/Berlin')::date, 'YYYY-MM') || ':' || c.id::text)
-   group by c.owner, c.category
 $$;
 
 -- ---------- Rechte und Live-Abgleich ----------
-grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts, budget_cash to authenticated;
-grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts, budget_cash to service_role;
+grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to authenticated;
+grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to service_role;
 grant execute on function budget_can_see(uuid, text), budget_can_write(uuid), budget_shared_sums(date) to authenticated;
 grant execute on function budget_nth_due(date, text, int), budget_book_due() to authenticated;
 do $$ begin
@@ -464,7 +451,5 @@ do $$ begin
     alter publication supabase_realtime add table budget_members; end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_accounts') then
     alter publication supabase_realtime add table budget_accounts; end if;
-  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_cash') then
-    alter publication supabase_realtime add table budget_cash; end if;
 end $$;
 notify pgrst, 'reload schema';

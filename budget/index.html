@@ -154,7 +154,7 @@
         </div>
         <p class="tiny muted">Die App erinnert, bevor die Frist abläuft. Verlängert sich der Vertrag, rechnet sie mit dem nächsten Vertragsjahr weiter.</p>
       </details>
-      <label class="field">Aus Bargeld-Umschlag bezahlen<select id="rec-cash"></select></label>
+      <div id="rec-pay-wrap"><label class="field">Bezahlt aus<select id="rec-pay"></select></label><p class="tiny muted" id="rec-pay-hint"></p></div>
       <div id="rec-who" class="who"></div>
       <p class="tiny muted" id="rec-hint"></p>
       <p id="rec-err" class="msg" role="alert"></p>
@@ -179,7 +179,7 @@
         <label class="field">Zahlweise<select id="pol-freq"></select></label>
       </div>
       <label class="field"><span id="pol-next-label">Nächste Abbuchung</span><input type="date" id="pol-next"></label>
-      <label class="field" id="pol-cash-wrap">Aus Bargeld-Umschlag bezahlen<select id="pol-cash"></select></label>
+      <div id="pol-pay-wrap"><label class="field">Bezahlt aus<select id="pol-pay"></select></label><p class="tiny muted" id="pol-pay-hint"></p></div>
       <p class="tiny muted" id="pol-amount-hint">Mit Beitrag und Abbuchung wird die Versicherung automatisch als Fixkosten gebucht.</p>
       <details class="more">
         <summary>Vertragsdaten</summary>
@@ -226,9 +226,13 @@
         <label class="field">Bis wann <span class="muted">optional</span><input type="date" id="pot-date"></label>
       </div>
       <div class="grid2">
-        <label class="field"><span id="pot-rate-label">Sparrate pro Monat</span><input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
-        <label class="field"><span id="pot-next-label">Nächste Sparrate am</span><input type="date" id="pot-next"></label>
+        <label class="field"><span id="pot-rate-label">Sparrate (€)</span><input id="pot-rate" inputmode="decimal" placeholder="0,00"></label>
+        <label class="field">Wie oft<select id="pot-freq"></select></label>
       </div>
+      <label class="field"><span id="pot-next-label">Nächste Sparrate am</span><input type="date" id="pot-next"></label>
+      <details class="more" id="pot-pay-wrap"><summary>Fixkosten aus diesem Topf bezahlen</summary>
+        <p class="tiny muted">Angehakte Fixkosten gehen nicht mehr vom Konto ab. Am Zahltag nimmt die App den Betrag aus dem Topf. Vom Konto geht nur die Sparrate ab, so oft wie oben eingestellt.</p>
+        <div id="pot-links" class="stack"></div></details>
       <label class="field" id="pot-start-wrap">Schon drauf (€)<input id="pot-start" inputmode="decimal" placeholder="0,00"></label>
       <label class="check" id="pot-auto-wrap"><input type="checkbox" id="pot-auto"><span>Was am Monatsende übrig bleibt, automatisch in diesen Topf legen<span class="tiny muted" style="display:block">Sonst fragt die App nach jedem Monat, wohin der Rest soll. Gilt nur für einen Topf.</span></span></label>
       <div id="pot-who" class="who"></div>
@@ -241,34 +245,6 @@
     </form>
   </dialog>
 
-  <!-- Bargeld-Umschlag -->
-  <dialog id="dlg-cash" class="sheet" aria-labelledby="cash-title">
-    <form id="form-cash" method="dialog" novalidate>
-      <header class="sheet-head"><h2 id="cash-title">Bargeld-Umschlag</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button></header>
-      <label class="field">Name<input id="cash-name" required maxlength="40" placeholder="z. B. Wochenmarkt, Friseur, Taschengeld"></label>
-      <div class="icon-pick" id="cash-icons" role="radiogroup" aria-label="Symbol"></div>
-      <div class="grid2">
-        <label class="field">Betrag je Abhebung (€)<input id="cash-amount" inputmode="decimal" placeholder="0,00"></label>
-        <label class="field">Rhythmus<select id="cash-freq"></select></label>
-      </div>
-      <div class="grid2">
-        <label class="field">Erste Abhebung im<input type="month" id="cash-start"></label>
-        <label class="field">Abhebetag<select id="cash-day"></select></label>
-      </div>
-      <label class="field">Kategorie<select id="cash-cat"></select></label>
-      <div id="cash-reserve"></div>
-      <details class="more" id="cash-links-wrap"><summary>Fixkosten aus diesem Umschlag bezahlen</summary><div id="cash-links" class="stack"></div></details>
-      <details class="more"><summary>Einzelne Abhebungen anpassen</summary><div id="cash-next" class="stack"></div></details>
-      <div id="cash-cal"></div>
-      <div id="cash-who" class="who"></div>
-      <p class="tiny muted" id="cash-hint">Der Betrag zählt jeden Monat zur Abhebesumme. Nach „Abgehoben“ wird er unter dieser Kategorie als ausgegeben gebucht. Was übrig bleibt, wird nicht mitgezählt.</p>
-      <p id="cash-err" class="msg" role="alert"></p>
-      <div class="row sheet-actions">
-        <button type="button" class="btn danger hidden" id="cash-delete">Löschen</button>
-        <button type="submit" class="btn primary grow">Speichern</button>
-      </div>
-    </form>
-  </dialog>
 
   <!-- Police fragen -->
   <dialog id="dlg-chat" class="sheet tall" aria-labelledby="chat-title">

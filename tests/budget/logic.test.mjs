@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cashDueAmount, nextWithdrawals, cashIcs, reserveForecast, etfValue, etfGain, isValidIsin, cashPending, cashRef, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { potForecast, potRateSuggestion, etfValue, etfGain, isValidIsin, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -178,18 +178,6 @@ test('Personen: Ansicht, Vorgabe privat/gemeinsam, Summen, Konten', () => {
   assert.equal(acc.get('a'), 150); assert.equal(acc.get(''), 70); assert.equal(acc.size, 2);
 });
 
-test('Bargeld: Abhebesumme, erledigte Umschläge, vergangene Monate', () => {
-  const env = [{ id: 'a', name: 'Markt', amount: 6000, category: 'lm-markt', active: true }, { id: 'b', name: 'Friseur', amount: 2500, category: 'kl-friseur', active: true },
-    { id: 'c', name: 'Alt', amount: 999, category: 'x', active: false }];
-  const g = id => ({ 'lm-markt': 'lebensmittel', 'kl-friseur': 'kleidung' })[id];
-  let p = cashPending(env, [], '2026-11', '2026-11-24', g);
-  assert.equal(p.total, 8500); assert.deepEqual(p.byGroup, { lebensmittel: 6000, kleidung: 2500 });
-  p = cashPending(env, [{ extRef: cashRef('2026-11', 'a') }], '2026-11', '2026-11-24', g);
-  assert.equal(p.total, 2500); assert.equal(p.done.length, 1);
-  assert.equal(cashPending(env, [], '2026-10', '2026-11-24', g).total, 0);
-  assert.equal(cashPending(env, [], '2026-12', '2026-11-24', g).total, 8500);
-});
-
 test('ETF: Gewinn/Verlust und ISIN-Prüfung', () => {
   assert.deepEqual(etfGain(320000, 410000), { gain: 90000, pct: 28.125 });
   assert.equal(etfGain(100000, 90000).gain, -10000);
@@ -222,41 +210,29 @@ test('Arbeitsvertrag: Suche findet Urlaub, Überstunden, Sonderzahlung', () => {
   assert.equal(rank(chunks, 'Wie viele Stunden muss ich arbeiten?')[0].page, 2);
 });
 
-test('Rücklage-Umschlag: Abhebesumme als Sparen, Prognose bis zur Fälligkeit', () => {
-  const env = [{ id: 'r', amount: 5000, category: 'x', active: true, potId: 'p' }, { id: 'm', amount: 6000, category: 'lm-markt', active: true }];
-  const p = cashPending(env, [], '2026-11', '2026-11-24', () => 'lebensmittel');
-  assert.equal(p.total, 6000); assert.equal(p.reserve, 5000); assert.deepEqual(p.byGroup, { lebensmittel: 6000 });
-  // 300 € drin, 50 €/Monat, Kfz 486 € am 1.1.: Nov 350, Dez 400, Jan 450 → fehlen 36 €
-  const f = reserveForecast({ balance: 30000, monthly: 5000, withdrawnThisMonth: false, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }], today: '2026-11-24' });
-  assert.equal(f.ok, false); assert.equal(f.missing, 3600); assert.equal(f.name, 'Kfz');
-  const g = reserveForecast({ balance: 40000, monthly: 5000, withdrawnThisMonth: true, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }], today: '2026-11-24' });
-  assert.equal(g.ok, true); assert.equal(g.next.name, 'Kfz');
+test('Spartopf bezahlt Fixkosten: Prognose mit Sparraten, Vorschlag je Rhythmus', () => {
+  // 300 € drin, 50 € am 1. jedes Monats, Kfz 486 € am 1.1.: Dez 350, Jan 400 → fehlen 86 €
+  const deposits = ['2026-12-01', '2027-01-01'].map(date => ({ date, amount: 5000 }));
+  const f = potForecast({ balance: 30000, deposits, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }] });
+  assert.equal(f.ok, false); assert.equal(f.missing, 8600); assert.equal(f.name, 'Kfz'); assert.equal(f.date, '2027-01-01');
+  // Sparrate am selben Tag kommt vor der Zahlung
+  const g = potForecast({ balance: 43600, deposits, dues: [{ date: '2027-01-01', amount: 48600, name: 'Kfz' }] });
+  assert.equal(g.ok, true); assert.equal(g.next.name, 'Kfz'); assert.equal(g.end, 5000);
+  // Zahlung vor der Sparrate: reicht nicht
+  assert.equal(potForecast({ balance: 0, deposits: [{ date: '2027-01-20', amount: 15000 }], dues: [{ date: '2027-01-05', amount: 15000, name: 'V' }] }).ok, false);
+  assert.equal(potForecast({ balance: 0 }).ok, true);
+  // Kfz 486 €/Jahr + Rundfunk 55,08 €/Quartal = 40,50 + 18,36 = 58,86 €/Monat
+  const recs = [{ amount: 48600, freq: 'yearly' }, { amount: 5508, freq: 'quarterly' }];
+  assert.equal(potRateSuggestion(recs, 'monthly'), 5900);
+  assert.equal(potRateSuggestion(recs, 'quarterly'), 17700);
+  assert.equal(potRateSuggestion(recs, 'yearly'), 70700);
+  assert.equal(potRateSuggestion([], 'monthly'), 0);
 });
 
-test('Umschlag: Rhythmus, abweichende Beträge, nächste Abhebungen, Kalendertermin', () => {
-  const q = { id: 'q', name: 'Friseur; alle 3 Monate', amount: 7500, freq: 'quarterly', startMonth: '2026-11', withdrawDay: 3, overrides: { '2027-05': 9000 } };
-  assert.equal(cashDueAmount(q, '2026-11'), 7500); assert.equal(cashDueAmount(q, '2026-12'), 0); assert.equal(cashDueAmount(q, '2027-02'), 7500);
-  assert.equal(cashDueAmount(q, '2027-05'), 9000); assert.equal(cashDueAmount(q, '2026-10'), 0);
-  assert.equal(cashDueAmount({ amount: 100 }, '2026-12'), 100);
-  assert.deepEqual(nextWithdrawals(q, '2026-11-24', 3).map(x => [x.date, x.amount, x.override]), [['2026-11-03', 7500, false], ['2027-02-03', 7500, false], ['2027-05-03', 9000, true]]);
-  const ics = cashIcs(q, '2026-12-03', 'abc');
-  assert.match(ics, /RRULE:FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=3/); assert.match(ics, /DTSTART:20261203T090000/);
-  assert.match(ics, /SUMMARY:Bargeld abheben: Friseur\\; alle 3 Monate/); assert.match(ics, /BEGIN:VALARM/);
-  const p = cashPending([{ ...q, active: true, category: 'kl-friseur' }], [], '2026-12', '2026-11-24', () => 'kleidung');
-  assert.equal(p.total, 0, 'im Dezember nicht dran');
-  const f = reserveForecast({ balance: 0, deposit: k => cashDueAmount({ amount: 15000, freq: 'quarterly', startMonth: '2026-11' }, k), withdrawnThisMonth: false, dues: [{ date: '2027-01-01', amount: 20000, name: 'Kfz' }], today: '2026-11-24' });
-  assert.equal(f.ok, false); assert.equal(f.missing, 5000);
-});
-
-test('Umschlag: aussetzen bleibt sichtbar, Kalender UTC und Ausnahme, Abhebetag in der Prognose', () => {
-  const e = { id: 'x', name: 'Test', amount: 5000, freq: 'monthly', startMonth: '2026-11', withdrawDay: 20, overrides: { '2026-12': 0 } };
-  const w = nextWithdrawals(e, '2026-11-24', 3);
-  assert.deepEqual(w.map(x => [x.key, x.amount, x.skipped]), [['2026-11', 5000, false], ['2026-12', 0, true], ['2027-01', 5000, false]]);
-  const ics = cashIcs(e, '2026-12-20', 'x', new Date('2026-11-24T10:00:00Z'));
-  assert.match(ics, /DTSTAMP:20261124T100000Z/); assert.match(ics, /EXDATE:20261220T090000/);
-  // Zahlung am 5., Abhebung erst am 20.: reicht nicht
-  const f = reserveForecast({ balance: 0, monthly: 15000, withdrawnThisMonth: false, withdrawDay: 20, dues: [{ date: '2027-01-05', amount: 15000, name: 'Vers' }], today: '2027-01-01', months: 2 });
-  assert.equal(f.ok, false);
-  const g = reserveForecast({ balance: 0, monthly: 15000, withdrawnThisMonth: false, withdrawDay: 1, dues: [{ date: '2027-01-05', amount: 15000, name: 'Vers' }], today: '2027-01-01', months: 2 });
-  assert.equal(g.ok, true);
+test('Fixkosten aus Spartopf werden ohne Konto gebucht', () => {
+  const r = { id: 'k', name: 'Kfz', amount: 48600, kind: 'expense', category: 'vers-kfz', freq: 'yearly', startDate: '2026-01-01', nextDue: '2026-01-01', n: 0, active: true, accountId: 'acc', payPotId: 'pot' };
+  const [t] = bookDueLocal([r], '2026-06-01');
+  assert.equal(t.accountId, null); assert.equal(t.kind, 'expense');
+  const [u] = bookDueLocal([{ ...r, payPotId: null, nextDue: '2026-01-01', n: 0 }], '2026-06-01');
+  assert.equal(u.accountId, 'acc');
 });
