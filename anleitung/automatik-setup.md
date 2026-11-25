@@ -31,7 +31,8 @@ Die Datei dafür ist `.github/workflows/supabase-update.yml`. Dafür braucht Git
 ## 4. Einmal testen
 1. Repo → Tab **„Actions“** → links **„Supabase aktualisieren“** → rechts **„Run workflow“** → **Run workflow**.
 2. Nach ca. 1 Minute: grüner Haken = beides aktualisiert. In der Zusammenfassung stehen „Datenbank aktualisiert“ und „KI-Funktion deployt“.
-3. Roter Fehler: auf den Lauf tippen, den roten Schritt öffnen und mir die Meldung schicken. Häufig: falsches Passwort in der Adresse oder „Direct connection“ statt „Session pooler“.
+3. Roter Fehler: auf den Lauf tippen, den roten Schritt öffnen und mir die Meldung schicken. Häufig: Passwort fehlt oder ist falsch in der Adresse, oder „Direct connection“ statt „Session pooler“.
+4. Die Automatik bricht nach spätestens 10 Minuten ab und fragt nie nach einem Passwort. Fehlt es in `SUPABASE_DB_URL`, kommt sofort die Meldung „Passwort fehlt“.
 
 ## Gut zu wissen
 - Die Datenbank-Änderung läuft „alles oder nichts“: scheitert etwas, bleibt die Datenbank, wie sie war.

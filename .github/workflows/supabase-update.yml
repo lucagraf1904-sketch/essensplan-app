@@ -15,7 +15,7 @@ on:
 
 # Nie zwei Läufe gleichzeitig (sonst könnten sich zwei Datenbank-Updates überholen)
 concurrency:
-  group: supabase-update
+  group: supabase-update-v2 # neuer Name: neue Läufe warten nicht auf einen alten, hängenden Lauf
   cancel-in-progress: false
 
 permissions:
@@ -55,8 +55,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.db == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # nie wieder stundenlang hängen
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PGCONNECT_TIMEOUT: '20' # Verbindungsaufbau höchstens 20 s
+      PGAPPNAME: github-supabase-update
     steps:
       - uses: actions/checkout@v4
       - name: Secret vorhanden?
@@ -71,9 +74,34 @@ jobs:
       - name: psql bereitstellen
         if: steps.check.outputs.ok == 'true'
         run: command -v psql || (sudo apt-get update -q && sudo apt-get install -y -q postgresql-client)
+      - name: Verbindung testen
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          # Grobe Prüfung der Adresse, ohne sie auszugeben
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo "::error title=SUPABASE_DB_URL ungültig::Die Adresse muss mit postgresql:// beginnen (Supabase → Connect → Session pooler → URI)."; exit 1 ;;
+          esac
+          if echo "$SUPABASE_DB_URL" | grep -q 'YOUR-PASSWORD'; then
+            echo "::error title=Passwort fehlt::In SUPABASE_DB_URL steht noch [YOUR-PASSWORD]. Durch das Datenbank-Passwort ersetzen."; exit 1
+          fi
+          if ! echo "$SUPABASE_DB_URL" | grep -qE '^postgres(ql)?://[^:/@]+:[^@]+@'; then
+            echo "::error title=Passwort fehlt::In SUPABASE_DB_URL fehlt das Passwort (Form: postgresql://BENUTZER:PASSWORT@HOST:5432/postgres)."; exit 1
+          fi
+          # -w: nie nach einem Passwort fragen (sonst wartet psql ewig auf eine Eingabe); </dev/null: keine Eingabe möglich
+          if ! timeout 60 psql "$SUPABASE_DB_URL" -w --no-psqlrc -v ON_ERROR_STOP=1 -tA -c "select 'Verbindung ok: ' || current_user" </dev/null; then
+            echo "::error title=Keine Verbindung zur Datenbank::Adresse in SUPABASE_DB_URL prüfen: „Session pooler“ (Port 5432) verwenden, nicht „Direct connection“, und das Passwort muss stimmen. Siehe anleitung/automatik-setup.md."
+            exit 1
+          fi
       - name: budget.sql ausführen (alles oder nichts)
         if: steps.check.outputs.ok == 'true'
-        run: psql "$SUPABASE_DB_URL" --no-psqlrc -v ON_ERROR_STOP=1 --single-transaction -q -f supabase/budget.sql
+        # lock_timeout: Hält eine andere Verbindung (z. B. eine offene Abfrage im SQL Editor) eine Tabelle fest, nach 30 s abbrechen statt ewig zu warten.
+        run: |
+          if ! timeout 300 psql "$SUPABASE_DB_URL" -w --no-psqlrc -v ON_ERROR_STOP=1 --single-transaction -q \
+               -c "set lock_timeout = '30s'" -c "set statement_timeout = '4min'" -f supabase/budget.sql </dev/null; then
+            echo "::error title=budget.sql nicht ausgeführt::Es wurde nichts geändert (alles oder nichts). Bei „lock timeout“: offene Abfragen im Supabase SQL Editor schließen und „Run workflow“ erneut starten. Sonst die Fehlermeldung oben weitergeben."
+            exit 1
+          fi
       - name: Ergebnis
         if: steps.check.outputs.ok == 'true'
         run: echo "::notice title=Datenbank aktualisiert::supabase/budget.sql wurde ausgeführt."
@@ -82,6 +110,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ai == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
