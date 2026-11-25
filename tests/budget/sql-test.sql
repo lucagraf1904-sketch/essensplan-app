@@ -239,3 +239,40 @@ update budget_pots set archived = true where name = 'Rücklagen A';
 reset role;
 select count(*) = 0 as unlinked_on_archive from budget_recurring where pay_pot_id is not null and name = 'Kfz jährlich';
 set role authenticated;
+-- ---------- Version 10: Umbuchungen und Kontostand ----------
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+insert into budget_accounts(household_id, name, owner) values (my_household(), 'Gemeinsam A', null);
+update budget_accounts set start_balance = 1000, balance_at = now() - interval '1 hour' where name in ('Konto A', 'Gemeinsam A');
+-- Umbuchung 300 von Konto A auf Gemeinsam A, Ausgabe 50 von Gemeinsam A, Einnahme 2000 auf Konto A, Sparen 100 von Konto A
+insert into budget_tx(household_id, date, amount, kind, category, account_id, to_account_id)
+  values (my_household(), current_date + 1, 300, 'transfer', 'umbuchung', (select id from budget_accounts where name = 'Konto A'), (select id from budget_accounts where name = 'Gemeinsam A'));
+insert into budget_tx(household_id, date, amount, kind, category, account_id) values (my_household(), current_date + 1, 50, 'expense', 'lm-markt', (select id from budget_accounts where name = 'Gemeinsam A'));
+insert into budget_tx(household_id, date, amount, kind, category, account_id, owner) values (my_household(), current_date + 1, 2000, 'income', 'ei-gehalt', (select id from budget_accounts where name = 'Konto A'), auth.uid());
+insert into budget_tx(household_id, date, amount, kind, category, account_id, pot_id) select my_household(), current_date + 1, 100, 'save', 'fi-sparen', (select id from budget_accounts where name = 'Konto A'), id from budget_pots where name = 'Urlaub';
+-- vor dem eingetragenen Stand: zählt nicht
+insert into budget_tx(household_id, date, amount, kind, category, account_id) values (my_household(), current_date - 3, 999, 'expense', 'lm-markt', (select id from budget_accounts where name = 'Gemeinsam A'));
+select (select balance from budget_account_balances() b join budget_accounts a on a.id = b.account_id where a.name = 'Konto A') = 1000 - 300 + 2000 - 100 as balance_own;
+select (select balance from budget_account_balances() b join budget_accounts a on a.id = b.account_id where a.name = 'Gemeinsam A') = 1000 + 300 - 50 as balance_joint;
+-- Umbuchung nur mit Art transfer; Dauerauftrag bucht die Umbuchung
+do $$ begin
+  begin insert into budget_tx(household_id, date, amount, kind, category, to_account_id) values (my_household(), current_date, 1, 'expense', 'x', (select id from budget_accounts where name = 'Konto A'));
+    raise exception 'FEHLER: Ziel-Konto bei Ausgabe';
+  exception when check_violation then raise notice 'ok: Ziel-Konto nur bei Umbuchung'; end;
+end $$;
+insert into budget_recurring(household_id, name, amount, kind, category, freq, start_date, next_due, account_id, to_account_id)
+  values (my_household(), 'Dauerauftrag Haushalt', 800, 'transfer', 'umbuchung', 'monthly', current_date, current_date,
+          (select id from budget_accounts where name = 'Konto A'), (select id from budget_accounts where name = 'Gemeinsam A'));
+select budget_book_due() >= 1 as transfer_booked;
+select count(*) = 1 as transfer_tx from budget_tx where kind = 'transfer' and note = 'Dauerauftrag Haushalt' and to_account_id is not null;
+-- C (anderer Haushalt? nein: Partner im selben Haushalt) sieht den Stand des Gemeinschaftskontos, aber nicht den von Konto A (privat)
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
+select not exists (select 1 from budget_account_balances() b join budget_accounts a on a.id = b.account_id where a.name = 'Konto A') as partner_no_private_balance;
+select exists (select 1 from budget_account_balances() b join budget_accounts a on a.id = b.account_id where a.name = 'Gemeinsam A') as partner_sees_joint_balance;
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000b', false);
+select not exists (select 1 from budget_account_balances()) as other_household_nothing;
+-- Zeitpunkt des Stands setzt der Server, auch wenn das Handy eine falsche Zeit schickt
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_accounts set start_balance = 5, balance_at = '2000-01-01' where name = 'Konto A';
+select balance_at > now() - interval '1 minute' as balance_at_from_server from budget_accounts where name = 'Konto A';
+update budget_accounts set archived = false where name = 'Konto A';
+select balance_at > now() - interval '1 minute' as balance_at_kept from budget_accounts where name = 'Konto A';

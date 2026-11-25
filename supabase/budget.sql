@@ -100,13 +100,13 @@ do $$ begin
 end $$;
 -- Neue Arten: save = in den Spartopf, unsave = aus dem Spartopf. Beide brauchen einen Topf, die anderen keinen.
 alter table budget_tx drop constraint if exists budget_tx_kind_check;
-alter table budget_tx add constraint budget_tx_kind_check check (kind in ('expense', 'income', 'save', 'unsave'));
+alter table budget_tx add constraint budget_tx_kind_check check (kind in ('expense', 'income', 'save', 'unsave', 'transfer'));  -- transfer: Version 10
 alter table budget_tx drop constraint if exists budget_tx_pot_check;
 alter table budget_tx add constraint budget_tx_pot_check check ((kind in ('save', 'unsave')) = (pot_id is not null));
 alter table budget_tx drop constraint if exists budget_tx_source_check;
 alter table budget_tx add constraint budget_tx_source_check check (source in ('manual', 'receipt', 'recurring', 'import', 'rest', 'pantry', 'cash'));
 alter table budget_recurring drop constraint if exists budget_recurring_kind_check;
-alter table budget_recurring add constraint budget_recurring_kind_check check (kind in ('expense', 'income', 'save'));
+alter table budget_recurring add constraint budget_recurring_kind_check check (kind in ('expense', 'income', 'save', 'transfer'));  -- transfer: Version 10
 alter table budget_recurring drop constraint if exists budget_recurring_pot_check;
 alter table budget_recurring add constraint budget_recurring_pot_check check ((kind = 'save') = (pot_id is not null));
 create index if not exists budget_tx_pot on budget_tx(pot_id) where pot_id is not null;
@@ -158,6 +158,28 @@ alter table budget_policies  add column if not exists owner uuid references auth
 -- Version 3: je Person ein Topf für den eigenen Rest, dazu einer für den gemeinsamen Rest (owner null)
 drop index if exists budget_pots_auto_rest;
 create unique index if not exists budget_pots_auto_rest_owner on budget_pots(household_id, coalesce(owner, '00000000-0000-0000-0000-000000000000'::uuid)) where auto_rest;
+
+-- ---------- Umbuchungen und Kontostand (Version 10) ----------
+-- Umbuchung (kind 'transfer'): von account_id auf to_account_id, keine Ausgabe und keine Einnahme. Auch als Dauerauftrag (budget_recurring).
+alter table budget_tx        add column if not exists to_account_id uuid references budget_accounts(id) on delete set null;
+alter table budget_recurring add column if not exists to_account_id uuid references budget_accounts(id) on delete set null;
+alter table budget_tx drop constraint if exists budget_tx_transfer_check;
+alter table budget_tx add constraint budget_tx_transfer_check check (to_account_id is null or kind = 'transfer');
+alter table budget_recurring drop constraint if exists budget_recurring_transfer_check;
+alter table budget_recurring add constraint budget_recurring_transfer_check check (to_account_id is null or kind = 'transfer');
+-- Kontostand: eingetragener Stand (start_balance) zum Zeitpunkt balance_at; alles, was danach gebucht wird, rechnet die App dazu
+alter table budget_accounts add column if not exists start_balance numeric(14,2);
+alter table budget_accounts add column if not exists balance_at timestamptz;
+-- Zeitpunkt des Stands setzt der Server (die Uhr des Handys kann falsch gehen und mit created_at der Buchungen verglichen werden)
+create or replace function budget_balance_at() returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.start_balance is null then new.balance_at := null;
+  elsif tg_op = 'INSERT' or new.start_balance is distinct from old.start_balance or new.balance_at is distinct from old.balance_at then new.balance_at := now();
+  end if;
+  return new;
+end $$;
+drop trigger if exists budget_accounts_balance_at on budget_accounts;
+create trigger budget_accounts_balance_at before insert or update on budget_accounts for each row execute function budget_balance_at();
 
 -- Darf ich einen Eintrag von p_owner im Bereich p_area sehen? Eigene und gemeinsame immer, fremde private nur bei Freigabe 'all'.
 create or replace function budget_can_see(p_owner uuid, p_area text) returns boolean
@@ -235,6 +257,10 @@ begin
   end if;
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.account_id is not null
      and not exists (select 1 from budget_accounts where id = new.account_id and household_id = new.household_id) then
+    raise exception 'Konto gehört nicht zu diesem Haushalt';
+  end if;
+  if tg_table_name in ('budget_tx', 'budget_recurring') and new.to_account_id is not null
+     and not exists (select 1 from budget_accounts where id = new.to_account_id and household_id = new.household_id) then
     raise exception 'Konto gehört nicht zu diesem Haushalt';
   end if;
   if tg_table_name in ('budget_tx', 'budget_recurring') and new.pot_id is not null
@@ -355,8 +381,8 @@ begin
       d := r.next_due; k := r.n; guard := 0;
       while d <= today and (r.end_date is null or d <= r.end_date) and guard < 60 loop
         -- Aus Spartopf bezahlt: nicht vom Konto (account_id leer)
-        insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id)
-          values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, case when r.pay_pot_id is null then r.account_id end)
+        insert into budget_tx(household_id, date, amount, kind, category, note, source, recurring_id, due_date, pot_id, owner, account_id, to_account_id)
+          values (r.household_id, d, r.amount, r.kind, r.category, r.name, 'recurring', r.id, d, r.pot_id, r.owner, case when r.pay_pot_id is null then r.account_id end, r.to_account_id)
           on conflict (recurring_id, due_date) where recurring_id is not null do nothing;
         -- nur mitzählen, was die aufrufende Person sehen darf (sonst verrät die Zahl private Buchungen anderer)
         if found then
@@ -427,14 +453,32 @@ language sql stable security definer set search_path = public as $$
          sum(r.amount * case r.freq when 'weekly' then 52.0 / 12 when 'monthly' then 1 when 'quarterly' then 1.0 / 3 when 'halfyearly' then 1.0 / 6 else 1.0 / 12 end)
     from budget_recurring r join m on m.user_id = r.owner
    -- aus einem Spartopf bezahlte Fixkosten nicht mitzählen: dafür geht schon die Sparrate ab
-   where r.household_id = my_household() and r.active and r.pot_id is null and r.pay_pot_id is null and m.share->>'fixed' = 'sums'
+   where r.household_id = my_household() and r.active and r.pot_id is null and r.pay_pot_id is null and r.kind <> 'transfer' and m.share->>'fixed' = 'sums'
    group by r.owner, r.kind
+$$;
+
+-- ---------- Kontostand (Version 10) ----------
+-- Stand = eingetragener Stand + alles, was danach gebucht wurde: Einnahmen und Entnahmen aus Spartöpfen auf das Konto +,
+-- Ausgaben und Einzahlungen in Spartöpfe −, Umbuchungen − beim Absender und + beim Empfänger.
+-- „Danach“: Buchungsdatum nach dem Tag des Eintrags, oder am selben Tag, aber später erfasst.
+-- Nur für gemeinsame und eigene Konten. security definer: zählt auch private Buchungen der anderen Person auf dem Gemeinschaftskonto mit
+-- (sonst stimmte dessen Stand nicht); es wird nur die Summe gezeigt, keine Einzelbuchung.
+create or replace function budget_account_balances() returns table(account_id uuid, balance numeric)
+language sql stable security definer set search_path = public as $$
+  select a.id, a.start_balance + coalesce((
+    select sum(case when t.kind = 'transfer' then (case when t.to_account_id = a.id then t.amount else 0 end) - (case when t.account_id = a.id then t.amount else 0 end)
+                    when t.kind in ('income', 'unsave') then t.amount else -t.amount end)
+      from budget_tx t
+     where t.household_id = a.household_id and (t.account_id = a.id or t.to_account_id = a.id)
+       and (t.date > (a.balance_at at time zone 'Europe/Berlin')::date or (t.date = (a.balance_at at time zone 'Europe/Berlin')::date and t.created_at > a.balance_at))), 0)
+    from budget_accounts a
+   where a.household_id = my_household() and a.balance_at is not null and a.start_balance is not null and (a.owner is null or a.owner = auth.uid())
 $$;
 
 -- ---------- Rechte und Live-Abgleich ----------
 grant select, insert, update, delete on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to authenticated;
 grant all on budget_policies, budget_recurring, budget_tx, budget_settings, budget_pots, budget_members, budget_accounts to service_role;
-grant execute on function budget_can_see(uuid, text), budget_can_write(uuid), budget_shared_sums(date) to authenticated;
+grant execute on function budget_can_see(uuid, text), budget_can_write(uuid), budget_shared_sums(date), budget_account_balances() to authenticated;
 grant execute on function budget_nth_due(date, text, int), budget_book_due() to authenticated;
 do $$ begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'budget_tx') then

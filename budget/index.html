@@ -92,6 +92,7 @@
         <div class="seg" role="radiogroup" aria-label="Art">
           <label><input type="radio" name="kind" value="expense" checked><span>Ausgabe</span></label>
           <label><input type="radio" name="kind" value="income"><span>Einnahme</span></label>
+          <label><input type="radio" name="kind" value="transfer"><span>Umbuchung</span></label>
         </div>
         <h2 id="tx-title" class="sr-only">Buchung</h2>
         <button type="button" class="icon-btn" data-close aria-label="Schließen">✕</button>
@@ -119,6 +120,7 @@
       </div>
       <label class="field">Notiz <span class="muted">(optional, z. B. Laden oder Anlass)</span><input id="tx-note" list="note-list" autocomplete="off" maxlength="120"></label>
       <div id="tx-who" class="who"></div>
+      <label class="field hidden" id="tx-to-wrap">Auf Konto<select id="tx-to"></select></label>
       <datalist id="note-list"></datalist>
       <p id="tx-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
@@ -135,6 +137,7 @@
       <div class="seg" role="radiogroup" aria-label="Art">
         <label><input type="radio" name="rkind" value="expense" checked><span>Ausgabe</span></label>
         <label><input type="radio" name="rkind" value="income"><span>Einnahme</span></label>
+        <label><input type="radio" name="rkind" value="transfer"><span>Umbuchung</span></label>
       </div>
       <label class="field">Bezeichnung<input id="rec-name" required maxlength="80" placeholder="z. B. Miete, Gehalt, Streaming"></label>
       <div class="grid2">
@@ -156,6 +159,7 @@
       </details>
       <div id="rec-pay-wrap"><label class="field">Bezahlt aus<select id="rec-pay"></select></label><p class="tiny muted" id="rec-pay-hint"></p></div>
       <div id="rec-who" class="who"></div>
+      <label class="field hidden" id="rec-to-wrap">Auf Konto<select id="rec-to"></select></label>
       <p class="tiny muted" id="rec-hint"></p>
       <p id="rec-err" class="msg" role="alert"></p>
       <div class="row sheet-actions">
