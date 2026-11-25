@@ -71,6 +71,17 @@ Läuft mit der Automatik von selbst (sonst `supabase/budget.sql` noch einmal aus
 - **Topf auflösen:** Die zugeordneten Fixkosten gehen danach wieder vom Konto ab.
 - **Umstellung:** Rücklage-Umschläge wurden automatisch zu Spartöpfen mit gleichem Namen und Inhalt. Ihre Fixkosten werden daraus bezahlt. Der Abhebe-Betrag wurde zur Sparrate im gleichen Rhythmus, ab der nächsten noch nicht abgehobenen Abhebung und vom zuletzt genutzten Konto. Einzelne abweichende Beträge wurden nicht übernommen. Normale Umschläge sind entfallen, ihre bisherigen Buchungen bleiben.
 
+## Update: Umbuchungen und Kontostand (Version 10)
+Läuft mit der Automatik von selbst.
+- **Umbuchung:** Beim Erfassen „Umbuchung“ wählen, dann „Von Konto“ und „Auf Konto“, z. B. 200 € von deinem Konto aufs Gemeinschaftskonto. Zählt weder als Ausgabe noch als Einnahme, „Noch frei“ bleibt gleich.
+- **Dauerauftrag:** Fixkosten → „Umbuchungen (Daueraufträge)“ → Hinzufügen. Wird wie Fixkosten automatisch gebucht. „Abbuchungen je Konto“ zeigt ihn beim Absender, beim Empfänger als „+ Umbuchung“.
+- **Einnahmen:** Die Konto-Auswahl heißt dort „Eingang auf“.
+- **Kontostand:** Übersicht → Konten → „Stand eintragen“ (oder Einstellungen → Konten → Stand). Danach rechnet die App alles, was ab dann gebucht wird, mit: Einnahmen und Entnahmen aus Spartöpfen +, Ausgaben, Sparraten und Einzahlungen in Spartöpfe −, Umbuchungen − beim Absender und + beim Empfänger. „Monatsende ca.“ zieht zusätzlich die Fixkosten, Einnahmen, Sparraten und Daueraufträge ab, die bis Monatsende noch kommen. Fixkosten, die aus einem Spartopf bezahlt werden, gehen nicht vom Konto ab.
+- **Spartopf:** Bei „Einzahlen“ und „Entnehmen“ gibt es jetzt die Auswahl, von bzw. auf welches Konto.
+- **Neues Konto:** In jeder Konto-Auswahl über „＋ Konto“ (eigenes oder gemeinsames). Das Konto deines Partners legt dein Partner selbst an.
+- **Wer sieht welchen Stand:** Den Stand sieht man für eigene und gemeinsame Konten. Beim Gemeinschaftskonto zählen auch private Buchungen der anderen Person mit, die darüber laufen (nur in der Summe, keine Einzelbuchung), sonst stimmte der Stand nicht.
+- Die App ist nicht mit der Bank verbunden. Weicht der Stand ab (z. B. vergessene Buchung), einfach neu eintragen.
+
 ## Was wohin geht (Datenschutz)
 | Was | Wohin |
 |---|---|

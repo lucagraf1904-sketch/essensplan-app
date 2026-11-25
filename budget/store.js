@@ -3,19 +3,19 @@
 //   demoStore:     nur auf diesem Gerät (localStorage) mit Beispieldaten, zum Ausprobieren ohne Konto
 // Beträge sind in der App Cent (ganze Zahl), in der Datenbank numeric(12,2) in Euro.
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
-import { toCents, fromCents, todayIso, addDays, addMonths, nthDue, bookDueLocal, nextFrom } from './logic.js';
+import { toCents, fromCents, todayIso, addDays, addMonths, nthDue, bookDueLocal, nextFrom, accountBalance } from './logic.js';
 
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 const toTx = r => ({ id: r.id, date: r.date, amount: toCents(r.amount), kind: r.kind, category: r.category, note: r.note ?? '', source: r.source,
-  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, potId: r.pot_id ?? null, extRef: r.ext_ref ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null });
+  recurringId: r.recurring_id ?? null, dueDate: r.due_date ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, potId: r.pot_id ?? null, extRef: r.ext_ref ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null, toAccountId: r.to_account_id ?? null });
 const fromTx = (t, hh) => ({ id: t.id, household_id: hh, date: t.date, amount: fromCents(t.amount), kind: t.kind, category: t.category, note: t.note || null,
-  source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, owner: t.owner || null, account_id: t.accountId || null, ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
+  source: t.source || 'manual', pot_id: t.potId || null, ext_ref: t.extRef || null, owner: t.owner || null, account_id: t.accountId || null, ...(t.kind === 'transfer' ? { to_account_id: t.toAccountId || null } : {}), ...(t.recurringId !== undefined ? { recurring_id: t.recurringId } : {}), ...(t.dueDate !== undefined ? { due_date: t.dueDate } : {}) });
 const toRec = r => ({ id: r.id, name: r.name, amount: toCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, startDate: r.start_date, nextDue: r.next_due,
-  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null, payPotId: r.pay_pot_id ?? null });
+  n: r.n, endDate: r.end_date ?? null, contractEnd: r.contract_end ?? null, noticeMonths: r.notice_months ?? null, active: r.active, policyId: r.policy_id ?? null, note: r.note ?? '', potId: r.pot_id ?? null, owner: r.owner ?? null, accountId: r.account_id ?? null, payPotId: r.pay_pot_id ?? null, toAccountId: r.to_account_id ?? null });
 const fromRec = (r, hh) => ({ id: r.id, household_id: hh, name: r.name, amount: fromCents(r.amount), kind: r.kind, category: r.category, freq: r.freq, start_date: r.startDate,
   next_due: r.nextDue, n: r.n ?? 0, end_date: r.endDate || null, contract_end: r.contractEnd || null, notice_months: r.noticeMonths ?? null, active: r.active !== false,
-  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null, pay_pot_id: r.payPotId || null });
+  policy_id: r.policyId || null, note: r.note || null, pot_id: r.potId || null, owner: r.owner || null, account_id: r.accountId || null, pay_pot_id: r.payPotId || null, ...(r.kind === 'transfer' || r.toAccountId ? { to_account_id: r.kind === 'transfer' ? r.toAccountId || null : null } : {}) });
 const toPot = r => ({ id: r.id, name: r.name, icon: r.icon || '🐷', goal: r.goal == null ? null : toCents(r.goal), targetDate: r.target_date ?? null,
   startBalance: toCents(r.start_balance) ?? 0, autoRest: !!r.auto_rest, archived: !!r.archived, owner: r.owner ?? null,
   kind: r.kind || 'pot', isin: r.isin ?? '', marketValue: r.market_value == null ? null : toCents(r.market_value), marketValueAt: r.market_value_at ?? null });
@@ -24,7 +24,8 @@ const fromPot = (p, hh) => ({ id: p.id, household_id: hh, name: p.name, icon: p.
   kind: p.kind || 'pot', isin: p.isin || null, market_value: p.marketValue == null ? null : fromCents(p.marketValue), market_value_at: p.marketValueAt || null });
 const DEFAULT_SHARE = { tx: 'none', fixed: 'none', pots: 'none', policies: 'none', contracts: 'none' };
 const toMember = r => ({ userId: r.user_id, displayName: r.display_name || '', share: { ...DEFAULT_SHARE, ...(r.share ?? {}) }, defaultPrivate: !!r.default_private });
-const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived });
+const toAcc = r => ({ id: r.id, name: r.name, owner: r.owner ?? null, icon: r.icon || '💳', archived: !!r.archived,
+  startBalance: r.start_balance == null ? null : toCents(r.start_balance), balanceAt: r.balance_at ?? null });
 // Summen-Zeilen (Freigabe „nur Summen“) in Cent
 const toSum = r => ({ owner: r.owner, area: r.area, month: r.month, kind: r.kind, category: r.category, total: toCents(r.total) });
 const toPol = r => ({ id: r.id, name: r.name, category: r.category, insurer: r.insurer ?? '', policyNo: r.policy_no ?? '', contractEnd: r.contract_end ?? null,
@@ -137,10 +138,13 @@ export async function createSupabaseStore() {
     async memberIds() { return must(await sb.from('members').select('user_id')).map(r => r.user_id); },
     async listAccounts() { return must(await sb.from('budget_accounts').select('*').order('created_at')).map(toAcc); },
     async saveAccount(a) {
-      const r = await sb.from('budget_accounts').upsert({ id: a.id ?? uid(), household_id: hh(), name: a.name, owner: a.owner || null, icon: a.icon || '💳', archived: !!a.archived }).select().single();
+      const r = await sb.from('budget_accounts').upsert({ id: a.id ?? uid(), household_id: hh(), name: a.name, owner: a.owner || null, icon: a.icon || '💳', archived: !!a.archived,
+        ...(a.startBalance != null ? { start_balance: fromCents(a.startBalance), balance_at: a.balanceAt || null } : {}) }).select().single();
       if (r.error && /budget_accounts_name|duplicate key/i.test(r.error.message)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
       return toAcc(must(r));
     },
+    // Kontostände (nur eigene und gemeinsame Konten mit eingetragenem Stand): Map Konto-ID → Cent
+    async accountBalances() { return new Map(must(await sb.rpc('budget_account_balances')).map(r => [r.account_id, toCents(r.balance)])); },
     async sharedSums(sinceIso) { return must(await sb.rpc('budget_shared_sums', { p_since: sinceIso })).map(toSum); },
     // Einkäufe aus der Speisekammer (Tabelle log, Art 'bought', mit Preis)
     async listPantryPurchases(sinceIso) {
@@ -220,6 +224,10 @@ function demoSeed() {
   const members = [{ userId: ME, displayName: 'Alex', share: { tx: 'none', fixed: 'none', pots: 'none', policies: 'none' }, defaultPrivate: false },
     { userId: LEA, displayName: 'Lea', share: { tx: 'sums', fixed: 'sums', pots: 'sums', policies: 'none' }, defaultPrivate: true }];
   const mine = { owner: ME, accountId: acc.me }, joint = { owner: null, accountId: acc.joint };
+  // Kontostand vor einer Woche eingetragen
+  const balAt = new Date(); balAt.setDate(balAt.getDate() - 7); balAt.setHours(8, 0, 0, 0);
+  accounts[0].startBalance = 184000; accounts[0].balanceAt = balAt.toISOString();
+  accounts[2].startBalance = 96000; accounts[2].balanceAt = balAt.toISOString();
   const add = (date, amount, category, note, kind = 'expense', extra = {}) => tx.push({ id: uid(), date, amount, kind, category, note, source: 'manual', recurringId: null, dueDate: null, createdAt: new Date().toISOString(), ...extra });
   const r = (name, amount, category, freq, startDate, extra = {}) => rec.push({ id: uid(), name, amount, kind: 'expense', category, freq, startDate, nextDue: startDate, n: 0, endDate: null, contractEnd: null, noticeMonths: null, active: true, policyId: null, note: '', ...extra });
   const polId = uid();
@@ -236,6 +244,7 @@ function demoSeed() {
   r('Privathaftpflicht', 6890, 'vers-haftpflicht', 'yearly', addMonths(m0, 2), { contractEnd: addMonths(m0, 2), noticeMonths: 1, ...joint });
   r('Autoversicherung Golf', 48600, 'vers-kfz', 'yearly', `${+t.slice(0, 4) + 1}-01-01`, { contractEnd: `${+t.slice(0, 4) + 1}-01-01`, noticeMonths: 1, policyId: polId, ...mine });
   r('Rundfunkbeitrag', 5508, 'wo-rundfunk', 'quarterly', addDays(s, 14), joint);
+  r('Haushaltsgeld', 120000, 'umbuchung', 'monthly', addDays(addMonths(s, 1), -2), { kind: 'transfer', owner: null, accountId: acc.me, toAccountId: acc.joint });
   // Alltagsausgaben der letzten Monate
   // Wer zahlt was: Einkauf vom Gemeinschaftskonto, Sprit und Café privat, Essen gehen gemeinsam von meinem Konto
   const how = { Rewe: joint, Lidl: joint, 'Bäckerei': joint, dm: joint, Aral: mine, 'Café': mine, 'Geburtstagsgeschenk': mine, Pizzeria: { owner: null, accountId: acc.me }, 'Kino und Essen': { owner: null, accountId: acc.me } };
@@ -289,7 +298,7 @@ export function createDemoStore() {
   let db = null;
   // Demo-Daten aus älteren Versionen (ohne ETF, noch mit Bargeld-Umschlägen): neu anlegen
   const load = () => { if (db) return db; try { db = JSON.parse(localStorage.getItem(DEMO_KEY)); } catch { db = null; }
-    if (!db?.tx || !db.pots || !db.accounts || db.cash || !db.pots.some(p => p.kind === 'etf')) { db = demoSeed(); save(); } return db; };
+    if (!db?.tx || !db.pots || !db.accounts || db.cash || !db.pots.some(p => p.kind === 'etf') || !db.accounts.some(a => a.balanceAt)) { db = demoSeed(); save(); } return db; };
   const save = () => { try { const { files, ...rest } = db; localStorage.setItem(DEMO_KEY, JSON.stringify(rest)); } catch (e) { console.warn('Demo-Speicher voll', e); } };
   const files = new Map(); // hochgeladene Dateien nur für diese Sitzung (localStorage ist zu klein für PDFs)
   const delay = v => new Promise(r => setTimeout(() => r(v), 20));
@@ -305,6 +314,7 @@ export function createDemoStore() {
     async listAccounts() { return delay(load().accounts.map(a => ({ ...a }))); },
     async saveAccount(a) { const d = load(); if (d.accounts.some(x => x.name === a.name && x.owner === (a.owner ?? null) && x.id !== a.id)) throw Object.assign(new Error('Ein Konto mit diesem Namen gibt es schon.'), { duplicate: true });
       const row = { icon: '💳', archived: false, ...a, id: a.id ?? uid(), owner: a.owner ?? null }; const i = d.accounts.findIndex(x => x.id === row.id); if (i >= 0) d.accounts[i] = row; else d.accounts.push(row); save(); return { ...row }; },
+    async accountBalances() { const d = load(); return new Map(d.accounts.filter(a => a.owner == null || a.owner === 'demo').map(a => [a.id, accountBalance(a, d.tx)]).filter(([, v]) => v != null)); },
     async sharedSums(since) { return delay(load().sums.filter(x => !x.month || x.month >= since.slice(0, 7)).map(x => ({ ...x }))); },
     async signOut() { localStorage.removeItem(DEMO_KEY); db = null; },
     reset() { localStorage.removeItem(DEMO_KEY); db = null; },

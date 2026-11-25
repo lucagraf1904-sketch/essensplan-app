@@ -1,7 +1,7 @@
 // Tests der reinen Rechenfunktionen: node --test tests/budget
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { potForecast, potRateSuggestion, etfValue, etfGain, isValidIsin, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
+import { potForecast, potRateSuggestion, accountBalance, accountPending, accountEffect, etfValue, etfGain, isValidIsin, inScope, defaultOwner, sumsToTx, byAccount, pantryDone, potBalances, potPlan, monthsUntil, groupPantry, similarTx, parseAmount, addMonths, nthDue, occurrences, bookDueLocal, monthSummary, noticeInfo, budgetLevel, toCsv, nextFrom, monthlyCents, isIso, matches } from '../../budget/logic.js';
 import { rank, chunkPages, selectExcerpts, queryTerms } from '../../budget/retrieval.js';
 
 test('Beträge lesen', () => {
@@ -235,4 +235,30 @@ test('Fixkosten aus Spartopf werden ohne Konto gebucht', () => {
   assert.equal(t.accountId, null); assert.equal(t.kind, 'expense');
   const [u] = bookDueLocal([{ ...r, payPotId: null, nextDue: '2026-01-01', n: 0 }], '2026-06-01');
   assert.equal(u.accountId, 'acc');
+});
+
+test('Umbuchung: keine Ausgabe, keine Einnahme; Kontostand rechnet alles nach dem Eintrag', () => {
+  const g = () => 'x';
+  const tx = [{ date: '2026-11-10', amount: 30000, kind: 'transfer', accountId: 'a', toAccountId: 'j', category: 'umbuchung' },
+    { date: '2026-11-10', amount: 5000, kind: 'expense', accountId: 'j', category: 'lm' }];
+  const s = monthSummary({ tx, recurring: [{ id: 'd', kind: 'transfer', amount: 80000, freq: 'monthly', startDate: '2026-11-28', nextDue: '2026-11-28', n: 0, active: true, accountId: 'a', toAccountId: 'j' }], key: '2026-11', today: '2026-11-15', groupOf: g });
+  assert.equal(s.expense, 5000); assert.equal(s.income, 0); assert.equal(s.pendingExpense, 0);
+  assert.equal(accountEffect(tx[0], 'a'), -30000); assert.equal(accountEffect(tx[0], 'j'), 30000); assert.equal(accountEffect(tx[1], 'a'), 0);
+  const at = new Date(2026, 10, 10, 12, 0).toISOString();
+  const all = [
+    { date: '2026-11-09', amount: 999, kind: 'expense', accountId: 'a', createdAt: '2026-11-09T08:00:00.000Z' },           // vorher
+    { date: '2026-11-10', amount: 100, kind: 'expense', accountId: 'a', createdAt: new Date(2026, 10, 10, 9).toISOString() }, // gleicher Tag, früher erfasst
+    { date: '2026-11-10', amount: 200, kind: 'expense', accountId: 'a', createdAt: new Date(2026, 10, 10, 15).toISOString() }, // gleicher Tag, später
+    { date: '2026-11-12', amount: 50000, kind: 'income', accountId: 'a' },
+    { date: '2026-11-12', amount: 1000, kind: 'save', accountId: 'a', potId: 'p' },
+    { date: '2026-11-13', amount: 30000, kind: 'transfer', accountId: 'a', toAccountId: 'j' },
+    { date: '2026-11-13', amount: 777, kind: 'expense', accountId: 'a', synthetic: true }];
+  assert.equal(accountBalance({ id: 'a', startBalance: 100000, balanceAt: at }, all), 100000 - 200 + 50000 - 1000 - 30000);
+  assert.equal(accountBalance({ id: 'a', startBalance: null, balanceAt: null }, all), null);
+  // bis Monatsende: Miete −900 vom Konto, Dauerauftrag −800 an j, Kfz aus Spartopf zählt nicht
+  const rec = [{ kind: 'expense', amount: 90000, freq: 'monthly', startDate: '2026-11-20', nextDue: '2026-11-20', n: 0, active: true, accountId: 'a' },
+    { kind: 'transfer', amount: 80000, freq: 'monthly', startDate: '2026-11-28', nextDue: '2026-11-28', n: 0, active: true, accountId: 'a', toAccountId: 'j' },
+    { kind: 'expense', amount: 48600, freq: 'yearly', startDate: '2026-11-25', nextDue: '2026-11-25', n: 0, active: true, accountId: 'a', payPotId: 'p' }];
+  assert.equal(accountPending('a', rec, '2026-11-15', '2026-11-30'), -170000);
+  assert.equal(accountPending('j', rec, '2026-11-15', '2026-11-30'), 80000);
 });

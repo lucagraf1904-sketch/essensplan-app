@@ -54,6 +54,8 @@ function reindex(custom = []) {
     index.set(g.id, { id: g.id, label: g.label, icon: g.icon, group: g.id, isGroup: true });
     for (const [id, label] of g.subs) index.set(id, { id, label, icon: g.icon, group: g.id, isGroup: false });
   }
+  // Umbuchung zwischen Konten: keine Ausgabe, keine Einnahme, daher in keiner Gruppe der Auswahl
+  index.set('umbuchung', { id: 'umbuchung', label: 'Umbuchung', icon: '🔁', group: 'umbuchung', isGroup: true });
   for (const c of custom) if (c?.id && c?.label && index.has(c.group)) index.set(c.id, { id: c.id, label: c.label, icon: index.get(c.group).icon, group: c.group, isGroup: false, custom: true });
 }
 reindex();

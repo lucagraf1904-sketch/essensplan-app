@@ -387,3 +387,5 @@ fieldset.upload legend { font-weight: 700; padding: 0 6px; }
 }
 .pot-head .good { color: var(--good); }
 .pot-head .bad { color: var(--bad); }
+.acc-bal { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; text-align: right; padding: 4px 0; display: grid; }
+.acc-bal b.neg { color: var(--bad); }

@@ -382,6 +382,77 @@ assert.match(await page.$$eval('#chat-msgs blockquote', e => e.map(x => x.textCo
 await shot(page, '24-arbeitsvertrag', false);
 await page.keyboard.press('Escape');
 
+// ---------- Konten: Stand, Umbuchung, Dauerauftrag, neues Konto ----------
+await page.click('.tabs [data-view=home]');
+await page.click('#scope-bar [data-scope=all]');
+assert.match(await page.textContent('#view-home'), /Konten[\s\S]*Konto Alex[\s\S]*Monatsende ca\./);
+const ids = await page.evaluate(() => { const a = window.__budget.state.accounts; return { me: a.find(x => x.name === 'Konto Alex').id, joint: a.find(x => x.name === 'Gemeinschaftskonto').id }; });
+const bal = id => page.evaluate(i => window.__budget.state.balances.get(i), id);
+const pickAcc = async (who, id) => { if (!(await page.$(`${who} [data-acc="${id}"].on`))) await page.click(`${who} [data-acc="${id}"]`); };
+// Stand eintragen
+await page.click('#view-home .section-head [data-act=set-balance]');
+await page.selectOption('#bal-acc', ids.me);
+await page.fill('#bal-amount', '1.000');
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(i => window.__budget.state.balances.get(i) === 100000, ids.me);
+const jointBefore = await bal(ids.joint), freeBefore2 = await page.textContent('.band-value');
+// Umbuchung 200 € von Konto Alex aufs Gemeinschaftskonto
+await page.click('#fab');
+await page.click('#dlg-tx .seg label:has-text("Umbuchung")');
+await page.fill('#tx-amount', '200');
+await pickAcc('#tx-who', ids.me);
+await page.selectOption('#tx-to', ids.joint);
+await shot(page, '27-umbuchung', false);
+await page.click('#tx-save');
+await page.waitForFunction(([a, j, jb]) => { const b = window.__budget.state.balances; return b.get(a) === 80000 && b.get(j) === jb + 20000; }, [ids.me, ids.joint, jointBefore]);
+assert.equal(await page.textContent('.band-value'), freeBefore2, 'Umbuchung ändert „Noch frei“ nicht');
+const trTx = await page.evaluate(() => window.__budget.state.tx.find(t => t.kind === 'transfer' && t.amount === 20000));
+assert.equal(trTx.category, 'umbuchung'); assert.ok(trTx.toAccountId);
+// gleiche Konten werden abgelehnt
+await page.click('#fab');
+await page.click('#dlg-tx .seg label:has-text("Umbuchung")');
+await page.fill('#tx-amount', '5');
+await pickAcc('#tx-who', ids.joint);
+await page.evaluate(j => { const s = document.querySelector('#tx-to'); s.querySelector(`option[value="${j}"]`).disabled = false; s.value = j; }, ids.joint);
+await page.click('#tx-save');
+assert.match(await page.textContent('#tx-err'), /gleich/);
+// neues Konto direkt aus der Auswahl
+await page.click('#tx-who [data-new-acc]');
+await page.fill('#na-name', 'Tagesgeld');
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(() => { const a = window.__budget.state.accounts.find(x => x.name === 'Tagesgeld'); return a && document.querySelector(`#tx-who [data-acc="${a.id}"].on`); });
+await page.keyboard.press('Escape');
+// Einnahme: Beschriftung „Eingang auf“
+await page.click('#fab');
+await page.click('#dlg-tx .seg label:has-text("Einnahme")');
+assert.match(await page.textContent('#tx-who'), /Eingang auf/);
+await page.keyboard.press('Escape');
+// Dauerauftrag aus der Demo und neuer Dauerauftrag
+await page.click('.tabs [data-view=fixed]');
+assert.match(await page.textContent('#view-fixed'), /Umbuchungen \(Daueraufträge\)[\s\S]*Haushaltsgeld/);
+assert.match(await page.textContent('#view-fixed'), /Umbuchung/);
+await page.click('#view-fixed [data-act=add-transfer]');
+assert.ok(await page.isHidden('#rec-cat'), 'Umbuchung ohne Kategorie');
+await page.fill('#rec-name', 'Tagesgeld sparen');
+await page.fill('#rec-amount', '50');
+await pickAcc('#rec-who', ids.me);
+const tg = await page.evaluate(() => window.__budget.state.accounts.find(x => x.name === 'Tagesgeld').id);
+await page.selectOption('#rec-to', tg);
+await page.click('#form-rec [type=submit]');
+await page.waitForFunction(t => window.__budget.state.recurring.some(r => r.kind === 'transfer' && r.name === 'Tagesgeld sparen' && r.toAccountId === t && r.category === 'umbuchung'), tg);
+// Spartopf: Einzahlung von einem Konto mindert dessen Stand
+await page.click('.tabs [data-view=home]');
+const meBefore = await bal(ids.me);
+await page.click('#view-home [data-pot] >> text=Urlaub');
+await page.click('#pot-in');
+await page.fill('#mv-amount', '10');
+await page.selectOption('#mv-acc', ids.me);
+await page.click('#ask-btns button[value=ok]');
+await page.waitForFunction(([a, b]) => window.__budget.state.balances.get(a) === b - 1000, [ids.me, meBefore]);
+await page.waitForTimeout(300);
+await page.click('#dlg-pot [data-close]');
+await shot(page, '28-konten');
+
 // Monat wechseln
 await page.click('.tabs [data-view=home]');
 await page.click('#m-prev');

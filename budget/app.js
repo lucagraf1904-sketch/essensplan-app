@@ -6,18 +6,18 @@ import {
   parseAmount, eur, amountInput, todayIso, addDays, addMonths, isIso, FREQS, monthlyCents, occurrences, nextFrom,
   monthKey, monthRange, shiftMonth, monthName, monthShort, dayLabel, dateShort, dateShortNoYear, monthSummary, budgetLevel,
   noticeInfo, matches, toCsv, topCategories, guessCategory, diffDays, potBalances, potPlan, lastDayOfMonth, etfGain, etfValue, isValidIsin, groupPantry, similarTx, pantryDone,
-  inScope, defaultOwner, sumsToTx, byAccount, potForecast, potRateSuggestion,
+  inScope, defaultOwner, sumsToTx, byAccount, potForecast, potRateSuggestion, accountPending,
 } from './logic.js';
 import { columns, diverging, band } from './charts.js';
 import { initChat, readPolicyFile, splitPastedText, photoToDataUrl } from './policies.js';
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => crypto.randomUUID?.() ?? 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 
-const state = { tx: [], recurring: [], policies: [], pots: [], potTx: [], pantry: [], members: [], accounts: [], memberIds: [], sums: [], scope: localStorage.getItem('haushaltskasse.scope') || 'all', config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
+const state = { tx: [], recurring: [], policies: [], pots: [], potTx: [], pantry: [], members: [], accounts: [], balances: new Map(), memberIds: [], sums: [], scope: localStorage.getItem('haushaltskasse.scope') || 'all', config: { limits: {}, custom: [] }, today: todayIso(), month: todayIso().slice(0, 7), view: 'home',
   txFilter: { q: '', kind: 'all', group: '', account: '' }, statsRange: 6, statsTable: false };
 let store = null, chat = null;
 const saving = new Map(); // Buchungs-ID → laufendes Speichern (Rückgängig wartet darauf)
@@ -41,7 +41,7 @@ function ask(title, html, buttons = [{ value: 'ok', label: 'OK', cls: 'primary' 
 }
 const confirmDelete = async what => (await ask(`${what} löschen?`, '<p>Das lässt sich nicht rückgängig machen.</p>', [{ value: '', label: 'Abbrechen' }, { value: 'yes', label: 'Löschen', cls: 'danger' }])) === 'yes';
 const amountClass = t => t.kind === 'income' ? 'amt-in' : '';
-const signed = t => (t.kind === 'income' ? '+' : t.kind === 'save' ? '→ ' : t.kind === 'unsave' ? '← ' : '−') + eur(t.amount).replace('-', '');
+const signed = t => (t.kind === 'income' ? '+' : t.kind === 'save' ? '→ ' : t.kind === 'unsave' ? '← ' : t.kind === 'transfer' ? '↔ ' : '−') + eur(t.amount).replace('-', '');
 const potOf = id => state.pots.find(p => p.id === id);
 const potRate = id => state.recurring.filter(r => r.kind === 'save' && r.potId === id && r.active).reduce((a, r) => a + monthlyCents(r), 0);
 // Sparrate eines Topfs in ihrem eigenen Rhythmus, z. B. „50,00 € im Monat“ oder „150,00 € vierteljährlich“
@@ -84,6 +84,8 @@ async function loadAll({ book = true } = {}) {
   // Freigabe „nur Summen“ der anderen fließt als Monatswerte mit ein (synthetic, ohne Einzelbuchungen)
   state.tx = [...saves.values(), ...tx.filter(t => !del.has(t.id) && !saves.has(t.id)), ...sumsToTx(sums)].sort(byDateDesc);
   state.members = members; state.accounts = accounts; state.memberIds = memberIds; state.sums = sums;
+  // Kontostände: bei einem Fehler (z. B. Datenbank noch ohne Version 10) einfach ohne
+  state.balances = await store.accountBalances().catch(e => { console.warn('Kontostand', e); return new Map(); });
   state.recurring = recurring; state.policies = policies; state.pots = pots; state.potTx = potTx;
   if (!cfgDirty) state.config = { limits: {}, custom: [], ...config };
   setCustomCategories(state.config.custom);
@@ -96,7 +98,7 @@ const SNAP = 'haushaltskasse.snapshot';
 function saveSnapshot() {
   if (store.mode !== 'supabase') return;
   const since = addMonths(state.today.slice(0, 7) + '-01', -13);
-  try { localStorage.setItem(SNAP, JSON.stringify({ at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config, pots: state.pots, potTx: state.potTx, members: state.members, accounts: state.accounts, memberIds: state.memberIds, sums: state.sums })); }
+  try { localStorage.setItem(SNAP, JSON.stringify({ balances: [...state.balances], at: new Date().toISOString(), user: store.me(), household: store.household(), tx: state.tx.filter(t => t.date >= since), recurring: state.recurring, policies: state.policies, config: state.config, pots: state.pots, potTx: state.potTx, members: state.members, accounts: state.accounts, memberIds: state.memberIds, sums: state.sums })); }
   catch { /* Speicher voll: dann eben ohne Offline-Stand */ }
 }
 function loadSnapshot() { try { return JSON.parse(localStorage.getItem(SNAP)); } catch { return null; } }
@@ -164,14 +166,14 @@ async function ensureSetup() {
 }
 
 // Auswahl „Bezahlt von“ und „Wer sieht das“ in den Formularen
-function whoWidget(el, { account = undefined, owner = null, editing = false, accounts = true, hint = '' } = {}) {
+function whoWidget(el, { account = undefined, owner = null, editing = false, accounts = true, hint = '', label = 'Bezahlt von' } = {}) {
   const ro = editing && !canWrite(owner);
   el.dataset.owner = owner ?? ''; el.dataset.touched = editing ? '1' : '';
   el.dataset.acc = account ?? ''; el.dataset.ro = ro ? '1' : '';
   const accs = state.accounts.filter(a => !a.archived || a.id === account);
   el.innerHTML = (ro ? `<p class="ro">🔒 Gehört ${esc(memberName(owner))}. Du kannst es ansehen, aber nicht ändern.</p>` : '')
-    + (accounts && accs.length ? `<div><span class="lbl">Bezahlt von</span><div class="chips" role="radiogroup" aria-label="Bezahlt von" style="margin-top:6px">${accs.map(a =>
-      `<button type="button" class="chip ${a.id === el.dataset.acc ? 'on' : ''}" role="radio" aria-checked="${a.id === el.dataset.acc}" data-acc="${esc(a.id)}" ${ro ? 'disabled' : ''}>${esc(accLabel(a))}</button>`).join('')}</div></div>` : '')
+    + (accounts ? `<div><span class="lbl">${esc(label)}</span><div class="chips" role="radiogroup" aria-label="${esc(label)}" style="margin-top:6px">${accs.map(a =>
+      `<button type="button" class="chip ${a.id === el.dataset.acc ? 'on' : ''}" role="radio" aria-checked="${a.id === el.dataset.acc}" data-acc="${esc(a.id)}" ${ro ? 'disabled' : ''}>${esc(accLabel(a))}</button>`).join('')}${ro ? '' : '<button type="button" class="chip" data-new-acc>＋ Konto</button>'}</div></div>` : '')
     + `<div><span class="lbl">Wer sieht das?</span><div class="seg small" role="radiogroup" aria-label="Wer sieht das" style="margin-top:6px;display:flex">
         <label><input type="radio" name="${el.id}-own" value="shared" ${!el.dataset.owner ? 'checked' : ''} ${ro ? 'disabled' : ''}><span>👥 Gemeinsam</span></label>
         <label><input type="radio" name="${el.id}-own" value="me" ${el.dataset.owner ? 'checked' : ''} ${ro ? 'disabled' : ''}><span>🔒 Nur ich</span></label></div>
@@ -182,8 +184,33 @@ function whoWidget(el, { account = undefined, owner = null, editing = false, acc
     if (!el.dataset.touched) { const o = defaultOwner(accOf(el.dataset.acc), me(), myMember().defaultPrivate); el.dataset.owner = o ?? ''; el.querySelector(`[value=${o ? 'me' : 'shared'}]`).checked = true; }
   });
   el.querySelectorAll(`[name="${el.id}-own"]`).forEach(r => r.onchange = () => { el.dataset.owner = r.value === 'me' ? me() : ''; el.dataset.touched = '1'; });
+  const nb = el.querySelector('[data-new-acc]');
+  if (nb) nb.onclick = async () => {
+    const a = await newAccount(); if (!a) return;
+    whoWidget(el, { account: a.id, owner: el.dataset.owner || null, editing: el.dataset.touched === '1', accounts, hint, label });
+    el.dispatchEvent(new Event('accounts')); // Auswahl „Auf Konto“ neu zeichnen
+  };
   return ro;
 }
+// Neues Konto direkt aus einer Konto-Auswahl anlegen
+async function newAccount() {
+  const v = await ask('Neues Konto', `<label class="field">Name<input id="na-name" maxlength="40" placeholder="z. B. Tagesgeld, Kreditkarte, Konto Partner"></label>
+    <div class="seg small" role="radiogroup" aria-label="Wem gehört das Konto" style="display:flex"><label><input type="radio" name="na-own" value="me" checked><span>🔒 Meins</span></label><label><input type="radio" name="na-own" value="shared"><span>👥 Gemeinsam</span></label></div>
+    <p class="tiny muted">Ein Konto deines Partners legt dein Partner am besten selbst an (dann ist es seins). Hier kannst du eigene und gemeinsame Konten anlegen.</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Anlegen', cls: 'primary' }]);
+  if (v !== 'ok') return null;
+  const name = $('#na-name').value.trim();
+  if (!name) { toast('Kein Name eingegeben'); return null; }
+  const mine = $$('[name=na-own]').find(x => x.checked)?.value === 'me';
+  try { const a = await store.saveAccount({ name, owner: mine ? me() : null, icon: mine ? '💳' : '🏦' }); state.accounts = await store.listAccounts(); toast(`Konto „${name}“ angelegt`); return a; }
+  catch (e) { toast(e.message); return null; }
+}
+// Auswahl „Auf Konto“ für Umbuchungen
+function toOptions(selected, fromId) {
+  return state.accounts.filter(a => !a.archived || a.id === selected).map(a => `<option value="${esc(a.id)}" ${a.id === selected ? 'selected' : ''} ${a.id === fromId ? 'disabled' : ''}>${esc(accLabel(a))}</option>`).join('');
+}
+// Vorschlag für das Ziel einer Umbuchung: vom eigenen Konto aufs Gemeinschaftskonto, sonst das erste andere
+const defaultTo = fromId => (state.accounts.find(a => !a.archived && a.owner == null && a.id !== fromId) ?? state.accounts.find(a => !a.archived && a.id !== fromId))?.id ?? '';
 const whoValue = el => ({ accountId: el.dataset.acc || null, owner: el.dataset.owner || null, readOnly: el.dataset.ro === '1' });
 // Besitzer ändern geht nur zwischen „gemeinsam“ und „ich“; fremde Einträge bleiben, wie sie sind
 const keepOwner = (old, wanted) => old && !canWrite(old.owner) ? old.owner : wanted;
@@ -214,6 +241,52 @@ function payInfo(p) {
   return { balance, linked, forecast: potForecast({ balance, deposits, dues }) };
 }
 
+// Beschriftung der Konto-Auswahl je Art
+const accWord = kind => kind === 'income' ? 'Eingang auf' : kind === 'transfer' ? 'Von Konto' : 'Bezahlt von';
+// Fixkosten-Formular: Felder je Art (Umbuchung braucht keine Kategorie, keinen Spartopf und keinen Vertrag)
+function recKindUI(kind) {
+  const trf = kind === 'transfer';
+  $('#rec-cat').closest('label').classList.toggle('hidden', trf);
+  $('#rec-to-wrap').classList.toggle('hidden', !trf);
+  $('#rec-pay-wrap').classList.toggle('hidden', kind !== 'expense');
+  $('#rec-contract').classList.toggle('hidden', trf);
+}
+
+// ---------- Konten und Kontostand ----------
+function accountsSection() {
+  const accs = state.accounts.filter(a => !a.archived && canWrite(a.owner) && sc(a.owner));
+  if (!accs.length) return '';
+  const monthEnd = monthRange(state.today.slice(0, 7)).to;
+  const set = accs.filter(a => state.balances.has(a.id));
+  const head = `<div class="section-head"><h2>Konten${set.length ? ` · ${eur(set.reduce((x, a) => x + state.balances.get(a.id), 0))}` : ''}</h2><button class="btn link" data-act="set-balance">Stand eintragen</button></div>`;
+  if (!set.length) return head + `<div class="card empty"><p>Trag einmal ein, was auf deinen Konten ist. Danach rechnet die App jede Buchung, Umbuchung und Sparrate mit und zeigt, was am Monatsende voraussichtlich übrig ist.</p><button class="btn" data-act="set-balance">Kontostand eintragen</button></div>`;
+  return head + `<div class="card" style="padding:4px 14px">${accs.map(a => {
+    const bal = state.balances.get(a.id);
+    if (bal == null) return `<div class="acc-row"><span>${esc(accLabel(a))}</span><button class="btn small" data-act="set-balance" data-acc="${esc(a.id)}">Stand eintragen</button></div>`;
+    const end = bal + accountPending(a.id, state.recurring, state.today, monthEnd);
+    return `<div class="acc-row"><span>${esc(accLabel(a))}</span><button class="acc-bal" data-act="set-balance" data-acc="${esc(a.id)}" aria-label="Stand ${esc(a.name)} ändern">
+      <b class="${bal < 0 ? 'neg' : ''}">${bal < 0 ? '−' : ''}${eur(Math.abs(bal))}</b><small class="tiny muted">Monatsende ca. ${end < 0 ? '−' : ''}${eur(Math.abs(end))}</small></button></div>`;
+  }).join('')}<p class="tiny muted" style="padding:8px 0">Stand = zuletzt eingetragener Kontostand plus alles, was seitdem in der App gebucht wurde. Monatsende: inklusive Fixkosten, Einnahmen, Sparraten und Daueraufträge, die bis dahin noch kommen.</p></div>`;
+}
+async function setBalance(a = null) {
+  const accs = state.accounts.filter(x => !x.archived && canWrite(x.owner));
+  if (!accs.length) { toast('Noch kein Konto angelegt (Einstellungen → Konten).'); return; }
+  const cur = a && accs.some(x => x.id === a.id) ? a : accs[0];
+  const v = await ask('Kontostand eintragen', `<label class="field">Konto<select id="bal-acc">${accs.map(x => `<option value="${esc(x.id)}" ${x.id === cur.id ? 'selected' : ''}>${esc(accLabel(x))}</option>`).join('')}</select></label>
+    <label class="field">Stand jetzt laut Banking-App (€)<input id="bal-amount" inputmode="decimal" placeholder="z. B. 1.234,56 oder −50"></label>
+    <p class="tiny muted">Alles, was du ab jetzt in der App buchst, wird dazu- oder abgerechnet. Ein Minus davor für ein überzogenes Konto.</p>`,
+    [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Speichern', cls: 'primary' }]);
+  if (v !== 'ok') return;
+  const raw = $('#bal-amount').value.trim(), neg = /^[-−]/.test(raw), c = parseAmount(raw.replace(/^[-−]\s*/, ''));
+  if (c == null) { toast('Kein gültiger Betrag'); return; }
+  const acc = accOf($('#bal-acc').value);
+  try {
+    await store.saveAccount({ ...acc, startBalance: neg ? -c : c, balanceAt: new Date().toISOString() });
+    await loadAll({ book: false }); render(); if ($('#dlg-settings').open) openSettings();
+    toast(`Stand ${acc.name}: ${neg ? '−' : ''}${eur(c)}`);
+  } catch (e) { toast(e.message); }
+}
+
 // ---------- Übersicht ----------
 function deadlines(days = 60) {
   const out = [], seenPolicy = new Set();
@@ -231,6 +304,9 @@ function deadlines(days = 60) {
 }
 
 function txItem(t) {
+  if (t.kind === 'transfer') return `<li><button class="item" data-tx="${esc(t.id)}"><span class="ic" aria-hidden="true">🔁</span>
+    <span><span class="t">${esc(t.note || 'Umbuchung')}</span><span class="s">${esc(accOf(t.accountId)?.name ?? 'ohne Konto')} → ${esc(accOf(t.toAccountId)?.name ?? 'ohne Konto')}${t.recurringId ? ' · Dauerauftrag' : ''}${ownerTag(t.owner)}</span></span>
+    <span class="a">${signed(t)}</span></button></li>`;
   if (t.potId) {
     const p = potOf(t.potId);
     return `<li><button class="item" data-pot="${esc(t.potId)}"><span class="ic" aria-hidden="true">${esc(p?.icon ?? '🐷')}</span>
@@ -309,6 +385,7 @@ function renderHome() {
   $('#view-home').innerHTML = bandHtml
     + restCard() + pantryCard()
     + (alerts ? `<div class="section-head"><h2>Fristen</h2></div>${alerts}` : '')
+    + accountsSection()
     + potsSection()
     + etfSection()
     + `<div class="section-head"><h2>Budgets</h2><button class="btn link" data-act="limits">${limited.length ? 'Ändern' : 'Festlegen'}</button></div>`
@@ -316,7 +393,7 @@ function renderHome() {
       : `<div class="card empty"><p>Lege fest, wie viel du im Monat z. B. für Lebensmittel oder Essen gehen ausgeben willst. Die App warnt, bevor es knapp wird.</p><button class="btn primary" data-act="limits">Budgets festlegen</button></div>`)
     + `<div class="section-head"><h2>In den nächsten 14 Tagen</h2><button class="btn link" data-act="fixed">Fixkosten</button></div>`
     + (upcoming.length ? `<ul class="list">${upcoming.map(({ d, r }) => `<li><button class="item" ${r.potId ? `data-pot="${esc(r.potId)}"` : `data-rec="${esc(r.id)}"`}><span class="ic" aria-hidden="true">${r.potId ? esc(potOf(r.potId)?.icon ?? '🐷') : cat(r.category).icon}</span>
-        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}${payPot(r) ? ' · 🐷 aus ' + esc(payPot(r).name) : ''}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : r.kind === 'save' ? '→ ' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
+        <span><span class="t">${esc(r.name)}</span><span class="s">${esc(dayLabel(d, state.today))}${payPot(r) ? ' · 🐷 aus ' + esc(payPot(r).name) : ''}${r.kind === 'transfer' ? ` · ${esc(accOf(r.accountId)?.name ?? '?')} → ${esc(accOf(r.toAccountId)?.name ?? '?')}` : ''}</span></span><span class="a ${r.kind === 'income' ? 'amt-in' : ''}">${r.kind === 'income' ? '+' : r.kind === 'save' ? '→ ' : r.kind === 'transfer' ? '↔ ' : '−'}${eur(r.amount)}</span></button></li>`).join('')}</ul>`
       : `<div class="card empty"><p>In den nächsten zwei Wochen ist nichts fällig.</p>${state.recurring.length ? '' : '<button class="btn" data-act="add-rec">Fixkosten eintragen</button>'}</div>`)
     + `<div class="section-head"><h2>Letzte Buchungen</h2>${recent.length ? '<button class="btn link" data-act="tx">Alle</button>' : ''}</div>`
     + (recent.length ? `<ul class="list">${recent.map(txItem).join('')}</ul>` : `<div class="card empty"><p>In diesem Monat ist noch nichts gebucht.</p><button class="btn primary" data-act="add">Erste Ausgabe erfassen</button></div>`);
@@ -329,9 +406,9 @@ function renderTx() {
   const f = state.txFilter;
   const list = (f.q ? real(V.tx) : real(V.tx).filter(t => monthKey(t.date) === state.month))
     .filter(t => f.kind === 'all' || t.kind === f.kind)
-    .filter(t => !f.account || (f.account === '-' ? !t.accountId : t.accountId === f.account))
+    .filter(t => !f.account || (f.account === '-' ? !t.accountId : t.accountId === f.account || t.toAccountId === f.account))
     .filter(t => !f.group || groupOf(t.category) === f.group)
-    .filter(t => !f.q || matches(`${t.note} ${catPath(t.category)} ${eur(t.amount)} ${dateShort(t.date)} ${accOf(t.accountId)?.name ?? ''} ${t.owner ? memberName(t.owner) : ''}`, f.q));
+    .filter(t => !f.q || matches(`${t.note} ${catPath(t.category)} ${eur(t.amount)} ${dateShort(t.date)} ${accOf(t.accountId)?.name ?? ''} ${accOf(t.toAccountId)?.name ?? ''} ${t.owner ? memberName(t.owner) : ''}`, f.q));
   // Freigabe „nur Summen“: eine Zeile je Person und Monat
   const sumLines = f.q ? [] : others().map(m => { const xs = V.tx.filter(t => t.synthetic && t.owner === m.userId && monthKey(t.date) === state.month && t.kind === 'expense' && (!f.group || groupOf(t.category) === f.group)); return { m, total: xs.reduce((a, t) => a + t.amount, 0) }; }).filter(x => x.total);
   const sumE = list.filter(t => t.kind === 'expense').reduce((a, t) => a + t.amount, 0);
@@ -343,7 +420,7 @@ function renderTx() {
     <input type="search" id="tx-q" placeholder="Suchen: Notiz, Kategorie, Betrag" value="${esc(f.q)}" aria-label="Buchungen durchsuchen" enterkeyhint="search">
     <div class="row wrap">
       <div class="seg small" role="radiogroup" aria-label="Art">
-        ${[['all', 'Alle'], ['expense', 'Ausgaben'], ['income', 'Einnahmen']].map(([v, l]) => `<label><input type="radio" name="txk" value="${v}" ${f.kind === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}
+        ${[['all', 'Alle'], ['expense', 'Ausgaben'], ['income', 'Einnahmen'], ['transfer', 'Umbuchungen']].map(([v, l]) => `<label><input type="radio" name="txk" value="${v}" ${f.kind === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}
       </div>
       ${state.accounts.length > 1 ? `<select id="tx-a" aria-label="Konto" style="flex:1;min-width:150px"><option value="">Alle Konten</option>${state.accounts.map(a => `<option value="${esc(a.id)}" ${f.account === a.id ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}<option value="-" ${f.account === '-' ? 'selected' : ''}>Ohne Konto</option></select>` : ''}
       <select id="tx-g" aria-label="Kategorie" style="flex:1;min-width:150px">
@@ -369,6 +446,12 @@ function renderTx() {
 
 // ---------- Fixkosten ----------
 function recItem(r) {
+  if (r.kind === 'transfer') {
+    const sub = r.active ? `${FREQS[r.freq].label} · nächste ${r.nextDue.slice(0, 4) === state.today.slice(0, 4) ? dateShortNoYear(r.nextDue) : dateShort(r.nextDue)}` : `beendet${r.endDate ? ' am ' + dateShort(r.endDate) : ''}`;
+    return `<li><button class="item" data-rec="${esc(r.id)}"><span class="ic" aria-hidden="true">🔁</span>
+      <span><span class="t">${esc(r.name)}</span><span class="s">${esc(sub)} · ${esc(accOf(r.accountId)?.name ?? 'ohne Konto')} → ${esc(accOf(r.toAccountId)?.name ?? 'ohne Konto')}${ownerTag(r.owner)}</span></span>
+      <span class="a">${eur(r.amount)}<small>${r.freq === 'monthly' ? 'im Monat' : `≈ ${eur(monthlyCents(r))}/Monat`}</small></span></button></li>`;
+  }
   const c = cat(r.category), pol = r.policyId && state.policies.find(p => p.id === r.policyId);
   const n = noticeInfo(r.contractEnd ?? pol?.contractEnd, r.noticeMonths ?? pol?.noticeMonths, state.today);
   const nb = n ? `<span class="badge ${n.daysLeft <= 14 ? 'bad' : n.daysLeft <= 60 ? 'warn' : ''}">kündbar bis ${dateShortNoYear(n.deadline)}${n.deadline.slice(0, 4) !== state.today.slice(0, 4) ? n.deadline.slice(0, 4) : ''}</span>` : '';
@@ -380,10 +463,14 @@ function recItem(r) {
 function renderFixed() {
   const act = V.recurring.filter(r => r.active), ended = V.recurring.filter(r => !r.active);
   const perAcc = new Map();
-  // aus einem Spartopf bezahlte Fixkosten gehen nicht vom Konto ab (dafür die Sparrate des Topfs)
-  for (const r of act) if (r.kind !== 'income' && !r.payPotId) perAcc.set(r.accountId ?? '', (perAcc.get(r.accountId ?? '') ?? 0) + monthlyCents(r));
-  const sumFixed = others().map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'fixed' && x.kind !== 'income').reduce((a, x) => a + x.total, 0) })).filter(x => x.total && sc(x.m.userId) && state.scope !== 'shared');
-  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income'), sav = act.filter(r => r.kind === 'save');
+  // aus einem Spartopf bezahlte Fixkosten gehen nicht vom Konto ab (dafür die Sparrate des Topfs); Daueraufträge: ab beim Absender, rein beim Empfänger
+  const perAccIn = new Map(), addTo = (m, k, v) => m.set(k ?? '', (m.get(k ?? '') ?? 0) + v);
+  for (const r of act) {
+    if (r.kind === 'transfer') { addTo(perAcc, r.accountId, monthlyCents(r)); addTo(perAccIn, r.toAccountId, monthlyCents(r)); }
+    else if (r.kind !== 'income' && !r.payPotId) addTo(perAcc, r.accountId, monthlyCents(r));
+  }
+  const sumFixed = others().map(m => ({ m, total: state.sums.filter(x => x.owner === m.userId && x.area === 'fixed' && (x.kind === 'expense' || x.kind === 'save')).reduce((a, x) => a + x.total, 0) })).filter(x => x.total && sc(x.m.userId) && state.scope !== 'shared');
+  const exp = act.filter(r => r.kind === 'expense'), inc = act.filter(r => r.kind === 'income'), sav = act.filter(r => r.kind === 'save'), trf = act.filter(r => r.kind === 'transfer');
   const mExp = exp.reduce((a, r) => a + monthlyCents(r), 0), mInc = inc.reduce((a, r) => a + monthlyCents(r), 0), mSav = sav.reduce((a, r) => a + monthlyCents(r), 0);
   const ins = exp.filter(r => groupOf(r.category) === 'versicherung' && r.freq !== 'monthly' && !r.payPotId).reduce((a, r) => a + monthlyCents(r), 0);
   // payPotId statt payPot(): auch wenn der Topf (privat beim Partner) nicht sichtbar ist, geht es nicht vom Konto ab
@@ -400,14 +487,16 @@ function renderFixed() {
     </div>
     ${mPot ? `<p class="tiny muted" style="margin:10px 4px 0">🐷 ${eur(mPot)} pro Monat davon werden aus Spartöpfen bezahlt. Vom Konto geht dafür nur die Sparrate des Topfs ab, so oft wie dort eingestellt.</p>` : ''}
     ${nonMonthly ? `<p class="tiny muted" style="margin:10px 4px 0">Darin stecken ${eur(nonMonthly)} pro Monat für jährliche oder vierteljährliche Kosten${ins ? `, ${eur(ins)} davon für Versicherungen` : ''}. Tipp: bei der Position „Bezahlt aus“ einen Spartopf wählen, dann wird das Geld mit der Sparrate zurückgelegt.</p>` : ''}
-    ${state.accounts.length && perAcc.size ? `<div class="section-head"><h2>Abbuchungen je Konto</h2></div><div class="card" style="padding:4px 14px">${[...perAcc.entries()].sort((a, b) => b[1] - a[1]).map(([id, c]) => `<div class="acc-row"><span>${esc(accLabel(accOf(id)))}</span><b>${eur(c)}/Monat</b></div>`).join('')}
-      <p class="tiny muted" style="padding:8px 0">So viel geht im Schnitt pro Monat von jedem Konto für Fixkosten und Sparraten ab.</p></div>` : ''}
+    ${state.accounts.length && (perAcc.size || perAccIn.size) ? `<div class="section-head"><h2>Abbuchungen je Konto</h2></div><div class="card" style="padding:4px 14px">${[...new Set([...perAcc.keys(), ...perAccIn.keys()])].map(id => [id, perAcc.get(id) ?? 0]).sort((a, b) => b[1] - a[1]).map(([id, c]) => `<div class="acc-row"><span>${esc(accLabel(accOf(id)))}</span><b>${eur(c)}/Monat${perAccIn.get(id) ? `<small class="tiny amt-in" style="display:block;text-align:right">+${eur(perAccIn.get(id))} Umbuchung</small>` : ''}</b></div>`).join('')}
+      <p class="tiny muted" style="padding:8px 0">So viel geht im Schnitt pro Monat von jedem Konto für Fixkosten, Sparraten und Daueraufträge ab.</p></div>` : ''}
     ${sumFixed.map(x => `<p class="tiny muted" style="margin:10px 4px 0">🔒 ${esc(x.m.displayName || 'Partner')} hat private Fixkosten von ${eur(x.total)} im Monat (nur Summe freigegeben).</p>`).join('')}
     <div class="section-head"><h2>Ausgaben</h2><button class="btn link" data-act="add-rec">Hinzufügen</button></div>
     ${exp.length ? ordered.map(g => `<div class="day-head"><span>${g.icon} ${esc(g.label)}</span><span>${eur(byGroup.get(g.id).reduce((a, r) => a + monthlyCents(r), 0))}/Monat</span></div><ul class="list">${byGroup.get(g.id).map(recItem).join('')}</ul>`).join('')
       : `<div class="card empty"><p>Trag hier ein, was regelmäßig abgeht: Miete, Strom, Handy, Streaming, Versicherungen. Die App bucht es dann jeden Monat automatisch.</p><button class="btn primary" data-act="add-rec">Fixkosten eintragen</button></div>`}
     <div class="section-head"><h2>Sparraten</h2><button class="btn link" data-act="add-pot">Spartopf anlegen</button></div>
     ${sav.length ? `<ul class="list">${sav.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Eine feste Sparrate legt jeden Monat automatisch Geld in einen Spartopf.</p><button class="btn" data-act="add-pot">Spartopf anlegen</button></div>`}
+    <div class="section-head"><h2>Umbuchungen (Daueraufträge)</h2><button class="btn link" data-act="add-transfer">Hinzufügen</button></div>
+    ${trf.length ? `<ul class="list">${trf.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Geht regelmäßig Geld von einem Konto auf ein anderes, z. B. Haushaltsgeld aufs Gemeinschaftskonto? Das zählt nicht als Ausgabe, verändert aber die Kontostände.</p><button class="btn" data-act="add-transfer">Dauerauftrag eintragen</button></div>`}
     <div class="section-head"><h2>Regelmäßige Einnahmen</h2><button class="btn link" data-act="add-income">Hinzufügen</button></div>
     ${inc.length ? `<ul class="list">${inc.map(recItem).join('')}</ul>` : `<div class="card empty"><p>Gehalt, BAföG oder Nebenjob eintragen, dann weiß die App, wie viel im Monat frei ist.</p><button class="btn" data-act="add-income">Einnahme eintragen</button></div>`}
     ${ended.length ? `<div class="section-head"><h2>Beendet</h2></div><ul class="list">${ended.map(recItem).join('')}</ul>` : ''}`;
@@ -501,6 +590,13 @@ function renderStats() {
 // ---------- Schnellerfassung ----------
 const tx = { kind: 'expense', group: null, cat: null, editing: null, catTouched: false, source: 'manual' };
 function drawCats() {
+  const trf = tx.kind === 'transfer';
+  $('#tx-to-wrap').classList.toggle('hidden', !trf); $('.photo-btn').classList.toggle('hidden', trf);
+  if (trf) {
+    $('#tx-recent').innerHTML = ''; $('#tx-groups').innerHTML = ''; $('#tx-subs').innerHTML = '';
+    $('#tx-save').textContent = tx.editing ? 'Änderung speichern' : 'Umbuchung speichern';
+    return;
+  }
   const groups = groupsFor(tx.kind);
   const recent = topCategories(real(state.tx), tx.kind, 5).filter(id => cat(id).group);
   $('#tx-recent').innerHTML = recent.length && !tx.editing ? recent.map(id => `<button type="button" class="chip ${tx.cat === id ? 'on' : ''}" data-cat="${esc(id)}">${cat(id).icon} ${esc(cat(id).label)}</button>`).join('') : '';
@@ -520,7 +616,8 @@ function openTx(t = null, preset = {}) {
   const when = d === state.today ? 'today' : d === addDays(state.today, -1) ? 'yesterday' : 'other';
   $$('[name=when]').forEach(r => r.checked = r.value === when);
   $('#tx-date').value = d; $('#tx-date').classList.toggle('hidden', when !== 'other');
-  const ro = whoWidget($('#tx-who'), { account: t ? t.accountId : lastAccount(), owner: t ? t.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!t });
+  const ro = whoWidget($('#tx-who'), { account: t ? t.accountId : lastAccount(), owner: t ? t.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!t, label: accWord(tx.kind) });
+  $('#tx-to').innerHTML = toOptions(t?.toAccountId ?? defaultTo($('#tx-who').dataset.acc), $('#tx-who').dataset.acc);
   $('#tx-delete').classList.toggle('hidden', !t || ro);
   $('#tx-save').classList.toggle('hidden', ro);
   $('#tx-err').textContent = ''; $('#tx-photo-msg').textContent = t?.recurringId ? 'Automatisch aus den Fixkosten gebucht. Änderungen gelten nur für diese eine Buchung.' : '';
@@ -535,13 +632,19 @@ async function saveTxForm() {
   const when = $$('[name=when]').find(r => r.checked)?.value;
   const date = when === 'today' ? state.today : when === 'yesterday' ? addDays(state.today, -1) : $('#tx-date').value;
   if (!amount) { $('#tx-err').textContent = 'Bitte einen Betrag eingeben, z. B. 12,50.'; $('#tx-amount').focus(); return; }
+  const isTrf = tx.kind === 'transfer';
+  if (isTrf) {
+    tx.cat = 'umbuchung';
+    if (!$('#tx-who').dataset.acc || !$('#tx-to').value) { $('#tx-err').textContent = 'Bitte beide Konten wählen: von welchem und auf welches.'; return; }
+    if ($('#tx-who').dataset.acc === $('#tx-to').value) { $('#tx-err').textContent = 'Von- und Auf-Konto sind gleich.'; return; }
+  }
   if (!tx.cat) { $('#tx-err').textContent = 'Bitte eine Kategorie antippen.'; return; }
   if (!isIso(date)) { $('#tx-err').textContent = 'Bitte ein gültiges Datum wählen.'; return; }
   const old = tx.editing;
   const who = whoValue($('#tx-who'));
   if (who.readOnly) return;
   const t = { ...(old ?? {}), id: old?.id ?? uid(), date, amount, kind: tx.kind, category: tx.cat, note: $('#tx-note').value.trim(), source: old?.source ?? tx.source, createdAt: old?.createdAt ?? new Date().toISOString(),
-    accountId: who.accountId, owner: keepOwner(old, who.owner) };
+    accountId: who.accountId, toAccountId: isTrf ? $('#tx-to').value : null, owner: keepOwner(old, who.owner) };
   if (who.accountId) localStorage.setItem('haushaltskasse.account', who.accountId);
   if (!old) { t.recurringId = null; t.dueDate = null; }
   // Sofort anzeigen, dann im Hintergrund speichern
@@ -549,7 +652,7 @@ async function saveTxForm() {
   $('#dlg-tx').close(); render();
   toast(`${old ? 'Geändert' : 'Gespeichert'}: ${eur(amount)} ${cat(t.category).label}`, old ? null : { label: 'Rückgängig', fn: () => deleteTx(t, true) });
   const p = store.saveTx(t); saving.set(t.id, p.catch(() => {}));
-  try { const saved = await p; state.tx = state.tx.map(x => x.id === t.id ? { ...t, ...saved } : x); }
+  try { const saved = await p; state.tx = state.tx.map(x => x.id === t.id ? { ...t, ...saved } : x); if (state.balances.size) scheduleReload(); }
   catch (e) {
     if (e.offline && store.mode === 'supabase') { queue({ op: 'save', tx: t }); return; }
     state.tx = old ? state.tx.map(x => x.id === t.id ? old : x) : state.tx.filter(x => x.id !== t.id); render();
@@ -561,7 +664,7 @@ async function deleteTx(t, silent = false) {
   if (!silent && !(await confirmDelete('Buchung'))) return;
   state.tx = state.tx.filter(x => x.id !== t.id); $('#dlg-tx').open && $('#dlg-tx').close(); render();
   if (!silent) toast('Buchung gelöscht', { label: 'Rückgängig', fn: async () => { state.tx = [t, ...state.tx].sort(byDateDesc); render(); try { await store.saveTx(t); } catch (e) { e.offline ? queue({ op: 'save', tx: t }) : ask('Nicht wiederhergestellt', esc(e.message)); } } });
-  try { await saving.get(t.id); saving.delete(t.id); await store.deleteTx(t.id); } catch (e) { if (e.offline && store.mode === 'supabase') queue({ op: 'delete', id: t.id }); else { state.tx = [t, ...state.tx].sort(byDateDesc); render(); ask('Nicht gelöscht', `<p>${esc(e.message)}</p>`); } }
+  try { await saving.get(t.id); saving.delete(t.id); await store.deleteTx(t.id); if (state.balances.size) scheduleReload(); } catch (e) { if (e.offline && store.mode === 'supabase') queue({ op: 'delete', id: t.id }); else { state.tx = [t, ...state.tx].sort(byDateDesc); render(); ask('Nicht gelöscht', `<p>${esc(e.message)}</p>`); } }
 }
 async function receiptPhoto(file) {
   const msg = $('#tx-photo-msg');
@@ -630,11 +733,12 @@ function payHint(sel, hintEl) {
 function openRec(r = null, preset = {}) {
   recEditing = r;
   const kind = r?.kind ?? preset.kind ?? 'expense';
-  const ro = whoWidget($('#rec-who'), { account: r ? r.accountId : lastAccount(), owner: r ? r.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!r });
+  const ro = whoWidget($('#rec-who'), { account: r ? r.accountId : lastAccount(), owner: r ? r.owner : defaultOwner(accOf(lastAccount()), me(), myMember().defaultPrivate), editing: !!r, label: accWord(kind) });
+  $('#rec-to').innerHTML = toOptions(r?.toAccountId ?? defaultTo($('#rec-who').dataset.acc), $('#rec-who').dataset.acc);
   $('#form-rec [type=submit]').classList.toggle('hidden', ro);
   recReadOnly = ro;
   $$('[name=rkind]').forEach(x => x.checked = x.value === kind);
-  $('#rec-title').textContent = r ? (kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten') : kind === 'income' ? 'Neue regelmäßige Einnahme' : 'Neue Fixkosten';
+  $('#rec-title').textContent = kind === 'transfer' ? (r ? 'Dauerauftrag' : 'Neuer Dauerauftrag') : r ? (kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten') : kind === 'income' ? 'Neue regelmäßige Einnahme' : 'Neue Fixkosten';
   $('#rec-name').value = r?.name ?? preset.name ?? '';
   $('#rec-amount').value = r ? amountInput(r.amount) : '';
   $('#rec-freq').innerHTML = freqOptions(r?.freq ?? 'monthly');
@@ -647,7 +751,7 @@ function openRec(r = null, preset = {}) {
   $('#rec-contract').open = !!(r?.contractEnd || r?.noticeMonths != null);
   $('#rec-delete').classList.toggle('hidden', !r || recReadOnly);
   $('#rec-pay').innerHTML = payOptions(r?.payPotId ?? '');
-  $('#rec-pay-wrap').classList.toggle('hidden', kind === 'income'); payHint('#rec-pay', '#rec-pay-hint');
+  payHint('#rec-pay', '#rec-pay-hint'); recKindUI(kind);
   $('#rec-err').textContent = '';
   const pol = r?.policyId && state.policies.find(p => p.id === r.policyId);
   recHint();
@@ -661,14 +765,17 @@ async function saveRecForm() {
   if (!name) return err('Bitte eine Bezeichnung eingeben.');
   if (!amount) return err('Bitte einen Betrag eingeben.');
   if (!isIso(next)) return err('Bitte das Datum der nächsten Abbuchung wählen.');
+  if (kind === 'transfer' && (!$('#rec-who').dataset.acc || !$('#rec-to').value)) return err('Bitte beide Konten wählen: von welchem und auf welches.');
+  if (kind === 'transfer' && $('#rec-who').dataset.acc === $('#rec-to').value) return err('Von- und Auf-Konto sind gleich.');
   if (end && (!isIso(end) || end < next)) return err('Die letzte Abbuchung muss nach der nächsten liegen.');
   const old = recEditing;
   const scheduleChanged = !old || old.freq !== freq || old.nextDue !== next || !old.active;
   const who = whoValue($('#rec-who'));
   if (who.readOnly) return;
-  const r = { ...(old ?? {}), accountId: who.accountId, owner: keepOwner(old, who.owner), name, amount, kind, freq, category: $('#rec-cat').value, endDate: end || null, contractEnd: $('#rec-cend').value || null,
+  const r = { ...(old ?? {}), accountId: who.accountId, toAccountId: kind === 'transfer' ? $('#rec-to').value : null, owner: keepOwner(old, who.owner), name, amount, kind, freq, category: kind === 'transfer' ? 'umbuchung' : $('#rec-cat').value, endDate: end || null, contractEnd: $('#rec-cend').value || null,
     noticeMonths: $('#rec-notice').value === '' ? null : +$('#rec-notice').value, active: true,
     ...(scheduleChanged ? { startDate: next, nextDue: next, n: 0 } : {}) };
+  if (kind === 'transfer') Object.assign(r, { contractEnd: null, noticeMonths: null, policyId: null, payPotId: null }); // Dauerauftrag: kein Vertrag, keine Kündigungsfrist
   if (next < addMonths(state.today, -24)) return err('Die nächste Abbuchung darf höchstens zwei Jahre zurückliegen.');
   newPotNote = '';
   try {
@@ -988,6 +1095,7 @@ async function potMove(p, kind) {
   const etf = p.kind === 'etf';
   const v = await ask(kind === 'save' ? `In „${p.name}“ einzahlen` : etf ? `„${p.name}“ teilweise verkaufen` : `Aus „${p.name}“ entnehmen`,
     `<label class="field">${etf && kind === 'unsave' ? 'Verkaufserlös (€)' : 'Betrag (€)'}<input id="mv-amount" inputmode="decimal" placeholder="0,00"></label><label class="field">Notiz <span class="muted">(optional)</span><input id="mv-note" maxlength="80" placeholder="${kind === 'save' ? (etf ? 'z. B. Bonus angelegt' : 'z. B. Geburtstagsgeld') : etf ? 'z. B. Teilverkauf' : 'z. B. Flug gebucht'}"></label>
+     <label class="field">${kind === 'save' ? 'Von Konto' : 'Auf Konto'}<select id="mv-acc"><option value="">ohne Konto</option>${state.accounts.filter(a => !a.archived).map(a => `<option value="${esc(a.id)}" ${a.id === (state.recurring.find(r => r.kind === 'save' && r.potId === p.id && r.active)?.accountId ?? lastAccount()) ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}</select></label>
      <p class="tiny muted">${kind === 'save' ? 'Zählt im laufenden Monat als gespart und mindert, was frei ist.' : 'Das Geld steht dann im laufenden Monat wieder zur Verfügung.'}${etf ? ' Der Depotwert wird um diesen Betrag fortgeschrieben, bis du einen neuen einträgst.' : ''}</p>`,
     [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: kind === 'save' ? 'Einzahlen' : etf ? 'Verkauf buchen' : 'Entnehmen', cls: 'primary' }]);
   if (v !== 'ok') return;
@@ -997,7 +1105,7 @@ async function potMove(p, kind) {
   const limit = etf ? (etfValue(p, state.potTx).value ?? bal) : bal;
   if (kind === 'unsave' && amount > limit && (await ask(etf ? 'Mehr als der Depotwert' : 'Mehr als drauf ist', `<p>${etf ? `Der ETF ist nach letztem Stand etwa ${eur(limit)} wert.` : `Im Topf sind nur ${eur(bal)}.`} Trotzdem ${eur(amount)} ${etf ? 'als Verkauf buchen' : 'entnehmen'}?</p>`, [{ value: '', label: 'Abbrechen' }, { value: 'ok', label: 'Trotzdem', cls: 'primary' }])) !== 'ok') return;
   try {
-    await store.saveTx({ id: uid(), owner: p.owner ?? null, date: state.today, amount, kind, category: p.kind === 'etf' ? 'fi-anlage' : 'fi-sparen', potId: p.id, note: $('#mv-note').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
+    await store.saveTx({ id: uid(), owner: p.owner ?? null, accountId: $('#mv-acc').value || null, date: state.today, amount, kind, category: p.kind === 'etf' ? 'fi-anlage' : 'fi-sparen', potId: p.id, note: $('#mv-note').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
     await loadAll({ book: false }); render(); openPot(potOf(p.id));
     toast(kind === 'save' ? `${eur(amount)} eingezahlt` : etf ? `Verkauf über ${eur(amount)} gebucht` : `${eur(amount)} entnommen`);
   } catch (e) { $('#pot-err').textContent = e.message; }
@@ -1152,7 +1260,7 @@ function openSettings(focus) {
     </section>
     <section class="set-group"><h3>Konten</h3>
       <div>${state.accounts.map(a => `<div class="acc-row"><span>${esc(accLabel(a))} <span class="owner-tag">${a.owner == null ? 'gemeinsam' : a.owner === me() ? 'meins' : esc(memberName(a.owner))}${a.archived ? ' · ausgeblendet' : ''}</span></span>
-        ${canWrite(a.owner) ? `<button class="btn small" data-acc-toggle="${esc(a.id)}">${a.archived ? 'Einblenden' : 'Ausblenden'}</button>` : '<span></span>'}</div>`).join('') || '<p class="muted">Noch keine Konten.</p>'}</div>
+        ${canWrite(a.owner) ? `<span class="row">${a.archived ? '' : `<button class="btn small" data-bal-set="${esc(a.id)}">Stand</button>`}<button class="btn small" data-acc-toggle="${esc(a.id)}">${a.archived ? 'Einblenden' : 'Ausblenden'}</button></span>` : '<span></span>'}</div>`).join('') || '<p class="muted">Noch keine Konten.</p>'}</div>
       <form id="form-acc" class="row wrap"><input id="acc-name" placeholder="z. B. Tagesgeld, Kreditkarte" maxlength="40" aria-label="Name des Kontos" style="flex:2;min-width:140px">
         <select id="acc-owner" aria-label="Wem gehört das Konto" style="flex:1;min-width:120px"><option value="me">Meins</option><option value="shared">Gemeinsam</option></select><button class="btn">Dazu</button></form>
     </section>
@@ -1193,6 +1301,7 @@ function openSettings(focus) {
     try { await store.saveAccount({ name, owner: $('#acc-owner').value === 'me' ? me() : null, icon: $('#acc-owner').value === 'me' ? '💳' : '🏦' }); state.accounts = await store.listAccounts(); openSettings(); }
     catch (err) { toast(err.message); }
   };
+  $$('[data-bal-set]').forEach(b => b.onclick = () => setBalance(accOf(b.dataset.balSet)));
   $$('[data-acc-toggle]').forEach(b => b.onclick = async () => {
     const a = accOf(b.dataset.accToggle);
     try { await store.saveAccount({ ...a, archived: !a.archived }); state.accounts = await store.listAccounts(); openSettings(); } catch (err) { toast(err.message); }
@@ -1254,6 +1363,8 @@ function bindEvents() {
     if (act === 'add') openTx();
     else if (act === 'add-rec') openRec();
     else if (act === 'add-income') openRec(null, { kind: 'income', name: 'Gehalt', category: 'ei-gehalt' });
+    else if (act === 'add-transfer') openRec(null, { kind: 'transfer', name: 'Haushaltsgeld' });
+    else if (act === 'set-balance') setBalance(el.dataset.acc ? accOf(el.dataset.acc) : null);
     else if (act === 'add-pol') openPolicy(null, el.dataset.ctype || null);
     else if (act === 'add-pot') openPot();
     else if (act === 'add-etf') openPot(null, 'etf');
@@ -1281,7 +1392,18 @@ function bindEvents() {
   });
 
   // Schnellerfassung
-  $$('[name=kind]').forEach(r => r.onchange = () => { tx.kind = r.value; tx.cat = r.value === 'income' ? 'einkommen' : null; tx.group = r.value === 'income' ? 'einkommen' : null; tx.catTouched = false; drawCats(); });
+  $$('[name=kind]').forEach(r => r.onchange = () => {
+    tx.kind = r.value; tx.cat = r.value === 'income' ? 'einkommen' : r.value === 'transfer' ? 'umbuchung' : null; tx.group = r.value === 'income' ? 'einkommen' : null; tx.catTouched = false;
+    const w = $('#tx-who'); whoWidget(w, { account: w.dataset.acc || null, owner: w.dataset.owner || null, editing: w.dataset.touched === '1', label: accWord(tx.kind) });
+    if (!$('#tx-to').value || $('#tx-to').value === w.dataset.acc) $('#tx-to').innerHTML = toOptions(defaultTo(w.dataset.acc), w.dataset.acc);
+    drawCats();
+  });
+  // Von-Konto gewechselt oder neues Konto: Auf-Konto-Auswahl anpassen
+  const redrawTo = (whoSel, toSel) => { const w = $(whoSel), cur = $(toSel).value; $(toSel).innerHTML = toOptions(cur && cur !== w.dataset.acc ? cur : defaultTo(w.dataset.acc), w.dataset.acc); };
+  $('#tx-who').addEventListener('click', e => { if (e.target.closest('[data-acc]')) redrawTo('#tx-who', '#tx-to'); });
+  $('#tx-who').addEventListener('accounts', () => redrawTo('#tx-who', '#tx-to'));
+  $('#rec-who').addEventListener('click', e => { if (e.target.closest('[data-acc]')) redrawTo('#rec-who', '#rec-to'); });
+  $('#rec-who').addEventListener('accounts', () => redrawTo('#rec-who', '#rec-to'));
   $('#tx-groups').onclick = e => { const b = e.target.closest('[data-g]'); if (b) setCat(b.dataset.g); };
   $('#tx-subs').onclick = e => { const b = e.target.closest('[data-cat]'); if (b) setCat(b.dataset.cat); };
   $('#tx-recent').onclick = e => { const b = e.target.closest('[data-cat]'); if (b) setCat(b.dataset.cat); };
@@ -1295,9 +1417,11 @@ function bindEvents() {
   // Fixkosten
   $('#form-rec').onsubmit = e => { e.preventDefault(); saveRecForm(); };
   ['#rec-amount', '#rec-freq', '#rec-next'].forEach(s => $(s).addEventListener('input', recHint));
-  $$('[name=rkind]').forEach(r => r.onchange = () => { $('#rec-cat').innerHTML = catOptions(r.value, r.value === 'income' ? 'ei-gehalt' : 'wo-miete'); $('#rec-pay-wrap').classList.toggle('hidden', r.value === 'income'); });
+  $$('[name=rkind]').forEach(r => r.onchange = () => { if (r.value !== 'transfer') $('#rec-cat').innerHTML = catOptions(r.value, r.value === 'income' ? 'ei-gehalt' : 'wo-miete');
+    const w = $('#rec-who'); whoWidget(w, { account: w.dataset.acc || null, owner: w.dataset.owner || null, editing: w.dataset.touched === '1', label: accWord(r.value) }); redrawTo('#rec-who', '#rec-to'); recKindUI(r.value);
+    $('#rec-title').textContent = r.value === 'transfer' ? (recEditing ? 'Dauerauftrag' : 'Neuer Dauerauftrag') : recEditing ? (r.value === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten') : r.value === 'income' ? 'Neue regelmäßige Einnahme' : 'Neue Fixkosten'; });
   $('#rec-delete').onclick = async () => {
-    if (!(await confirmDelete(recEditing.kind === 'income' ? 'Regelmäßige Einnahme' : 'Fixkosten'))) return;
+    if (!(await confirmDelete(recEditing.kind === 'income' ? 'Regelmäßige Einnahme' : recEditing.kind === 'transfer' ? 'Dauerauftrag' : 'Fixkosten'))) return;
     try { await store.deleteRecurring(recEditing.id); $('#dlg-rec').close(); await loadAll({ book: false }); render(); toast('Gelöscht. Bisherige Buchungen bleiben erhalten.'); } catch (e) { $('#rec-err').textContent = e.message; }
   };
 
@@ -1396,7 +1520,7 @@ async function start() {
 
 // Ohne Netz: letzten Stand zeigen, neue Buchungen landen in der Warteschlange und gehen raus, sobald wieder Netz da ist
 function startOffline(snap) {
-  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, pots: snap.pots ?? [], potTx: snap.potTx ?? [], members: snap.members ?? [], accounts: snap.accounts ?? [], memberIds: snap.memberIds ?? [], sums: snap.sums ?? [], config: { limits: {}, custom: [], ...snap.config } });
+  Object.assign(state, { tx: [...outbox.get().filter(o => o.op === 'save').map(o => o.tx), ...snap.tx].sort(byDateDesc), recurring: snap.recurring, policies: snap.policies, pots: snap.pots ?? [], potTx: snap.potTx ?? [], members: snap.members ?? [], accounts: snap.accounts ?? [], balances: new Map(snap.balances ?? []), memberIds: snap.memberIds ?? [], sums: snap.sums ?? [], config: { limits: {}, custom: [], ...snap.config } });
   setCustomCategories(state.config.custom);
   store.useOffline(snap.household);
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');

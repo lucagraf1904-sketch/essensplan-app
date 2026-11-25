@@ -91,7 +91,7 @@ export function bookDueLocal(recurring, today, existingKeys = new Set()) {
     while (d <= today && (!r.endDate || d <= r.endDate) && guard < 60) {
       const key = r.id + '|' + d;
       // aus einem Spartopf bezahlt: nicht vom Konto
-      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null, owner: r.owner ?? null, accountId: r.payPotId ? null : r.accountId ?? null }); existingKeys.add(key); }
+      if (!existingKeys.has(key)) { txs.push({ date: d, amount: r.amount, kind: r.kind, category: r.category, note: r.name, source: 'recurring', recurringId: r.id, dueDate: d, potId: r.potId ?? null, owner: r.owner ?? null, accountId: r.payPotId ? null : r.accountId ?? null, toAccountId: r.toAccountId ?? null }); existingKeys.add(key); }
       k++; guard++; d = nthDue(r.startDate, r.freq, k);
     }
     r.n = k; r.nextDue = d; r.active = !r.endDate || d <= r.endDate;
@@ -138,7 +138,7 @@ export function monthSummary({ tx, recurring, key, today, groupOf }) {
   const { from, to, days } = monthRange(key);
   const s = { key, from, to, days, income: 0, expense: 0, fixedBooked: 0, pendingIncome: 0, pendingExpense: 0, saved: 0, unsaved: 0, pendingSave: 0, byGroup: {}, pendingByGroup: {}, pendingList: [] };
   for (const t of tx) {
-    if (t.date < from || t.date > to) continue;
+    if (t.date < from || t.date > to || t.kind === 'transfer') continue; // Umbuchung: Geld bleibt im Haushalt
     if (t.kind === 'income') s.income += t.amount;
     else if (t.kind === 'save') s.saved += t.amount;
     else if (t.kind === 'unsave') s.unsaved += t.amount;
@@ -149,6 +149,7 @@ export function monthSummary({ tx, recurring, key, today, groupOf }) {
     }
   }
   for (const r of recurring) {
+    if (r.kind === 'transfer') continue;
     for (const d of occurrences(r, from, to)) {
       if (r.kind === 'income') s.pendingIncome += r.amount;
       else if (r.kind === 'save') s.pendingSave += r.amount;
@@ -274,6 +275,32 @@ export function byAccount(tx, from, to) {
   return m;
 }
 
+// ---------- Kontostand ----------
+// Wirkung einer Buchung auf ein Konto in Cent: Einnahme und Entnahme aus dem Spartopf +, Ausgabe und Einzahlung in den Spartopf −,
+// Umbuchung − beim Absender und + beim Empfänger (gleiche Regel wie budget_account_balances in budget.sql)
+export function accountEffect(t, accId) {
+  if (t.kind === 'transfer') return (t.toAccountId === accId ? t.amount : 0) - (t.accountId === accId ? t.amount : 0);
+  if (t.accountId !== accId) return 0;
+  return t.kind === 'income' || t.kind === 'unsave' ? t.amount : -t.amount;
+}
+// Stand heute: eingetragener Stand + alles, was danach gebucht wurde (späteres Datum, oder am selben Tag später erfasst)
+export function accountBalance(a, tx) {
+  if (a.startBalance == null || !a.balanceAt) return null;
+  const day = iso(new Date(a.balanceAt));
+  return tx.reduce((sum, t) => t.synthetic || !(t.date > day || (t.date === day && t.createdAt && new Date(t.createdAt) > new Date(a.balanceAt))) ? sum : sum + accountEffect(t, a.id), a.startBalance);
+}
+// Was bis zum Monatsende (to) noch auf das Konto kommt oder abgeht: Fixkosten, Einnahmen, Sparraten und Daueraufträge ab morgen.
+// Fixkosten, die aus einem Spartopf bezahlt werden, gehen nicht vom Konto ab.
+export function accountPending(accId, recurring, today, to) {
+  let sum = 0;
+  for (const r of recurring) {
+    if (r.payPotId && r.kind === 'expense') continue;
+    const n = occurrences(r, addDays(today, 1), to).length;
+    if (n) sum += n * accountEffect({ kind: r.kind, amount: r.amount, accountId: r.accountId, toAccountId: r.toAccountId }, accId);
+  }
+  return sum;
+}
+
 // ---------- ETFs ----------
 // Gewinn/Verlust aus eingezahlter Summe und selbst eingetragenem Depotwert
 export function etfGain(paid, value) {
@@ -340,8 +367,8 @@ const csvCell = (v, text = true) => {
 export function toCsv(tx, catPath) {
   const head = ['Datum', 'Art', 'Kategorie', 'Betrag', 'Notiz', 'Quelle'];
   const rows = [...tx].sort((a, b) => a.date.localeCompare(b.date)).map(t => [
-    dateShort(t.date), { income: 'Einnahme', expense: 'Ausgabe', save: 'In Spartopf', unsave: 'Aus Spartopf' }[t.kind] ?? t.kind, catPath(t.category),
-    (t.kind === 'income' || t.kind === 'unsave' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
+    dateShort(t.date), { income: 'Einnahme', expense: 'Ausgabe', save: 'In Spartopf', unsave: 'Aus Spartopf', transfer: 'Umbuchung' }[t.kind] ?? t.kind, catPath(t.category),
+    (t.kind === 'income' || t.kind === 'unsave' || t.kind === 'transfer' ? '' : '-') + fromCents(t.amount).toFixed(2).replace('.', ','), t.note ?? '',
     { manual: 'von Hand', receipt: 'Kassenbon', recurring: 'Fixkosten', import: 'Import', rest: 'Monatsrest', pantry: 'Speisekammer', cash: 'Bargeld' }[t.source] ?? t.source,
   ]);
   return '﻿' + [head, ...rows].map(r => r.map((v, i) => csvCell(v, i !== 3)).join(';')).join('\r\n');
