@@ -155,19 +155,8 @@ select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 insert into budget_pots(household_id, name, owner, auto_rest) values (my_household(), 'C privat', auth.uid(), true);
 select count(*) = 1 as c_has_own_auto_pot from budget_pots where auto_rest and owner = auth.uid();
 
--- ---------- Version 4: Bargeld-Umschläge ----------
-select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
-insert into budget_cash(household_id, name, amount, category) values (my_household(), 'Wochenmarkt', 60, 'lm-markt');
-insert into budget_cash(household_id, name, amount, category, owner) values (my_household(), 'Friseur', 25, 'kl-friseur', auth.uid());
-insert into budget_tx(household_id, date, amount, category, source, ext_ref) values (my_household(), current_date, 60, 'lm-markt', 'cash', 'cash:2026-11:x');
-select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
-select count(*) = 2 as c_sees_cash_with_tx_all from budget_cash; -- A hat Buchungen hier noch ganz freigegeben
--- Umschläge folgen der Freigabe für Buchungen; „nur Summen“ liefert offenes Bargeld als Summe
-select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
-update budget_members set share = share || '{"tx":"sums","fixed":"all"}' where user_id = auth.uid();
-select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
-select count(*) = 1 as cash_follows_tx_share from budget_cash;
-select (select sum(total) from budget_shared_sums(current_date - 40) where area = 'cash') = 25 as cash_sum_shared;
+-- ---------- Version 9: keine Bargeld-Umschläge mehr ----------
+select to_regclass('public.budget_cash') is null as cash_table_gone;
 -- ---------- Version 5: ETFs ----------
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
 insert into budget_pots(household_id, name, kind, isin, market_value, market_value_at) values (my_household(), 'MSCI World', 'etf', 'IE00B4L5Y983', 4100, current_date);
@@ -195,34 +184,58 @@ select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
 update budget_members set share = share || '{"contracts":"all"}' where user_id = auth.uid();
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 select count(*) = 1 as work_contract_after_share from budget_policies where name = 'Arbeitsvertrag A';
--- ---------- Version 7: Rücklage-Umschlag bezahlt Fixkosten ----------
+-- ---------- Version 9: Fixkosten aus einem Spartopf bezahlen ----------
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
-insert into budget_pots(household_id, name, kind, owner) values (my_household(), 'Umschlag Rücklagen', 'reserve', auth.uid());
-insert into budget_cash(household_id, name, amount, owner, pot_id) select my_household(), 'Rücklagen', 50, auth.uid(), id from budget_pots where name = 'Umschlag Rücklagen';
-insert into budget_tx(household_id, date, amount, kind, category, pot_id, owner, source, ext_ref)
-  select my_household(), current_date - 30, 50, 'save', 'fi-sparen', id, auth.uid(), 'cash', 'cash:x:1' from budget_pots where name = 'Umschlag Rücklagen';
-insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, cash_id)
-  select my_household(), 'Kfz jährlich', 40, 'vers-kfz', 'yearly', current_date, current_date, id from budget_cash where name = 'Rücklagen';
-select budget_book_due() >= 1 as reserve_due_booked;
-select count(*) = 1 as cover_unsave_booked from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich' and amount = 40 and owner = auth.uid();
+insert into budget_accounts(household_id, name, owner) values (my_household(), 'Konto A', auth.uid());
+insert into budget_pots(household_id, name, owner, start_balance) values (my_household(), 'Rücklagen A', auth.uid(), 100);
+insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner, account_id, pay_pot_id)
+  select my_household(), 'Kfz jährlich', 40, 'vers-kfz', 'yearly', current_date, current_date, auth.uid(), (select id from budget_accounts where name = 'Konto A'), id
+    from budget_pots where name = 'Rücklagen A';
+select budget_book_due() >= 1 as pot_paid_booked;
+select count(*) = 1 as expense_without_account from budget_tx where note = 'Kfz jährlich' and kind = 'expense' and account_id is null and owner = auth.uid();
+select count(*) = 1 as cover_unsave_booked from budget_tx where kind = 'unsave' and note = 'Bezahlt: Kfz jährlich' and amount = 40 and owner = auth.uid()
+  and pot_id = (select id from budget_pots where name = 'Rücklagen A');
 select budget_book_due() = 0 as cover_not_twice;
-select count(*) = 1 as cover_once from budget_tx where kind = 'unsave' and note = 'Aus Umschlag: Kfz jährlich';
--- Umschlag darf nicht auf den Topf einer anderen Person zeigen; Deaktivieren löst Zuordnungen
+select count(*) = 1 as cover_once from budget_tx where kind = 'unsave' and note = 'Bezahlt: Kfz jährlich';
+-- Topf muss zum Besitzer passen, kein ETF; Einnahmen und Sparraten können nicht aus einem Topf bezahlt werden
+do $$ begin
+  begin insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner, pay_pot_id)
+      select my_household(), 'Gemeinsam', 10, 'wo-strom', 'monthly', current_date + 5, current_date + 5, null, id from budget_pots where name = 'Rücklagen A';
+    raise exception 'FEHLER: gemeinsame Fixkosten aus privatem Topf';
+  exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: Besitzer muss passen'; end;
+  begin insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner, pay_pot_id)
+      select my_household(), 'Aus ETF', 10, 'wo-strom', 'monthly', current_date + 5, current_date + 5, owner, id from budget_pots where kind = 'etf' and owner is not null limit 1;
+    raise exception 'FEHLER: aus ETF bezahlbar';
+  exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: kein ETF'; end;
+  begin insert into budget_recurring(household_id, name, amount, kind, category, freq, start_date, next_due, owner, pay_pot_id)
+      select my_household(), 'Gehalt', 10, 'income', 'ei-gehalt', 'monthly', current_date + 5, current_date + 5, owner, id from budget_pots where name = 'Rücklagen A';
+    raise exception 'FEHLER: Einnahme aus Topf';
+  exception when check_violation then raise notice 'ok: nur Ausgaben'; end;
+end $$;
+-- Topf eines anderen Haushalts / einer anderen Person nicht verknüpfbar
 reset role;
-select set_config('test.respot', (select id::text from budget_pots where name = 'Umschlag Rücklagen'), false);
+select set_config('test.paypot', (select id::text from budget_pots where name = 'Rücklagen A'), false);
 set role authenticated;
 select set_config('request.uid', '00000000-0000-0000-0000-00000000000c', false);
 do $$ begin
-  begin insert into budget_cash(household_id, name, amount, pot_id) values (my_household(), 'Fremd', 10, current_setting('test.respot')::uuid);
+  begin insert into budget_recurring(household_id, name, amount, category, freq, start_date, next_due, owner, pay_pot_id)
+      values (my_household(), 'Fremd', 10, 'wo-strom', 'monthly', current_date + 5, current_date + 5, auth.uid(), current_setting('test.paypot')::uuid);
     raise exception 'FEHLER: fremder Topf verknüpfbar';
   exception when raise_exception then if sqlerrm like 'FEHLER%' then raise; end if; raise notice 'ok: fremder Topf gesperrt'; end;
 end $$;
-select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
-update budget_cash set active = false where name = 'Rücklagen';
+-- Summen-Freigabe zählt aus Töpfen bezahlte Fixkosten nicht als Fixkosten (dafür geht die Sparrate ab)
 reset role;
-select count(*) = 0 as unlinked_on_deactivate from budget_recurring where cash_id is not null and name = 'Kfz jährlich';
+update budget_members set share = share || '{"fixed":"sums"}' where user_id = '00000000-0000-0000-0000-00000000000a';
+-- erwartet: private Ausgaben-Fixkosten von A ohne Spartöpfe und ohne „aus Topf bezahlt“ (als Monatswert); es gibt mindestens eine aus dem Topf
+select set_config('test.fixedexp', (select coalesce(sum(amount * case freq when 'monthly' then 1 when 'quarterly' then 1.0 / 3 when 'halfyearly' then 1.0 / 6 when 'yearly' then 1.0 / 12 else 52.0 / 12 end), 0)
+  from budget_recurring where owner = '00000000-0000-0000-0000-00000000000a' and active and kind = 'expense' and pot_id is null and pay_pot_id is null)::text, false);
+select exists (select 1 from budget_recurring where owner = '00000000-0000-0000-0000-00000000000a' and pay_pot_id is not null) as has_pot_paid;
 set role authenticated;
--- ---------- Version 8: Rhythmus und abweichende Beträge ----------
-select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'quarterly', '2026-01', null, '{}')::budget_cash, '2026-04') = 10 as quarterly_due;
-select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'quarterly', '2026-01', null, '{}')::budget_cash, '2026-05') = 0 as quarterly_not_due;
-select budget_cash_due(row(null, null, 'x', '', 10, 'x', null, true, now(), now(), null, 'monthly', null, null, '{"2026-12": 25}')::budget_cash, '2026-12') = 25 as override_used;
+select abs(coalesce((select sum(total) from budget_shared_sums(current_date - 40) where area = 'fixed' and kind = 'expense' and owner = '00000000-0000-0000-0000-00000000000a'), 0)
+  - current_setting('test.fixedexp')::numeric) < 0.001 as pot_paid_not_in_fixed_sums;
+-- Besitzwechsel gesperrt, solange Fixkosten aus dem Topf bezahlt werden; Auflösen löst die Zuordnung
+select set_config('request.uid', '00000000-0000-0000-0000-00000000000a', false);
+update budget_pots set archived = true where name = 'Rücklagen A';
+reset role;
+select count(*) = 0 as unlinked_on_archive from budget_recurring where pay_pot_id is not null and name = 'Kfz jährlich';
+set role authenticated;

@@ -259,59 +259,69 @@ await page.waitForFunction(() => window.__budget.state.accounts.some(a => a.name
 await shot(page, '19-einstellungen-freigabe', false);
 await page.keyboard.press('Escape');
 
-// ---------- Bargeld-Umschläge ----------
+// ---------- Fixkosten aus einem Spartopf bezahlen ----------
 await page.click('.tabs [data-view=home]');
 await page.click('#scope-bar [data-scope=all]');
-const cashSum = () => page.evaluate(() => { const t = [...document.querySelectorAll('#view-home .cash-sum')].map(e => e.textContent).join(' '); const m = t.match(/abheben\s*([\d.,]+)/); return m ? m[1] : null; });
-assert.equal(await cashSum(), '175,00', 'Demo: 60 + 25 + 40 + 50 € Rücklage');
-assert.match(await page.textContent('#view-home'), /Rücklage · drin/);
-const freeBefore = await page.textContent('.band-value');
-await page.click('#view-home [data-act=add-cash]');
-await page.fill('#cash-name', 'Taschengeld Kind');
-await page.fill('#cash-amount', '20');
-await page.selectOption('#cash-cat', 'fa-kinder');
-await page.click('#form-cash [type=submit]');
-await page.waitForFunction(() => /abheben\s*195,00/.test(document.querySelector('#view-home').textContent));
-assert.notEqual(await page.textContent('.band-value'), freeBefore, 'Noch frei berücksichtigt das Bargeld');
-await shot(page, '20-bargeld');
-// Hinweis „Bargeld abheben“ nennt nur die Umschläge, deren Abhebetag erreicht ist
-const alertIds = await page.$eval('#view-home .alert [data-act=cash-withdraw]', b => b.dataset.only.split(','));
-assert.ok(alertIds.length >= 1 && alertIds.length < 5, 'nur fällige Umschläge im Hinweis');
-await page.click('#view-home [data-act=cash-withdraw]:not([data-only])');
-await page.click('#ask-btns button[value=ok]');
-await page.waitForFunction(() => /Abgehoben im/.test(document.querySelector('#view-home').textContent));
-const cashTx = await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'));
-assert.equal(cashTx.length, 5); assert.ok(cashTx.some(t => t.category === 'lm-markt' && t.amount === 6000 && t.owner == null));
-assert.ok(cashTx.some(t => t.kind === 'save' && t.amount === 5000 && t.potId), 'Rücklage als zurückgelegt gebucht');
-assert.ok(cashTx.every(t => t.accountId), 'Konto gesetzt');
-await page.reload(); await page.waitForSelector('#view-home .band');
-assert.equal((await page.evaluate(() => window.__budget.state.tx.filter(t => t.source === 'cash'))).length, 5, 'nach Neuladen keine Doppelbuchung');
-// Fixkosten einem Rücklage-Umschlag zuordnen
+assert.equal(await page.$('#view-home .cash-sum'), null, 'keine Bargeld-Umschläge mehr');
+assert.doesNotMatch(await page.textContent('#view-home'), /Bargeld|Umschlag/);
+assert.match(await page.textContent('#view-home'), /Rücklage Versicherungen[\s\S]*Bezahlt Autoversicherung Golf/);
 await page.click('.tabs [data-view=fixed]');
+assert.match(await page.textContent('#view-fixed'), /aus Rücklage Versicherungen/);
+assert.match(await page.textContent('#view-fixed'), /aus Spartöpfen bezahlt/);
+const perAcc = () => page.$$eval('#view-fixed .acc-row', e => e.map(x => x.textContent).join('|'));
+const perAccBefore = await perAcc();
+// neue jährliche Fixkosten aus dem Topf: „Wer sieht das?“ passt sich an den (privaten) Topf an, Konto-Abbuchungen bleiben gleich
 await page.click('#view-fixed [data-act=add-rec]');
 await page.fill('#rec-name', 'Hausrat jährlich');
 await page.fill('#rec-amount', '120');
 await page.selectOption('#rec-freq', 'yearly');
 await page.fill('#rec-next', '2027-03-01');
-const resEnv = await page.evaluate(() => window.__budget.state.cash.find(e => e.potId).id);
-await page.selectOption('#rec-cash', resEnv);
+const resPot = await page.evaluate(() => window.__budget.state.pots.find(p => p.name === 'Rücklage Versicherungen').id);
+await page.selectOption('#rec-pay', resPot);
+assert.match(await page.textContent('#rec-pay-hint'), /nur die Sparrate/);
 await page.click('#form-rec [type=submit]');
-await page.waitForFunction(id => window.__budget.state.recurring.some(r => r.name === 'Hausrat jährlich' && r.cashId === id), resEnv);
-await page.waitForFunction(() => /aus Rücklage Versicherungen/.test(document.querySelector('#view-fixed').textContent));
-// Neuer Umschlag direkt aus dem Fixkosten-Dialog
+await page.waitForFunction(id => window.__budget.state.recurring.some(r => r.name === 'Hausrat jährlich' && r.payPotId === id && r.owner === 'demo'), resPot);
+assert.equal(await perAcc(), perAccBefore, 'Abbuchungen je Konto unverändert');
+// neuer Topf direkt aus dem Fixkosten-Dialog, mit Sparrate als Vorschlag (55,08 € im Quartal → 19 € im Monat)
 await page.click('#view-fixed [data-act=add-rec]');
 await page.fill('#rec-name', 'GEZ-Test');
 await page.fill('#rec-amount', '55,08');
 await page.selectOption('#rec-freq', 'quarterly');
-await page.selectOption('#rec-cash', '__new');
+await page.selectOption('#rec-pay', '__new');
 await page.click('#form-rec [type=submit]');
-await page.waitForFunction(() => { const s = window.__budget.state, e = s.cash.find(x => x.name === 'Rücklagen'); return e && e.potId && s.recurring.some(r => r.name === 'GEZ-Test' && r.cashId === e.id); });
+await page.waitForFunction(() => { const s = window.__budget.state, p = s.pots.find(x => x.name === 'Rücklagen');
+  return p && s.recurring.some(r => r.name === 'GEZ-Test' && r.payPotId === p.id) && s.recurring.some(r => r.kind === 'save' && r.potId === p.id && r.amount === 1900 && r.freq === 'monthly'); });
+// fällig heute: Ausgabe ohne Konto, gleicher Betrag aus dem Topf, „Noch frei“ bleibt gleich
 await page.click('.tabs [data-view=home]');
-await page.click('#view-home [data-cash] >> text=Rücklage Versicherungen');
-await page.waitForTimeout(300);
-assert.match(await page.textContent('#cash-reserve'), /Hausrat jährlich/);
+const freeBefore = await page.textContent('.band-value');
+await page.click('.tabs [data-view=fixed]');
+await page.click('#view-fixed [data-act=add-rec]');
+await page.fill('#rec-name', 'Test fällig');
+await page.fill('#rec-amount', '30');
+await page.fill('#rec-next', await page.evaluate(() => window.__budget.state.today));
+await page.selectOption('#rec-pay', resPot);
+await page.click('#form-rec [type=submit]');
+await page.waitForFunction(() => { const s = window.__budget.state, t = s.tx.find(x => x.note === 'Test fällig' && x.kind === 'expense');
+  return t && !t.accountId && s.potTx.some(x => x.kind === 'unsave' && x.note === 'Bezahlt: Test fällig' && x.amount === 3000); });
+await page.click('.tabs [data-view=home]');
+assert.equal(await page.textContent('.band-value'), freeBefore, 'aus dem Topf bezahlt: Noch frei unverändert');
+assert.match(await page.textContent('#view-home'), /aus Rücklage Versicherungen/);
+// Topf einstellen: Fixkosten per Häkchen, Rhythmus, Vorschlag, Prognose
+await page.click('#view-home [data-pot] >> text=Rücklage Versicherungen');
+await page.waitForSelector('#dlg-pot[open]');
+assert.match(await page.textContent('#pot-summary'), /Reicht|fehlen/);
+assert.equal(await page.$$eval('#pot-links [data-link]:checked', e => e.length), 3, 'Kfz, Hausrat und Test angehakt');
+// Test fällig abhaken → geht wieder vom Konto
+const testRec = await page.evaluate(() => window.__budget.state.recurring.find(r => r.name === 'Test fällig').id);
+await page.uncheck(`#pot-links [data-link="${testRec}"]`);
+await page.selectOption('#pot-freq', 'quarterly');
+// Kfz 486 €/Jahr + Hausrat 120 €/Jahr = 50,50 €/Monat → 152 € im Quartal
+assert.match(await page.textContent('#pot-suggest'), /Vorschlag: 152,00\s€ vierteljährlich/);
+await page.click('#pot-take');
 await shot(page, '25-ruecklage', false);
-await page.keyboard.press('Escape');
+await page.click('#form-pot [type=submit]');
+await page.waitForFunction(id => { const s = window.__budget.state, p = s.pots.find(x => x.name === 'Rücklage Versicherungen'), r = s.recurring.find(x => x.kind === 'save' && x.potId === p.id && x.active);
+  return r && r.freq === 'quarterly' && r.amount === 15200 && s.recurring.find(x => x.id === id).payPotId == null; }, testRec);
 
 // ---------- ETFs ----------
 await page.click('.tabs [data-view=home]');
@@ -370,38 +380,6 @@ await page.click('#chat-chips .chip >> nth=0');
 await page.waitForSelector('#chat-msgs .msg-a blockquote', { state: 'attached' });
 assert.match(await page.$$eval('#chat-msgs blockquote', e => e.map(x => x.textContent).join(' ')), /30 Arbeitstage/);
 await shot(page, '24-arbeitsvertrag', false);
-await page.keyboard.press('Escape');
-
-// ---------- Umschlag einstellen ----------
-await page.click('.tabs [data-view=home]');
-await page.click('#view-home [data-cash] >> text=Rücklage Versicherungen');
-await page.waitForTimeout(300);
-// Fixkosten per Häkchen + Vorschlag
-await page.click('#cash-links-wrap summary').catch(() => {});
-const linkedCount = await page.$$eval('#cash-links [data-link]:checked', e => e.length);
-assert.ok(linkedCount >= 2, 'zugeordnete Fixkosten sind angehakt');
-assert.match(await page.textContent('#cash-suggest'), /Vorschlag/);
-// Rhythmus vierteljährlich, Abhebetag 5, einzelne Abhebung anpassen
-await page.selectOption('#cash-freq', 'quarterly');
-await page.selectOption('#cash-day', '5');
-await page.click('#dlg-cash details.more summary >> text=Einzelne Abhebungen anpassen');
-const ovKey = await page.$eval('[data-ov]', e => e.dataset.ov);
-await page.fill(`[data-ov="${ovKey}"]`, '123');
-await page.click('#form-cash [type=submit]');
-await page.waitForFunction(k => { const e = window.__budget.state.cash.find(x => x.name === 'Rücklage Versicherungen'); return e.freq === 'quarterly' && e.withdrawDay === 5 && e.overrides[k] === 12300; }, ovKey);
-// Kalendertermin
-await page.click('#view-home [data-cash] >> text=Rücklage Versicherungen');
-await page.waitForSelector('#cash-ics');
-const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#cash-ics')]);
-const icsText = (await readFile(await dl.path())).toString();
-assert.match(icsText, /RRULE:FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=5/);
-// Stand korrigieren
-await page.click('[data-cmove=set]');
-await page.fill('#cm-amount', '500');
-await page.click('#ask-btns button[value=ok]');
-await page.waitForFunction(() => /Stand auf 500,00/.test(document.querySelector('#toast').textContent));
-await page.waitForFunction(() => /500,00/.test(document.querySelector('#cash-reserve').textContent));
-await shot(page, '26-umschlag-einstellen', false);
 await page.keyboard.press('Escape');
 
 // Monat wechseln

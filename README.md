@@ -206,6 +206,7 @@ Eigenständige App im selben Repo, gleicher Supabase-Haushalt und gleiche Anmeld
 - **Verträge** (v6): Arbeitsvertrag (mit Gehalt verknüpft), Miete, Energie, Handy, Abos neben Versicherungen; Fragen-Chat für alle.
 - **Rücklage-Umschläge** (v7): Fixkosten aus einem Bargeld-Umschlag bezahlen, Geld sammelt sich bis zum Zahltag, Prognose ob es reicht.
 - **Umschläge einstellbar** (v8): Rhythmus, Abhebetag mit Kalender-Erinnerung, abweichende Abhebungen, Fixkosten per Häkchen, Stand anpassen.
+- **Fixkosten aus Spartopf** (v9, ersetzt alle Umschläge): „Bezahlt aus“ Konto oder Spartopf; vom Konto geht nur die Sparrate des Topfs ab (Rhythmus einstellbar), am Zahltag wird aus dem Topf bezahlt, Prognose ob es reicht. Rücklage-Umschläge werden automatisch zu Töpfen.
 - **Automatik:** `.github/workflows/supabase-update.yml` führt nach jedem Merge `supabase/budget.sql` aus und deployt die Function `ai` (Einrichtung: `anleitung/automatik-setup.md`).
 - Tests: `tests/budget` (Logik, Oberfläche, SQL).
 

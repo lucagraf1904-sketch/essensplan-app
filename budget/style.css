@@ -237,9 +237,6 @@ label { cursor: pointer; }
 .gain-down { color: var(--bad); }
 
 /* Bargeld */
-.cash-sum { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 14px; }
-.cash-sum b { font-size: 1.6rem; }
-.cash-done { color: var(--good); font-weight: 700; }
 
 /* Spartöpfe */
 .pot { display: grid; grid-template-columns: 44px 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 14px; width: 100%; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
@@ -388,3 +385,5 @@ fieldset.upload legend { font-weight: 700; padding: 0 6px; }
 @media (min-width: 900px) {
   .kpis { grid-template-columns: repeat(3, 1fr); }
 }
+.pot-head .good { color: var(--good); }
+.pot-head .bad { color: var(--bad); }
