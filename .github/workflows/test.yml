@@ -1,0 +1,24 @@
+# Prüft jeden Pull Request und jeden Push auf main: Syntax, Service-Worker-Dateiliste, Tests der Haushaltskasse.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax und Service-Worker-Liste
+        run: node scripts/check.mjs
+      - name: Rechenlogik der Haushaltskasse
+        run: node --test tests/budget/logic.test.mjs
